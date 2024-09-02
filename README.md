@@ -87,7 +87,7 @@ python manage.py import_geodepartment --insee-codes 34
 python manage.py import_geocommune
 
 # insert tiles: for montpellier and its surroundings
-python manage.py create_tile --x-min 266604 --x-max 269158 --y-min 190594 --y-max 192162
+python manage.py create_tile --x-min 265750 --x-max 268364 --y-min 190647 --y-max 192325
 
 # import parcels
 python manage.py import_parcels
