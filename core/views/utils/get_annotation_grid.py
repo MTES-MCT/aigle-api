@@ -33,7 +33,7 @@ def serialize_to_feature_collection(grid_elements):
                     "y": element["y"],
                     "total": element["total"],
                     "reviewed": element["reviewed"],
-                    "text": f'{element["x"]} | {element["y"]}\n{element["reviewed"]} vérifiés/{element["total"]} détectés',
+                    "text": f'{element["reviewed"]} vérifiés/{element["total"]} détectés',
                 },
             }
         )
@@ -46,7 +46,12 @@ def serialize_to_feature_collection(grid_elements):
 
 class Floor(Func):
     function = "FLOOR"
-    arity = 1  # FLOOR only takes one argument
+    arity = 1
+
+
+class Envelope(Func):
+    function = "ST_Envelope"
+    arity = 1
 
 
 @api_view(["GET"])
@@ -83,9 +88,9 @@ def endpoint(request):
         )
     )
 
-    # Group by grouped_x and grouped_y and calculate the union
     grouped_tiles = tiles.values("grouped_x", "grouped_y").annotate(
-        group_geometry=Union("geometry")
+        # enveloppe because union of overlapping geometries cause artifacts
+        group_geometry=Envelope(Union("geometry"))
     )
 
     all_geometries = MultiPolygon([tile["group_geometry"] for tile in grouped_tiles])
