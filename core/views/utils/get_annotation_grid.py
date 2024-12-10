@@ -34,6 +34,7 @@ def serialize_to_feature_collection(grid_elements):
                     "total": element["total"],
                     "reviewed": element["reviewed"],
                     "text": f'{element["reviewed"]} vérifiés/{element["total"]} détectés',
+                    "textShort": f'{element["reviewed"]}/{element["total"]}',
                 },
             }
         )
