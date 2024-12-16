@@ -60,7 +60,7 @@ class Command(BaseCommand):
         if not len(self.tiles):
             return
 
-        Tile.objects.bulk_create(self.tiles)
+        Tile.objects.bulk_create(self.tiles, ignore_conflicts=True)
         self.inserted += len(self.tiles)
         self.tiles = []
         print(f"Inserting tiles: {self.inserted}/{self.total}")

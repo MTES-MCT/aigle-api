@@ -16,16 +16,16 @@ from core.models.detection_object import DetectionObject
 from django.contrib.gis.geos import GEOSGeometry
 from django.contrib.gis.db.models.functions import Centroid
 
-from django.contrib.gis.db.models.functions import Intersection, Area
-from django.db.models import Value
 
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
 from core.models.user import User
+from core.utils.detection import get_linked_detections
 from core.utils.prescription import compute_prescription
 from core.utils.string import normalize
+from simple_history.utils import bulk_create_with_history
 
 PERCENTAGE_SAME_DETECTION_THRESHOLD = 0.5
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
@@ -66,9 +66,18 @@ class DetectionRowSerializer(serializers.Serializer):
     )
     tile_x = serializers.IntegerField(required=False, allow_null=True)
     tile_y = serializers.IntegerField(required=False, allow_null=True)
+    created_at = serializers.DateTimeField(required=False, allow_null=True)
+    updated_at = serializers.DateTimeField(required=False, allow_null=True)
 
 
-TABLE_COLUMNS = list(DetectionRowSerializer().get_fields().keys()) + ["geometry"]
+TABLE_COLUMNS_DATE = ["created_at", "updated_at"]
+TABLE_COLUMNS = list(
+    [
+        col
+        for col in DetectionRowSerializer().get_fields().keys()
+        if col not in TABLE_COLUMNS_DATE
+    ]
+) + ["geometry"]
 
 
 class Command(BaseCommand):
@@ -98,6 +107,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--tile-set-id", type=int, required=True)
+        parser.add_argument("--with-dates", type=bool, default=False)
+        parser.add_argument("--clean-step", type=bool, default=False)
         parser.add_argument("--batch-id", type=str)
         parser.add_argument("--file-path", type=str)
         parser.add_argument("--table-name", type=str)
@@ -127,7 +138,7 @@ class Command(BaseCommand):
         return reader
 
     def get_detection_rows_to_insert_from_table(
-        self, table_name: str, table_schema: str, batch_id: str
+        self, table_name: str, table_schema: str, batch_id: str, with_dates: bool
     ) -> Iterable[Dict[str, Any]]:
         self.cursor = connection.cursor()
         self.cursor.execute(
@@ -135,16 +146,24 @@ class Command(BaseCommand):
             % (table_schema, table_name, f"'{batch_id}'")
         )
         self.total = self.cursor.fetchone()[0]
+
+        table_columns = TABLE_COLUMNS
+
+        if with_dates:
+            table_columns += TABLE_COLUMNS_DATE
+
         self.cursor.execute(
             "SELECT %s FROM %s.%s WHERE batch_id = %s ORDER BY score DESC"
-            % (", ".join(TABLE_COLUMNS), table_schema, table_name, f"'{batch_id}'")
+            % (", ".join(table_columns), table_schema, table_name, f"'{batch_id}'")
         )
-        return map(lambda row: dict(zip(TABLE_COLUMNS, row)), self.cursor)
+        return map(lambda row: dict(zip(table_columns, row)), self.cursor)
 
     def handle(self, *args, **options):
         self.validate_arguments(options)
 
         tile_set_id = options["tile_set_id"]
+        with_dates = options["with_dates"]
+        self.clean_step = options["clean_step"]
         self.batch_id = options.get("batch_id") or datetime.now().strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
@@ -167,6 +186,7 @@ class Command(BaseCommand):
                 table_name=options["table_name"],
                 table_schema=options["table_schema"],
                 batch_id=self.batch_id,
+                with_dates=with_dates,
             )
 
         for row in detection_rows_to_insert:
@@ -219,63 +239,59 @@ class Command(BaseCommand):
 
         # linked detections in the ones to insert
 
-        linked_detections_to_insert = [
-            detection
-            for detection in self.detections_to_insert
-            if detection.geometry.intersects(geometry)
-            and detection.detection_object.object_type == object_type
-        ]
-        if linked_detections_to_insert:
-            for linked_detection in linked_detections_to_insert:
-                if (
-                    geometry.intersection(linked_detection.geometry).area
-                    > geometry.area * PERCENTAGE_SAME_DETECTION_THRESHOLD
-                ):
-                    print(f"Detection already exists in tileset {
-                          self.tile_set.name} and is going to be inserted. Skipping...")
-                    return
+        if self.clean_step:
+            linked_detections_to_insert = [
+                detection
+                for detection in self.detections_to_insert
+                if detection.geometry.intersects(geometry)
+                and detection.detection_object.object_type == object_type
+            ]
+            if linked_detections_to_insert:
+                for linked_detection in linked_detections_to_insert:
+                    if (
+                        geometry.intersection(linked_detection.geometry).area
+                        > geometry.area * PERCENTAGE_SAME_DETECTION_THRESHOLD
+                        or linked_detection.geometry.intersection(geometry).area
+                        > geometry.area * PERCENTAGE_SAME_DETECTION_THRESHOLD
+                    ):
+                        print(f"Detection already exists in tileset {
+                            self.tile_set.name} and is going to be inserted. Skipping...")
+                        return
 
         # linked detections already in the database
 
-        linked_detections_queryset = Detection.objects
-        linked_detections_queryset = linked_detections_queryset.filter(
-            geometry__intersects=geometry, detection_object__object_type=object_type
-        )
-        linked_detections_queryset = linked_detections_queryset.annotate(
-            intersection_area=Area(Intersection("geometry", Value(geometry)))
-        )
-        linked_detections_queryset = linked_detections_queryset.order_by(
-            "-intersection_area"
-        )
-        linked_detections_queryset = linked_detections_queryset.prefetch_related(
-            "detection_object", "detection_object__object_type"
-        )
-
         # we filter out detections that have too small intersection area with the detection
-        linked_detections = list(
-            [
-                detection
-                for detection in linked_detections_queryset.all()
-                if detection.intersection_area.sq_m
-                >= geometry.area * PERCENTAGE_SAME_DETECTION_THRESHOLD
-            ]
-        )
 
-        # deal with linked detections
+        if self.clean_step:
+            linked_detections = get_linked_detections(
+                detection_geometry=geometry,
+                object_type_id=object_type.id,
+                exclude_tile_set_ids=[],
+            )
 
-        linked_detection_same_tileset = next(
-            (
-                detection
-                for detection in linked_detections
-                if detection.tile_set.id == self.tile_set.id
-            ),
-            None,
-        )
+            # WE DO NOT FILTER OUT DETECTIONS THAT ARE NOT IN THE SAME TILE SET ANYMORE
 
-        if linked_detection_same_tileset:
-            print(f"Detection already exists in tileset {self.tile_set.name}, id: {
-                  linked_detection_same_tileset.id}. Skipping...")
-            return
+            # deal with linked detections
+
+            linked_detection_same_tileset = next(
+                (
+                    detection
+                    for detection in linked_detections
+                    if detection.tile_set.id == self.tile_set.id
+                ),
+                None,
+            )
+
+            if linked_detection_same_tileset:
+                print(f"Detection already exists in tileset {self.tile_set.name}, id: {
+                      linked_detection_same_tileset.id}. Skipping...")
+                return
+        else:
+            linked_detections = get_linked_detections(
+                detection_geometry=geometry,
+                object_type_id=object_type.id,
+                exclude_tile_set_ids=[self.tile_set.id],
+            )
 
         # create detection
 
@@ -314,6 +330,8 @@ class Command(BaseCommand):
             detection_prescription_status=serialized_detection[
                 "detection_prescription_status"
             ],
+            created_at=serialized_detection.get("created_at"),
+            updated_at=serialized_detection.get("updated_at"),
         )
 
         if serialized_detection["user_reviewed"]:
@@ -346,15 +364,20 @@ class Command(BaseCommand):
                 address=serialized_detection["address"],
                 batch_id=self.batch_id,
                 import_id=serialized_detection["id"],
+                created_at=serialized_detection.get("created_at"),
+                updated_at=serialized_detection.get("updated_at"),
             )
             self.detection_objects_to_insert.append(detection_object)
 
-
             if not detection_data.detection_control_status:
-                detection_data.detection_control_status = DetectionControlStatus.NOT_CONTROLLED
+                detection_data.detection_control_status = (
+                    DetectionControlStatus.NOT_CONTROLLED
+                )
 
             if not detection_data.detection_validation_status:
-                detection_data.detection_validation_status = DetectionValidationStatus.DETECTED_NOT_VERIFIED
+                detection_data.detection_validation_status = (
+                    DetectionValidationStatus.DETECTED_NOT_VERIFIED
+                )
 
         # detection
 
@@ -369,6 +392,8 @@ class Command(BaseCommand):
             detection_data=detection_data,
             batch_id=self.batch_id,
             import_id=serialized_detection["id"],
+            created_at=serialized_detection.get("created_at"),
+            updated_at=serialized_detection.get("updated_at"),
         )
 
         detection.detection_object = detection_object
@@ -387,9 +412,9 @@ class Command(BaseCommand):
 
         print(f"Inserting {len(self.detections_to_insert)} detections")
 
-        DetectionObject.objects.bulk_create(self.detection_objects_to_insert)
-        DetectionData.objects.bulk_create(self.detection_datas_to_insert)
-        Detection.objects.bulk_create(self.detections_to_insert)
+        bulk_create_with_history(self.detection_objects_to_insert, DetectionObject)
+        bulk_create_with_history(self.detection_datas_to_insert, DetectionData)
+        bulk_create_with_history(self.detections_to_insert, Detection)
 
         detection_objects = [
             detection.detection_object for detection in self.detections_to_insert

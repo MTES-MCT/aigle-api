@@ -1,10 +1,12 @@
 from core.models.geo_commune import GeoCommune
+from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_department import GeoDepartment
 from core.models.geo_region import GeoRegion
 from core.models.geo_zone import GeoZoneType
 from core.models.object_type_category import ObjectTypeCategory
 from core.models.user_group import UserGroup, UserUserGroup
 from core.serializers import UuidTimestampedModelSerializerMixin
+from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.geo_zone import GeoZoneSerializer
 from core.serializers.object_type_category import ObjectTypeCategorySerializer
 
@@ -18,6 +20,7 @@ class UserGroupSerializer(UuidTimestampedModelSerializerMixin):
         model = UserGroup
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
             "name",
+            "user_group_type",
         ]
 
 
@@ -28,12 +31,14 @@ class UserGroupDetailSerializer(UserGroupSerializer):
             "departments",
             "regions",
             "object_type_categories",
+            "geo_custom_zones",
         ]
 
     communes = serializers.SerializerMethodField()
     departments = serializers.SerializerMethodField()
     regions = serializers.SerializerMethodField()
     object_type_categories = ObjectTypeCategorySerializer(many=True, read_only=True)
+    geo_custom_zones = GeoCustomZoneSerializer(many=True, read_only=True)
 
     def get_communes(self, obj):
         return GeoZoneSerializer(
@@ -61,12 +66,17 @@ class UserGroupInputSerializer(UserGroupDetailSerializer):
     class Meta(UserGroupDetailSerializer.Meta):
         fields = [
             "name",
+            "geo_custom_zones_uuids",
             "communes_uuids",
             "departments_uuids",
             "regions_uuids",
             "object_type_categories_uuids",
+            "user_group_type",
         ]
 
+    geo_custom_zones_uuids = serializers.ListField(
+        child=serializers.UUIDField(), required=False, allow_empty=True, write_only=True
+    )
     communes_uuids = serializers.ListField(
         child=serializers.UUIDField(), required=False, allow_empty=True, write_only=True
     )
@@ -90,6 +100,11 @@ class UserGroupInputSerializer(UserGroupDetailSerializer):
         regions_uuids = validated_data.pop("regions_uuids", None)
         regions = get_objects(uuids=regions_uuids, model=GeoRegion) or []
 
+        geo_custom_zones_uuids = validated_data.pop("geo_custom_zones_uuids", None)
+        geo_custom_zones = (
+            get_objects(uuids=geo_custom_zones_uuids, model=GeoCustomZone) or []
+        )
+
         object_type_categories_uuids = validated_data.pop(
             "object_type_categories_uuids", None
         )
@@ -108,6 +123,9 @@ class UserGroupInputSerializer(UserGroupDetailSerializer):
         if zones:
             instance.geo_zones.set(zones)
 
+        if geo_custom_zones:
+            instance.geo_custom_zones.set(geo_custom_zones)
+
         if object_type_categories:
             instance.object_type_categories.set(object_type_categories)
 
@@ -125,6 +143,11 @@ class UserGroupInputSerializer(UserGroupDetailSerializer):
         regions_uuids = validated_data.pop("regions_uuids", None)
         regions = get_objects(uuids=regions_uuids, model=GeoRegion) or []
 
+        geo_custom_zones_uuids = validated_data.pop("geo_custom_zones_uuids", None)
+        geo_custom_zones = (
+            get_objects(uuids=geo_custom_zones_uuids, model=GeoCustomZone) or []
+        )
+
         zones = list(communes) + list(departments) + list(regions)
 
         object_type_categories_uuids = validated_data.pop(
@@ -135,6 +158,7 @@ class UserGroupInputSerializer(UserGroupDetailSerializer):
         )
 
         instance.geo_zones.set(zones)
+        instance.geo_custom_zones.set(geo_custom_zones)
 
         if object_type_categories is not None:
             instance.object_type_categories.set(object_type_categories)

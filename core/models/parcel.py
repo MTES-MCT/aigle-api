@@ -10,7 +10,7 @@ from django.contrib.gis.db import models as models_gis
 
 
 class Parcel(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
-    id_parcellaire = models.CharField(unique=True)
+    id_parcellaire = models.CharField(unique=True, max_length=DEFAULT_MAX_LENGTH)
 
     prefix = models.CharField(max_length=DEFAULT_MAX_LENGTH)
     section = models.CharField(max_length=DEFAULT_MAX_LENGTH)

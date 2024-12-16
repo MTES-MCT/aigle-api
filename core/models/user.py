@@ -12,6 +12,8 @@ from common.models.timestamped import TimestampedModelMixin
 from common.models.uuid import UuidModelMixin
 from core.managers.user import UserManager
 from django.contrib.gis.db import models as models_gis
+from simple_history.models import HistoricalRecords
+from common.models.historied import HistoriedModelMixin
 
 
 class UserRole(models.TextChoices):
@@ -54,3 +56,5 @@ class User(
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["user_role"]
+
+    history = HistoricalRecords(bases=[HistoriedModelMixin])

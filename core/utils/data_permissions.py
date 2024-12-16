@@ -14,6 +14,7 @@ from django.core.exceptions import PermissionDenied
 from django.contrib.gis.db.models.aggregates import Union
 
 from core.utils.postgis import GeometryType, GetGeometryType
+from django.contrib.gis.geos import Point
 
 
 def get_user_tile_sets(
@@ -42,8 +43,14 @@ def get_user_tile_sets(
         user_user_groups_with_geo_union = UserUserGroup.objects.filter(
             user=user
         ).prefetch_related("user_group__object_type_categories__object_types")
+
+        geo_union = Union("user_group__geo_zones__geometry")
+
+        if filter_tile_set_intersects_geometry:
+            geo_union = Intersection(geo_union, filter_tile_set_intersects_geometry)
+
         user_user_groups_with_geo_union = user_user_groups_with_geo_union.annotate(
-            geo_union=Union("user_group__geo_zones__geometry")
+            geo_union=geo_union
         )
 
         final_union = user_user_groups_with_geo_union.aggregate(
@@ -58,8 +65,11 @@ def get_user_tile_sets(
         tile_set_status__in=filter_tile_set_status__in,
         tile_set_type__in=filter_tile_set_type__in,
     ).order_by(*order_bys)
+
+    union_geometry = Union("geo_zones__geometry")
+
     tile_sets = tile_sets.annotate(
-        union_geometry=Union("geo_zones__geometry"),
+        union_geometry=union_geometry,
         intersection=intersection,
         geo_zones_count=Count("geo_zones"),
         intersection_type=GetGeometryType("intersection"),
@@ -100,7 +110,7 @@ def get_user_object_types_with_status(
     user,
 ) -> List[Tuple[ObjectType, ObjectTypeCategoryObjectTypeStatus]]:
     if user.user_role == UserRole.SUPER_ADMIN:
-        object_types = ObjectType.objects.all()
+        object_types = ObjectType.objects.order_by("name").all()
 
         return [
             (object_type, ObjectTypeCategoryObjectTypeStatus.VISIBLE)
@@ -145,11 +155,13 @@ def get_user_object_types_with_status(
     for object_type, status in object_type_uuids_statuses_map.values():
         object_types_with_status.append((object_type, status))
 
+    object_types_with_status = sorted(object_types_with_status, key=lambda x: x[0].name)
+
     return object_types_with_status
 
 
 def get_user_group_rights(
-    user, point, raise_if_has_no_right: Optional[UserGroupRight] = None
+    user, points: List[Point], raise_if_has_no_right: Optional[UserGroupRight] = None
 ) -> List[UserGroupRight]:
     if user.user_role == UserRole.SUPER_ADMIN:
         return [
@@ -161,7 +173,8 @@ def get_user_group_rights(
     user_user_groups = user.user_user_groups.annotate(
         union_geometry=Union("user_group__geo_zones__geometry")
     )
-    user_user_groups = user_user_groups.filter(union_geometry__contains=point)
+    for point in points:
+        user_user_groups = user_user_groups.filter(union_geometry__contains=point)
 
     user_group_rights = set()
 
@@ -170,8 +183,7 @@ def get_user_group_rights(
 
     res = list(user_group_rights)
 
-    if raise_if_has_no_right:
-        if raise_if_has_no_right not in res:
-            raise PermissionDenied("Vous n'avez pas les droits pour éditer cette zone")
+    if raise_if_has_no_right and raise_if_has_no_right not in res:
+        raise PermissionDenied("Vous n'avez pas les droits pour éditer cette zone")
 
     return res

@@ -2,6 +2,7 @@ from core.models.detection import Detection
 from core.models.detection_data import DetectionData, DetectionPrescriptionStatus
 from core.models.detection_object import DetectionObject
 from dateutil.relativedelta import relativedelta
+from simple_history.utils import bulk_update_with_history
 
 
 def compute_prescription(detection_object: DetectionObject) -> DetectionObject:
@@ -22,11 +23,15 @@ def compute_prescription(detection_object: DetectionObject) -> DetectionObject:
                 detections_data_to_update.append(detection.detection_data)
 
         if detections_to_update:
-            Detection.objects.bulk_update(detections_to_update, ["auto_prescribed"])
+            bulk_update_with_history(
+                detections_to_update, Detection, ["auto_prescribed"]
+            )
 
         if detections_data_to_update:
-            DetectionData.objects.bulk_update(
-                detections_data_to_update, ["detection_prescription_status"]
+            bulk_update_with_history(
+                detections_data_to_update,
+                DetectionData,
+                ["detection_prescription_status"],
             )
 
         return detection_object
@@ -73,11 +78,11 @@ def compute_prescription(detection_object: DetectionObject) -> DetectionObject:
             detections_data_to_update.append(detection.detection_data)
 
     if detections_to_update:
-        Detection.objects.bulk_update(detections_to_update, ["auto_prescribed"])
+        bulk_update_with_history(detections_to_update, Detection, ["auto_prescribed"])
 
     if detections_data_to_update:
-        DetectionData.objects.bulk_update(
-            detections_data_to_update, ["detection_prescription_status"]
+        bulk_update_with_history(
+            detections_data_to_update, DetectionData, ["detection_prescription_status"]
         )
 
     return detection_object

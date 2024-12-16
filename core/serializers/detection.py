@@ -6,6 +6,7 @@ from core.models.detection_data import (
     DetectionValidationStatus,
 )
 from core.models.detection_object import DetectionObject
+from core.models.geo_custom_zone import GeoCustomZone
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
@@ -22,6 +23,7 @@ from core.serializers.tile_set import TileSetMinimalSerializer
 from django.contrib.gis.db.models.functions import Centroid
 
 from core.utils.data_permissions import get_user_group_rights
+from core.utils.detection import get_linked_detections
 from core.utils.prescription import compute_prescription
 
 
@@ -39,6 +41,7 @@ class DetectionMinimalSerializer(
             "detection_validation_status",
             "detection_prescription_status",
             "detection_object_uuid",
+            "tile_set_type",
         ]
 
     object_type_uuid = serializers.CharField(source="detection_object.object_type.uuid")
@@ -58,6 +61,7 @@ class DetectionMinimalSerializer(
         choices=DetectionPrescriptionStatus.choices,
     )
     detection_object_uuid = serializers.CharField(source="detection_object.uuid")
+    tile_set_type = serializers.CharField(source="tile_set.tile_set_type")
 
 
 class DetectionSerializer(UuidTimestampedModelSerializerMixin):
@@ -104,6 +108,31 @@ class DetectionDetailSerializer(DetectionWithTileSerializer):
     detection_object = DetectionObjectSerializer(read_only=True)
 
 
+class DetectionMultipleInputSerializer(serializers.Serializer):
+    uuids = serializers.ListField(child=serializers.UUIDField(), required=True)
+    object_type_uuid = serializers.UUIDField(required=False)
+    detection_control_status = serializers.ChoiceField(
+        required=False,
+        choices=DetectionControlStatus.choices,
+    )
+    detection_validation_status = serializers.ChoiceField(
+        required=False,
+        choices=DetectionValidationStatus.choices,
+    )
+
+    def validate(self, data):
+        if (
+            not data.get("object_type_uuid")
+            and not data.get("detection_control_status")
+            and not data.get("detection_validation_status")
+        ):
+            raise serializers.ValidationError(
+                "Vous devez spécifier au moins un de ces champs : object_type_uuid, detection_control_status, detection_validation_status"
+            )
+
+        return data
+
+
 class DetectionInputSerializer(DetectionSerializer):
     from core.serializers.detection_object import DetectionObjectInputSerializer
 
@@ -126,7 +155,7 @@ class DetectionInputSerializer(DetectionSerializer):
         centroid = Centroid(validated_data["geometry"])
 
         get_user_group_rights(
-            user=user, point=centroid, raise_if_has_no_right=UserGroupRight.WRITE
+            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
         )
 
         # create or retrieve detection object
@@ -170,15 +199,36 @@ class DetectionInputSerializer(DetectionSerializer):
                         object_type_uuid}"
                 )
 
-            # get tile_set and tile
+            # search for existing detection object
 
-            detection_object = DetectionObject(**detection_object_data)
-            detection_object.object_type = object_type
+            linked_detections = get_linked_detections(
+                detection_geometry=validated_data["geometry"],
+                object_type_id=object_type.id,
+                exclude_tile_set_ids=[tile_set.id],
+            )
 
-            parcel = Parcel.objects.filter(geometry__contains=centroid).first()
-            detection_object.parcel = parcel
+            if linked_detections:
+                detection_object = linked_detections[0].detection_object
+            else:
+                # get tile_set and tile
 
-            detection_object.save()
+                detection_object = DetectionObject(**detection_object_data)
+                detection_object.object_type = object_type
+
+                parcel = Parcel.objects.filter(geometry__contains=centroid).first()
+                detection_object.parcel = parcel
+
+                detection_object.save()
+
+                # update geo_custom_zones
+
+                geo_custom_zones = GeoCustomZone.objects.filter(
+                    geometry__intersects=validated_data["geometry"]
+                ).all()
+
+                detection_object.geo_custom_zones.add(*geo_custom_zones)
+
+                detection_object.save()
 
         if detection_object_uuid:
             detection_object = DetectionObject.objects.filter(
@@ -201,7 +251,7 @@ class DetectionInputSerializer(DetectionSerializer):
             # default value
             detection_data = DetectionData(
                 detection_control_status=DetectionControlStatus.NOT_CONTROLLED,
-                detection_validation_status=DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+                detection_validation_status=DetectionValidationStatus.SUSPECT,
             )
 
         if (
@@ -253,7 +303,7 @@ class DetectionUpdateSerializer(DetectionSerializer):
         centroid = Centroid(instance.geometry)
 
         get_user_group_rights(
-            user=user, point=centroid, raise_if_has_no_right=UserGroupRight.WRITE
+            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
         )
 
         object_type_uuid = validated_data.get("object_type_uuid")

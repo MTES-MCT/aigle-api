@@ -85,6 +85,12 @@ class MapSettingsView(APIView):
         geo_custom_zones_data = GeoCustomZone.objects.order_by(
             *GEO_CUSTOM_ZONES_ORDER_BYS
         ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
+
+        if request.user.user_role != UserRole.SUPER_ADMIN:
+            geo_custom_zones_data = geo_custom_zones_data.filter(
+                user_groups_custom_geo_zones__user_user_groups__user=request.user
+            )
+
         geo_custom_zones_data = geo_custom_zones_data.values(
             "uuid", "name", "color", "geo_custom_zone_status"
         )

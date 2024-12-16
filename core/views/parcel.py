@@ -2,8 +2,10 @@ from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet, CharFilter
 
+from core.models.analytic_log import AnalyticLogType
 from core.models.parcel import Parcel
 from core.serializers.parcel import ParcelDetailSerializer, ParcelSerializer
+from core.utils.analytic_log import create_log
 from core.utils.filters import UuidInFilter
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -45,7 +47,7 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
     filterset_class = ParcelFilter
 
     def get_serializer_class(self):
-        if self.action == "retrieve":
+        if self.action == "retrieve" or self.action == "get_download_infos":
             return ParcelDetailSerializer
 
         return ParcelSerializer
@@ -69,6 +71,19 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
             )
 
         return queryset
+
+    @action(methods=["get"], detail=True)
+    def get_download_infos(self, request, uuid, *args, **kwargs):
+        create_log(
+            self.request.user,
+            AnalyticLogType.REPORT_DOWNLOAD,
+            {
+                "parcelUuid": uuid,
+                "detectionObjectUuid": self.request.GET.get("detectionObjectUuid"),
+            },
+        )
+
+        return self.retrieve(request, uuid, *args, **kwargs)
 
     @action(methods=["get"], detail=False)
     def suggest_section(self, request):

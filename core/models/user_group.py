@@ -8,17 +8,30 @@ from common.models.uuid import UuidModelMixin
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.auth import get_user_model
 
+from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_zone import GeoZone
 from core.models.object_type_category import ObjectTypeCategory
 
 UserModel = get_user_model()
 
 
+class UserGroupType(models.TextChoices):
+    DDTM = "DDTM", "DDTM"
+    COLLECTIVITY = "COLLECTIVITY", "COLLECTIVITY"
+
+
 class UserGroup(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
     geo_zones = models.ManyToManyField(GeoZone, related_name="user_groups")
+    geo_custom_zones = models.ManyToManyField(
+        GeoCustomZone, related_name="user_groups_custom_geo_zones"
+    )
     object_type_categories = models.ManyToManyField(
         ObjectTypeCategory, related_name="user_groups"
+    )
+    user_group_type = models.CharField(
+        max_length=DEFAULT_MAX_LENGTH,
+        choices=UserGroupType.choices,
     )
 
     class Meta:

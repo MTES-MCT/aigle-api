@@ -1,9 +1,11 @@
 from typing import Optional
 from djoser.serializers import UserSerializer as UserSerializerBase
 from django.contrib.auth import get_user_model
+from django.core.exceptions import PermissionDenied
 
 from rest_framework import serializers
 
+from core.models.user import UserRole
 from core.models.user_group import UserGroup, UserUserGroup
 
 UserModel = get_user_model()
@@ -40,6 +42,14 @@ class UserInputSerializer(UserSerializer):
     def create(self, validated_data):
         check_email_exists(email=validated_data["email"])
 
+        if (
+            self.context["request"].user.user_role != UserRole.SUPER_ADMIN
+            and validated_data["user_role"] != UserRole.REGULAR
+        ):
+            raise PermissionDenied(
+                "Un administrateur peut seulement créer des utilisateurs de rôle normal"
+            )
+
         instance = UserModel.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
@@ -56,6 +66,27 @@ class UserInputSerializer(UserSerializer):
 
         if password_clear:
             instance.set_password(password_clear)
+
+        # if a user not super admin update a user other than him, he cannot
+
+        if (
+            self.context["request"].user.user_role != UserRole.SUPER_ADMIN
+            and instance.id != self.context["request"].user.id
+            and validated_data["user_role"] != UserRole.REGULAR
+        ):
+            raise PermissionDenied(
+                "Un administrateur ne peut pas donner à un autre utilisateur un rôle autre que normal"
+            )
+
+        # if a user is not a super admin, he cannot set himself as super admin
+
+        if (
+            self.context["request"].user.user_role != UserRole.SUPER_ADMIN
+            and validated_data["user_role"] == UserRole.SUPER_ADMIN
+        ):
+            raise PermissionDenied(
+                "Un administrateur ne peut pas donner à un autre utilisateur le rôle de super administrateur"
+            )
 
         # user_user_groups
 

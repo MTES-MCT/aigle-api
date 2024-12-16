@@ -18,3 +18,5 @@ from .tile_set import TileSet
 from .user_group import UserGroup, UserUserGroup
 
 from .parcel import Parcel
+
+from .analytic_log import AnalyticLog

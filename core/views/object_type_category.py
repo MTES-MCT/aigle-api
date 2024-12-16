@@ -9,7 +9,7 @@ from core.serializers.object_type_category import (
     ObjectTypeCategoryInputSerializer,
 )
 from core.utils.filters import UuidInFilter
-from core.utils.permissions import AdminRoleModifyActionPermission
+from core.utils.permissions import SuperAdminRoleModifyActionPermission
 
 
 class ObjectTypeCategoryFilter(FilterSet):
@@ -36,7 +36,7 @@ class ObjectTypeCategoryViewSet(
     BaseViewSetMixin[ObjectTypeCategory],
 ):
     filterset_class = ObjectTypeCategoryFilter
-    permission_classes = [AdminRoleModifyActionPermission]
+    permission_classes = [SuperAdminRoleModifyActionPermission]
 
     def get_serializer_class(self):
         if self.action in ["create", "partial_update", "update"]:

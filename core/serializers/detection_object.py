@@ -1,8 +1,7 @@
 from django.utils import timezone
 from typing import List, Optional
-from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
+from common.constants.models import DEFAULT_MAX_LENGTH
 from core.models.detection_object import DetectionObject
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSet, TileSetType
 from core.models.user_group import UserGroupRight
@@ -18,6 +17,7 @@ from core.serializers.object_type import ObjectTypeSerializer
 from rest_framework import serializers
 
 from core.serializers.tile_set import TileSetMinimalSerializer
+from core.serializers.user_group import UserGroupSerializer
 from core.utils.data_permissions import get_user_group_rights, get_user_tile_sets
 from core.utils.prescription import compute_prescription
 
@@ -28,9 +28,13 @@ class DetectionObjectMinimalSerializer(UuidTimestampedModelSerializerMixin):
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
             "id",
             "address",
+            "comment",
             "object_type",
         ]
 
+    comment = serializers.CharField(
+        max_length=DEFAULT_MAX_LENGTH, allow_null=True, allow_blank=True, required=False
+    )
     object_type = ObjectTypeSerializer(read_only=True)
 
 
@@ -62,11 +66,11 @@ class DetectionObjectHistorySerializer(DetectionObjectSerializer):
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
         detections = obj.detections.all()
-        tile_sets, global_geometry = get_user_tile_sets(
+        tile_sets, _ = get_user_tile_sets(
             user=user,
             filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             order_bys=["-date"],
-            filter_tile_set_contains_point=Centroid(detections[0].geometry),
+            filter_tile_set_intersects_geometry=detections[0].geometry,
         )
 
         if not tile_sets:
@@ -107,14 +111,38 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
             "detections",
             "tile_sets",
             "user_group_rights",
-            "custom_geo_zones"
+            "geo_custom_zones",
+            "user_group_last_update",
         ]
 
     detections = serializers.SerializerMethodField()
     tile_sets = serializers.SerializerMethodField()
     user_group_rights = serializers.SerializerMethodField()
     parcel = ParcelSerializer(read_only=True)
-    custom_geo_zones = serializers.SerializerMethodField()
+    geo_custom_zones = GeoCustomZoneSerializer(many=True, read_only=True)
+    user_group_last_update = serializers.SerializerMethodField(read_only=True)
+
+    def get_user_group_last_update(self, obj: DetectionObject):
+        most_recent_detection_update = (
+            obj.detections.select_related("detection_data")
+            .order_by("-updated_at")
+            .first()
+        )
+        detection_data = most_recent_detection_update.detection_data
+
+        if not detection_data.user_last_update:
+            return None
+
+        user_user_group = (
+            detection_data.user_last_update.user_user_groups.order_by("created_at")
+            .all()
+            .first()
+        )
+
+        if not user_user_group:
+            return None
+
+        return UserGroupSerializer(user_user_group.user_group).data
 
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
@@ -122,13 +150,11 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
         if self.context.get("tile_sets"):
             tile_sets = self.context["tile_sets"]
         else:
-            tile_sets, global_geometry = get_user_tile_sets(
+            tile_sets, _ = get_user_tile_sets(
                 user=user,
                 filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
                 order_bys=["-date"],
-                filter_tile_set_contains_point=Centroid(
-                    obj.detections.all()[0].geometry
-                ),
+                filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
             self.context["tile_sets"] = tile_sets
 
@@ -145,13 +171,11 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
         if self.context.get("tile_sets"):
             tile_sets = self.context["tile_sets"]
         else:
-            tile_sets, global_geometry = get_user_tile_sets(
+            tile_sets, _ = get_user_tile_sets(
                 user=user,
                 filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
                 order_bys=["-date"],
-                filter_tile_set_contains_point=Centroid(
-                    obj.detections.all()[0].geometry
-                ),
+                filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
             self.context["tile_sets"] = tile_sets
 
@@ -190,31 +214,12 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
         user = self.context["request"].user
         point = Centroid(obj.detections.first().geometry)
 
-        return get_user_group_rights(user=user, point=point)
+        return get_user_group_rights(user=user, points=[point])
 
-
-    def get_custom_geo_zones(self, obj: DetectionObject):
-        geo_custom_zones_data = GeoCustomZone.objects.order_by(
-            *GEO_CUSTOM_ZONES_ORDER_BYS
-        ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
-        geo_custom_zones_data = geo_custom_zones_data.filter(
-            geometry__intersects=obj.detections.all()[0].geometry
-        )
-        geo_custom_zones_data = geo_custom_zones_data.values(
-            "uuid", "name", "color", "geo_custom_zone_status"
-        )
-        geo_custom_zones_data = geo_custom_zones_data.all()
-
-        geo_custom_zones = []
-
-        for geo_custom_zone in geo_custom_zones_data:
-            geo_custom_zones.append(GeoCustomZoneSerializer(geo_custom_zone).data)
-
-        return geo_custom_zones
 
 class DetectionObjectInputSerializer(DetectionObjectSerializer):
     class Meta(DetectionObjectSerializer.Meta):
-        fields = ["address", "object_type_uuid"]
+        fields = ["address", "object_type_uuid", "comment"]
 
     object_type_uuid = serializers.UUIDField(write_only=True)
 
@@ -235,7 +240,7 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
         centroid = Centroid(instance.detections.first().geometry)
 
         get_user_group_rights(
-            user=user, point=centroid, raise_if_has_no_right=UserGroupRight.WRITE
+            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
         )
 
         if object_type:

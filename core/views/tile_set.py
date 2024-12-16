@@ -11,7 +11,7 @@ from core.serializers.tile_set import (
     TileSetSerializer,
 )
 from core.utils.filters import ChoiceInFilter
-from core.utils.permissions import AdminRoleModifyActionPermission
+from core.utils.permissions import SuperAdminRoleModifyActionPermission
 
 
 class TileSetFilter(FilterSet):
@@ -34,7 +34,7 @@ class TileSetFilter(FilterSet):
 
 class TileSetViewSet(BaseViewSetMixin[TileSet]):
     filterset_class = TileSetFilter
-    permission_classes = [AdminRoleModifyActionPermission]
+    permission_classes = [SuperAdminRoleModifyActionPermission]
 
     def get_serializer_class(self):
         if self.action in ["create", "partial_update", "update"]:

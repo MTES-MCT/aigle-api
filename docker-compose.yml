@@ -2,6 +2,7 @@ version: "3.8"
 
 services:
   db:
+    shm_size: 1g
     container_name: aigle_api_db_container
     image: postgis/postgis:latest
     environment:
