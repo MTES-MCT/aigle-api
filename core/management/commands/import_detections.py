@@ -70,8 +70,14 @@ class DetectionRowSerializer(serializers.Serializer):
     updated_at = serializers.DateTimeField(required=False, allow_null=True)
 
 
-TABLE_COLUMNS = list(DetectionRowSerializer().get_fields().keys()) + ["geometry"]
 TABLE_COLUMNS_DATE = ["created_at", "updated_at"]
+TABLE_COLUMNS = list(
+    [
+        col
+        for col in DetectionRowSerializer().get_fields().keys()
+        if col not in TABLE_COLUMNS_DATE
+    ]
+) + ["geometry"]
 
 
 class Command(BaseCommand):
