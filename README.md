@@ -107,9 +107,9 @@ Custom zones are big objects so we need to pre-compute and store in database ass
 insert
 	into
 	core_detectionobject_geo_custom_zones(
-	detectionobject_id,
-	geocustomzone_id
-)
+        detectionobject_id,
+        geocustomzone_id
+    )
 select
 	distinct
 	dobj.id as detectionobject_id,
