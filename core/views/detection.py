@@ -25,6 +25,7 @@ from core.serializers.detection import (
     DetectionInputSerializer,
     DetectionMinimalSerializer,
     DetectionMultipleInputSerializer,
+    DetectionSerializer,
     DetectionUpdateSerializer,
 )
 from core.utils.data_permissions import (
@@ -312,11 +313,15 @@ class DetectionViewSet(BaseViewSetMixin[Detection]):
             return DetectionUpdateSerializer
 
         detail = bool(self.request.query_params.get("detail"))
+        geo_feature = bool(self.request.query_params.get("geoFeature"))
 
-        if self.action in ["list"] and not detail:
+        if self.action in ["list"] and geo_feature:
             return DetectionMinimalSerializer
 
-        return DetectionDetailSerializer
+        if detail:
+            return DetectionDetailSerializer
+
+        return DetectionSerializer
 
     def get_queryset(self):
         queryset = Detection.objects.order_by("tile_set__date", "id")

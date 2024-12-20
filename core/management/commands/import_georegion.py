@@ -50,8 +50,10 @@ class Command(BaseCommand):
             insee_code = properties["code_insee"]
 
             if insee_codes and insee_code not in insee_codes:
+                print(f"Skiping region: {insee_code}")
                 continue
 
+            print(f"Inserting region: {insee_codes}")
             geometry = GEOSGeometry(json.dumps(feature.__geo_interface__["geometry"]))
             geometry.transform(2154, 4326)
 
