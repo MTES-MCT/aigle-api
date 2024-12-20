@@ -7,7 +7,6 @@ from core.models.user import UserRole
 from core.models.user_group import UserGroupRight, UserUserGroup
 from django.contrib.gis.db.models.functions import Intersection
 from django.db.models import Q
-from django.db.models import Count
 from django.contrib.gis.geos.collections import MultiPolygon
 
 from django.core.exceptions import PermissionDenied
@@ -71,7 +70,6 @@ def get_user_tile_sets(
     tile_sets = tile_sets.annotate(
         union_geometry=union_geometry,
         intersection=intersection,
-        geo_zones_count=Count("geo_zones"),
         intersection_type=GetGeometryType("intersection"),
     )
 
@@ -85,19 +83,16 @@ def get_user_tile_sets(
                 ]
             )
         )
-        | Q(geo_zones_count=0)
     )
 
     if filter_tile_set_contains_point:
         tile_sets = tile_sets.filter(
             Q(intersection__contains=filter_tile_set_contains_point)
-            | Q(geo_zones_count=0)
         )
 
     if filter_tile_set_intersects_geometry:
         tile_sets = tile_sets.filter(
             Q(intersection__intersects=filter_tile_set_intersects_geometry)
-            | Q(geo_zones_count=0)
         )
 
     if filter_tile_set_uuid__in:

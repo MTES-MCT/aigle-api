@@ -200,16 +200,20 @@ class DetectionFilter(FilterSet):
             tile_set = tile_sets[i]
             previous_tile_sets = tile_sets[:i]
 
-            where = Q(tile_set__uuid=tile_set.uuid)
+            if tile_set.intersection:
+                where = Q(tile_set__uuid=tile_set.uuid) & Q(
+                    geometry__intersects=tile_set.intersection
+                )
+            else:
+                if global_geometry:
+                    where = Q(tile_set__uuid=tile_set.uuid) & Q(
+                        geometry__intersects=polygon_requested
+                    )
+                else:
+                    where = Q(tile_set__uuid=tile_set.uuid)
 
             if polygon_requested:
                 where = where & Q(geometry__intersects=polygon_requested)
-
-            if tile_set.intersection:
-                where = where & Q(geometry__intersects=tile_set.intersection)
-
-            if global_geometry:
-                where = where & Q(geometry__intersects=global_geometry)
 
             for previous_tile_set in previous_tile_sets:
                 # custom logic here: we want to display the detections on the last tileset
