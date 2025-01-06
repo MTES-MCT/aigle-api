@@ -1,117 +1,105 @@
 from common.views.base import BaseViewSetMixin
 
-from operator import or_
-from django.db.models import Q
-from functools import reduce
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
-from core.models.detection import Detection, DetectionSource
-from django.core.exceptions import BadRequest
+from core.models.detection import Detection
 
 from core.models.detection_data import (
     DetectionControlStatus,
-    DetectionData,
-    DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
-from rest_framework.status import HTTP_200_OK
-from django.http import HttpResponse
-from core.models.detection_object import DetectionObject
-from core.models.object_type import ObjectType
-from core.models.tile_set import TileSetType
-from core.models.user_group import UserGroupRight
+from core.repository.base import NumberRepoFilter, RepoFilterLookup
+from core.repository.detection import DetectionRepository, RepoFilterCustomZone
 from core.serializers.detection import (
     DetectionDetailSerializer,
-    DetectionInputSerializer,
-    DetectionMinimalSerializer,
-    DetectionMultipleInputSerializer,
-    DetectionSerializer,
-    DetectionUpdateSerializer,
 )
-from core.utils.data_permissions import (
-    get_user_group_rights,
-    get_user_object_types_with_status,
-    get_user_tile_sets,
-)
-from simple_history.utils import bulk_update_with_history
 from core.utils.filters import ChoiceInFilter, UuidInFilter
-from django.contrib.gis.geos import Polygon
-from rest_framework.decorators import action
-from django.contrib.gis.db.models.functions import Intersection
 
-from core.utils.geo import get_geometry
+from core.utils.string import to_array, to_bool, to_enum_array
 from core.views.detection.utils import (
     BOOLEAN_CHOICES,
     INTERFACE_DRAWN_CHOICES,
-    filter_custom_zones_uuids,
-    filter_prescripted,
-    filter_score,
 )
 
 
 class DetectionListFilter(FilterSet):
     class Meta:
         model = Detection
-        fields = ["tileSetsUuids"]
-        geo_field = "geometry"
+        fields = [
+            "objectTypesUuids",
+            "detectionValidationStatuses",
+            "detectionControlStatuses",
+            "score",
+            "prescripted",
+            "interfaceDrawn",
+            "customZonesUuids",
+            "communesUuids",
+            "departmentsUuids",
+            "regionsUuids",
+            "tileSetsUuids",
+        ]
 
-    objectTypesUuids = UuidInFilter(method="filter_object_types_uuids")
+    objectTypesUuids = UuidInFilter(method="pass_")
     detectionValidationStatuses = ChoiceInFilter(
-        field_name="detection_data__detection_validation_status",
+        method="pass_",
         choices=DetectionValidationStatus.choices,
     )
     detectionControlStatuses = ChoiceInFilter(
-        field_name="detection_data__detection_control_status",
+        method="pass_",
         choices=DetectionControlStatus.choices,
     )
 
-    score = NumberFilter(method="filter_score")
-    prescripted = ChoiceFilter(choices=BOOLEAN_CHOICES, method="filter_prescripted")
+    score = NumberFilter(method="pass_")
+    prescripted = ChoiceFilter(choices=BOOLEAN_CHOICES, method="pass_")
     interfaceDrawn = ChoiceFilter(choices=INTERFACE_DRAWN_CHOICES, method="pass_")
-    customZonesUuids = UuidInFilter(method="filter_custom_zones_uuids")
+    customZonesUuids = UuidInFilter(method="pass_")
 
     communesUuids = UuidInFilter(method="pass_")
     departmentsUuids = UuidInFilter(method="pass_")
     regionsUuids = UuidInFilter(method="pass_")
 
+    tileSetsUuids = UuidInFilter(method="pass_")
+
     def pass_(self, queryset, name, value):
         return queryset
 
-    def filter_object_types_uuids(self, queryset, name, value):
-        if not value:
-            return queryset
-
-        object_types_uuids = value.split(",")
-
-        return queryset.filter(
-            detection_object__object_type__uuid__in=object_types_uuids
-        )
-
-    def filter_score(self, queryset, name, value):
-        return filter_score(queryset, name, value)
-
-    def filter_prescripted(self, queryset, name, value):
-        return filter_prescripted(queryset, name, value)
-
     def filter_queryset(self, queryset):
-        queryset = filter_custom_zones_uuids(data=self.data, queryset=queryset)
-
         # filter geo collectivities
 
-        communes_uuids = (
-            self.data.get("communesUuids").split(",")
-            if self.data.get("communesUuids")
-            else []
+        communes_uuids = to_array(self.data.get("communesUuids"), default_value=[])
+        departments_uuids = to_array(
+            self.data.get("departmentsUuids"), default_value=[]
         )
-        departments_uuids = (
-            self.data.get("departmentsUuids").split(",")
-            if self.data.get("departmentsUuids")
-            else []
-        )
-        regions_uuids = (
-            self.data.get("regionsUuids").split(",")
-            if self.data.get("regionsUuids")
-            else []
+        regions_uuids = to_array(self.data.get("regionsUuids"), default_value=[])
+
+        collectivities_uuids = communes_uuids + departments_uuids + regions_uuids
+
+        repo = DetectionRepository(queryset=queryset)
+
+        queryset = repo._filter(
+            filter_collectivity_uuid_in=collectivities_uuids or None,
+            filter_score=NumberRepoFilter(
+                lookup=RepoFilterLookup.GTE, number=float(self.data.get("score", "0"))
+            ),
+            filter_object_type_uuid_in=to_array(self.data.get("objectTypesUuids")),
+            filter_custom_zone=RepoFilterCustomZone(
+                interface_drawn=self.data.get("interfaceDrawn"),
+                custom_zone_uuids=to_array(
+                    self.data.get("customZonesUuids"), default_value=[]
+                ),
+            ),
+            filter_tile_set_uuid_in=to_array(
+                self.data.get("tileSetsUuids"), default_value=None
+            ),
+            filter_detection_validation_status_in=to_enum_array(
+                DetectionValidationStatus,
+                self.data.get("detectionValidationStatuses"),
+            ),
+            filter_detection_control_status_in=to_enum_array(
+                DetectionControlStatus,
+                self.data.get("detectionControlStatuses"),
+            ),
+            filter_prescribed=to_bool(self.data.get("prescripted")),
         )
 
         return queryset
@@ -124,6 +112,10 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
     def get_queryset(self):
         queryset = Detection.objects.order_by("tile_set__date", "id")
         queryset = queryset.prefetch_related(
-            "detection_object", "detection_object__object_type", "tile", "tile_set"
+            "detection_object",
+            "detection_object__object_type",
+            "detection_object__parcel",
+            "tile",
+            "tile_set",
         ).select_related("detection_data")
         return queryset

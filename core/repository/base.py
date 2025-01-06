@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Generic, List, Optional, TypeVar
 from django.db.models import Model, QuerySet
@@ -14,7 +15,7 @@ class BaseRepository(
     queryset: QuerySet[T_MODEL]
 
     def __init__(self, queryset: Optional[QuerySet[T_MODEL]]):
-        self.queryset = queryset or T_MODEL.objects
+        self.queryset = queryset
 
     def _order_by(self, order_bys: Optional[List[str]] = None, *args, **kwargs):
         if order_bys is not None:
@@ -25,27 +26,29 @@ class BaseRepository(
             f"Filter method not implemented for {self.__class__.__name__}"
         )
 
-    def list(self, *args, **kwargs):
+    def list_(self, *args, **kwargs):
         self._filter(*args, **kwargs)
         self._order_by(*args, **kwargs)
 
         return self.queryset.all()
 
 
-class FilterLookup(Enum):
+class RepoFilterLookup(Enum):
     GTE = "gte"
     GT = "gt"
     LTE = "lte"
     LT = "lt"
 
 
-class NumberFilter:
-    lookup: FilterLookup
+@dataclass
+class NumberRepoFilter:
+    lookup: RepoFilterLookup
     number: float
 
 
-class DateFilter:
-    lookup: FilterLookup
+@dataclass
+class DateRepoFilter:
+    lookup: RepoFilterLookup
     date: datetime
 
 
@@ -55,8 +58,8 @@ class TimestampedBaseRepositoryMixin(
     @staticmethod
     def _filter_timestamped(
         queryset: QuerySet[T_MODEL],
-        filter_created_at: Optional[DateFilter] = None,
-        filter_updated_at: Optional[DateFilter] = None,
+        filter_created_at: Optional[DateRepoFilter] = None,
+        filter_updated_at: Optional[DateRepoFilter] = None,
     ) -> QuerySet[T_MODEL]:
         if filter_created_at is not None:
             queryset = queryset.filter(

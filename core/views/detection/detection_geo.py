@@ -5,13 +5,12 @@ from django.db.models import Q
 from functools import reduce
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
-from core.models.detection import Detection, DetectionSource
+from core.models.detection import Detection
 from django.core.exceptions import BadRequest
 
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionData,
-    DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
 from rest_framework.status import HTTP_200_OK

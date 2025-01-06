@@ -55,9 +55,12 @@ class Detection(
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [
+            models.Index(fields=["id"]),
             models.Index(fields=["score"]),
             models.Index(fields=["created_at"]),
             models.Index(fields=["detection_source"]),
+            models.Index(fields=["detection_data"]),
+            models.Index(fields=["detection_object"]),
             models.Index(fields=["detection_object", "detection_data"]),
             models.Index(fields=["detection_object", "detection_data", "tile_set"]),
         ]

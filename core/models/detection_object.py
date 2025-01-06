@@ -34,4 +34,4 @@ class DetectionObject(
     history = HistoricalRecords(bases=[HistoriedModelMixin])
 
     class Meta:
-        indexes = UuidModelMixin.Meta.indexes + []
+        indexes = UuidModelMixin.Meta.indexes + [models.Index(fields=["object_type"])]
