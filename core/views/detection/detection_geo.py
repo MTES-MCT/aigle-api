@@ -5,13 +5,12 @@ from django.db.models import Q
 from functools import reduce
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
-from core.models.detection import Detection, DetectionSource
+from core.models.detection import Detection
 from django.core.exceptions import BadRequest
 
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionData,
-    DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
 from rest_framework.status import HTTP_200_OK
@@ -40,16 +39,16 @@ from rest_framework.decorators import action
 from django.contrib.gis.db.models.functions import Intersection
 
 from core.utils.geo import get_geometry
-
-BOOLEAN_CHOICES = (("false", "False"), ("true", "True"), ("null", "Null"))
-INTERFACE_DRAWN_CHOICES = (
-    ("ALL", "ALL"),
-    ("INSIDE_SELECTED_ZONES", "INSIDE_SELECTED_ZONES"),
-    ("NONE", "NONE"),
+from core.views.detection.utils import (
+    BOOLEAN_CHOICES,
+    INTERFACE_DRAWN_CHOICES,
+    filter_custom_zones_uuids,
+    filter_prescripted,
+    filter_score,
 )
 
 
-class DetectionFilter(FilterSet):
+class DetectionGeoFilter(FilterSet):
     objectTypesUuids = UuidInFilter(method="pass_")
     customZonesUuids = UuidInFilter(method="pass_")
     tileSetsUuids = UuidInFilter(method="pass_")
@@ -89,26 +88,10 @@ class DetectionFilter(FilterSet):
         geo_field = "geometry"
 
     def filter_score(self, queryset, name, value):
-        if not value:
-            return queryset
-
-        return queryset.filter(score__gte=value)
+        return filter_score(queryset, name, value)
 
     def filter_prescripted(self, queryset, name, value):
-        if value == "null":
-            return queryset
-
-        if value == "true":
-            return queryset.filter(
-                detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
-            )
-
-        return queryset.filter(
-            Q(
-                detection_data__detection_prescription_status=DetectionPrescriptionStatus.NOT_PRESCRIBED
-            )
-            | Q(detection_data__detection_prescription_status=None)
-        )
+        return filter_prescripted(queryset, name, value)
 
     def filter_queryset(self, queryset):
         queryset = super().filter_queryset(queryset)
@@ -240,38 +223,13 @@ class DetectionFilter(FilterSet):
         else:
             queryset = queryset.filter(reduce(or_, wheres))
 
-        # filter custom zones
-
-        custom_zones_uuids = (
-            self.data.get("customZonesUuids").split(",")
-            if self.data.get("customZonesUuids")
-            else []
-        )
-
-        if custom_zones_uuids:
-            if self.data.get("interfaceDrawn") == "ALL":
-                queryset = queryset.filter(
-                    Q(detection_object__geo_custom_zones__uuid__in=custom_zones_uuids)
-                    | Q(detection_source=DetectionSource.INTERFACE_DRAWN)
-                )
-
-            if not self.data.get("interfaceDrawn") or self.data.get(
-                "interfaceDrawn"
-            ) in ["INSIDE_SELECTED_ZONES", "NONE"]:
-                queryset = queryset.filter(
-                    detection_object__geo_custom_zones__uuid__in=custom_zones_uuids
-                )
-
-        if self.data.get("interfaceDrawn") == "NONE":
-            queryset = queryset.exclude(
-                detection_source=DetectionSource.INTERFACE_DRAWN
-            )
+        queryset = filter_custom_zones_uuids(data=self.data, queryset=queryset)
 
         return queryset.distinct()
 
 
-class DetectionViewSet(BaseViewSetMixin[Detection]):
-    filterset_class = DetectionFilter
+class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
+    filterset_class = DetectionGeoFilter
 
     @action(methods=["post"], detail=False, url_path="multiple")
     def edit_multiple(self, request):

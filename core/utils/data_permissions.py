@@ -60,6 +60,11 @@ def get_user_tile_sets(
         final_union = None
         intersection = Union("geo_zones__geometry")
 
+        if filter_tile_set_intersects_geometry:
+            intersection = Intersection(
+                intersection, filter_tile_set_intersects_geometry
+            )
+
     tile_sets = TileSet.objects.filter(
         tile_set_status__in=filter_tile_set_status__in,
         tile_set_type__in=filter_tile_set_type__in,

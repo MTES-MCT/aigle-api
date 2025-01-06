@@ -7,7 +7,7 @@ from core.models.detection import Detection
 from django.contrib.gis.geos import Polygon
 
 from core.models.tile import Tile
-from core.views.detection import DetectionFilter
+from core.views.detection.detection_geo import DetectionGeoFilter
 
 from django.core.exceptions import BadRequest
 from rest_framework.decorators import api_view, permission_classes
@@ -85,7 +85,8 @@ def endpoint(request):
         )
         .filter(
             # exclude grouped tiles that are not full to avoid mistakes in counting
-            nbr=GRID_SIZE * GRID_SIZE
+            nbr=GRID_SIZE
+            * GRID_SIZE
         )
     )
 
@@ -105,7 +106,7 @@ def endpoint(request):
     data_requested["neLng"] = ne_lng
     data_requested["neLat"] = ne_lat
 
-    filterset = DetectionFilter(
+    filterset = DetectionGeoFilter(
         data_requested, queryset=Detection.objects, request=request
     )
 
