@@ -25,3 +25,8 @@ class GeoCustomZone(GeoZone):
         choices=GeoCustomZoneType.choices,
         default=GeoCustomZoneType.COMMON,
     )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["geozone_ptr"]),
+        ]

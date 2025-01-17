@@ -25,6 +25,13 @@ GEO_CLASS_NAMES_GEO_ZONE_TYPES_MAP = {
 }
 
 
+class GeoZoneManager(models.Manager):
+    def get_queryset(self):
+        # by default we defer geometry field as it's heavy to load in memory and not necessary
+        # we prefer to handle geometric operations at database level for better performances
+        return super().get_queryset().defer("geometry")
+
+
 class GeoZone(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH)
     name_normalized = models.CharField(max_length=DEFAULT_MAX_LENGTH)
@@ -34,8 +41,10 @@ class GeoZone(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         choices=GeoZoneType.choices,
         editable=False,
     )
+    objects = GeoZoneManager()
 
     class Meta:
+        base_manager_name = "objects"
         indexes = UuidModelMixin.Meta.indexes + [
             models.Index(fields=["id"], name="idx_geozone_id"),
         ]
