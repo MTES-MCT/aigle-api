@@ -17,7 +17,8 @@ from rest_framework.status import HTTP_200_OK
 from django.http import HttpResponse
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
-from core.models.tile_set import TileSetType
+from core.models.tile_set import TileSetStatus, TileSetType
+from core.models.user import UserRole
 from core.models.user_group import UserGroupRight
 from core.serializers.detection import (
     DetectionDetailSerializer,
@@ -140,9 +141,19 @@ class DetectionGeoFilter(FilterSet):
             polygon_requested = Polygon.from_bbox((sw_lng, sw_lat, ne_lng, ne_lat))
             polygon_requested.srid = 4326
 
+        filter_tile_set_status__in = None
+
+        if self.request.user.user_role == UserRole.SUPER_ADMIN:
+            filter_tile_set_status__in = [
+                TileSetStatus.VISIBLE,
+                TileSetStatus.HIDDEN,
+                TileSetStatus.DEACTIVATED,
+            ]
+
         tile_sets, global_geometry = get_user_tile_sets(
             user=self.request.user,
             filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status__in=filter_tile_set_status__in,
             filter_tile_set_intersects_geometry=polygon_requested,
             filter_tile_set_uuid__in=tile_sets_uuids,
         )
