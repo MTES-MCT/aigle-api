@@ -99,6 +99,23 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
 
                 bulk_create_with_history(detections_to_insert, Detection)
 
+        # if object get unpresribed, we remove detections for the previous years
+        if (
+            "detection_prescription_status" in validated_data
+            and instance.detection_prescription_status
+            != validated_data["detection_prescription_status"]
+            and validated_data["detection_prescription_status"]
+            == DetectionPrescriptionStatus.NOT_PRESCRIBED
+        ):
+            prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
+            date_max = instance.detection.tile_set.date
+            date_min = date_max - relativedelta(years=prescription_duration_years)
+
+            instance.detection.detection_object.detections.filter(
+                tile_set__date__gte=date_min,
+                tile_set__date__lt=date_max,
+            ).delete()
+
         for key, value in validated_data.items():
             setattr(instance, key, value)
 
