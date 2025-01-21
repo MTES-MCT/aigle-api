@@ -15,7 +15,7 @@ docker volume create aigle_data
 
 ```bash
 docker build -f Dockerfile -t aigle_api_app_container .
-docker-compose --env-file .env -f docker-compose.yml up --force-recreate -d db app
+docker compose --env-file .env -f docker compose.yml up --force-recreate -d db app
 ```
 
 ## Django

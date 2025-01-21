@@ -14,6 +14,6 @@ server:
 	python3 manage.py runserver
 
 db:
-	docker-compose up -d db
+	docker compose up -d db
 
 start: db server
