@@ -14,6 +14,7 @@ from django.contrib.gis.db.models.aggregates import Union
 
 from core.utils.postgis import GeometryType, GetGeometryType
 from django.contrib.gis.geos import Point
+from django.db.models import Count
 
 
 def get_user_tile_sets(
@@ -76,16 +77,20 @@ def get_user_tile_sets(
         union_geometry=union_geometry,
         intersection=intersection,
         intersection_type=GetGeometryType("intersection"),
+        geo_zone_count=Count("geo_zones"),
     )
 
     tile_sets = tile_sets.filter(
         (
-            Q(intersection__isnull=False)
-            & Q(
-                intersection_type__in=[
-                    GeometryType.POLYGON,
-                    GeometryType.MULTIPOLYGON,
-                ]
+            Q(geo_zone_count=0)
+            | (
+                Q(intersection__isnull=False)
+                & Q(
+                    intersection_type__in=[
+                        GeometryType.POLYGON,
+                        GeometryType.MULTIPOLYGON,
+                    ]
+                )
             )
         )
     )
