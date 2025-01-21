@@ -4,7 +4,7 @@ services:
   db:
     shm_size: 1g
     container_name: aigle_api_db_container
-    image: postgis/postgis:latest
+    image: postgis/postgis:16-3.5
     environment:
       POSTGRES_USER: ${SQL_USER}
       POSTGRES_PASSWORD: ${SQL_PASSWORD}
@@ -13,7 +13,7 @@ services:
     networks:
       - db
     volumes:
-      - aigle_data:/var/lib/postgresql/data
+      - aigle_data:/var/lib/postgresql/data:delegated
   app:
     container_name: aigle_api_app_container
     image: aigle_api_app_container
