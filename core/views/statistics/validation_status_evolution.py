@@ -1,19 +1,17 @@
 from django.http import JsonResponse
 from rest_framework import serializers
 
-from core.models.tile_set import TileSet, TileSetType
+from core.models.detection import Detection
+from core.models.tile_set import TileSet
 from django.db.models import Count
 
-from core.utils.data_permissions import get_user_tile_sets
-from core.utils.geo import get_geometry
+from core.repository.base import NumberRepoFilter, RepoFilterLookup
+from core.repository.detection import DetectionRepository, RepoFilterCustomZone
+from core.serializers.utils.query import prefix_q
 from core.utils.serializers import CommaSeparatedStringField, CommaSeparatedUUIDField
 from rest_framework.views import APIView
 
 from django.db.models import F
-
-from core.views.statistics.utils import get_detections_where_clauses
-
-from django.contrib.gis.db.models.functions import Intersection
 
 
 class EndpointSerializer(serializers.Serializer):
@@ -48,40 +46,50 @@ class StatisticsValidationStatusEvolutionView(APIView):
         endpoint_serializer = EndpointSerializer(data=request.GET)
         endpoint_serializer.is_valid(raise_exception=True)
 
-        tile_sets, global_geometry = get_user_tile_sets(
-            user=request.user,
-            filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-            order_bys=["-date"],
+        communes_uuids = endpoint_serializer.validated_data.get("communesUuids") or []
+        departments_uuids = (
+            endpoint_serializer.validated_data.get("departmentsUuids") or []
         )
-        tile_sets_queried = tile_sets.all()
-        tile_sets_queried_uuids = [tile_set.uuid for tile_set in tile_sets_queried]
+        regions_uuids = endpoint_serializer.validated_data.get("regionsUuids") or []
 
-        if (
-            endpoint_serializer.validated_data.get("communesUuids")
-            or endpoint_serializer.validated_data.get("departmentsUuids")
-            or endpoint_serializer.validated_data.get("regionsUuids")
-        ):
-            geozones_geometry = get_geometry(
-                communes_uuids=endpoint_serializer.validated_data.get("communesUuids"),
-                departments_uuids=endpoint_serializer.validated_data.get(
-                    "departmentsUuids"
+        collectivities_uuids = communes_uuids + departments_uuids + regions_uuids
+
+        repo = DetectionRepository(queryset=Detection.objects)
+
+        _, q_detections = repo._filter(
+            filter_collectivity_uuid_in=collectivities_uuids or None,
+            filter_score=NumberRepoFilter(
+                lookup=RepoFilterLookup.GTE,
+                number=float(endpoint_serializer.validated_data.get("score", "0")),
+            ),
+            filter_object_type_uuid_in=endpoint_serializer.validated_data.get(
+                "objectTypesUuids"
+            ),
+            filter_custom_zone=RepoFilterCustomZone(
+                interface_drawn=endpoint_serializer.validated_data.get(
+                    "interfaceDrawn"
                 ),
-                regions_uuids=endpoint_serializer.validated_data.get("regionsUuids"),
-            )
-
-            if global_geometry:
-                global_geometry = Intersection(global_geometry, geozones_geometry)
-            else:
-                global_geometry = geozones_geometry
-
-        queryset = TileSet.objects.filter(uuid__in=tile_sets_queried_uuids)
-        queryset = queryset.order_by("date")
-
-        detections_where_clauses = get_detections_where_clauses(
-            endpoint_serializer=endpoint_serializer,
-            base_path_detection="detections__",
-            global_geometry=global_geometry,
+                custom_zone_uuids=endpoint_serializer.validated_data.get(
+                    "customZonesUuids"
+                )
+                or [],
+            ),
+            filter_tile_set_uuid_in=endpoint_serializer.validated_data.get(
+                "tileSetsUuids"
+            ),
+            filter_detection_validation_status_in=endpoint_serializer.validated_data.get(
+                "detectionValidationStatuses"
+            ),
+            filter_detection_control_status_in=endpoint_serializer.validated_data.get(
+                "detectionControlStatuses"
+            ),
+            filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
         )
+
+        queryset = TileSet.objects.filter(
+            uuid__in=endpoint_serializer.validated_data.get("tileSetsUuids")
+        )
+        queryset = queryset.order_by("date")
 
         queryset = queryset.values(
             "uuid",
@@ -93,7 +101,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
         ).annotate(
             detections_count=Count(
                 "detections",
-                filter=detections_where_clauses,
+                filter=prefix_q(q_expression=q_detections, prefix="detections"),
             )
         )
         queryset = queryset.filter(
