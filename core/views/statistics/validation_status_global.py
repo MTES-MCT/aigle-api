@@ -17,16 +17,13 @@ from core.views.statistics.utils import (
 
 
 class OutputSerializer(serializers.Serializer):
-    uuid = serializers.UUIDField(source="tile_set_uuid")
-    name = serializers.CharField(source="tile_set_name")
-    date = serializers.DateTimeField(source="tile_set_date")
     detectionsCount = serializers.IntegerField(source="detections_count")
     detectionValidationStatus = serializers.CharField(
         source="detection_validation_status"
     )
 
 
-class StatisticsValidationStatusEvolutionView(APIView):
+class StatisticsValidationStatusGlobalView(APIView):
     def get(self, request):
         endpoint_serializer = StatisticsEndpointSerializer(data=request.GET)
         endpoint_serializer.is_valid(raise_exception=True)
@@ -67,9 +64,6 @@ class StatisticsValidationStatusEvolutionView(APIView):
         )
 
         queryset = queryset.values(
-            tile_set_uuid=F("tile_set__uuid"),
-            tile_set_name=F("tile_set__name"),
-            tile_set_date=F("tile_set__date"),
             detection_validation_status=F(
                 "detection_data__detection_validation_status"
             ),

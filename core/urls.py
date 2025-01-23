@@ -13,6 +13,9 @@ from core.views.parcel import ParcelViewSet
 from core.views.statistics.validation_status_evolution import (
     StatisticsValidationStatusEvolutionView,
 )
+from core.views.statistics.validation_status_global import (
+    StatisticsValidationStatusGlobalView,
+)
 from core.views.tile_set import TileSetViewSet
 from core.views.user import UserViewSet
 from rest_framework.routers import DefaultRouter
@@ -62,7 +65,13 @@ urlpatterns += [
         "statistics/validation-status-evolution/",
         StatisticsValidationStatusEvolutionView.as_view(),
         name="StatisticsValidationStatusEvolutionView",
-    )
+    ),
+    path(
+        "statistics/validation-status-global/",
+        StatisticsValidationStatusGlobalView.as_view(),
+        name="StatisticsValidationStatusGlobalView",
+    ),
 ]
+
 
 urlpatterns += utils_urls
