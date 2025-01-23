@@ -2,12 +2,10 @@ from django.http import JsonResponse
 from rest_framework import serializers
 
 from core.models.detection import Detection
-from core.models.tile_set import TileSet
 from django.db.models import Count
 
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.detection import DetectionRepository, RepoFilterCustomZone
-from core.serializers.utils.query import prefix_q
 from core.utils.serializers import CommaSeparatedStringField, CommaSeparatedUUIDField
 from rest_framework.views import APIView
 
@@ -32,9 +30,9 @@ class EndpointSerializer(serializers.Serializer):
 
 
 class OutputSerializer(serializers.Serializer):
-    uuid = serializers.UUIDField()
-    name = serializers.CharField()
-    date = serializers.DateTimeField()
+    uuid = serializers.UUIDField(source="tile_set_uuid")
+    name = serializers.CharField(source="tile_set_name")
+    date = serializers.DateTimeField(source="tile_set_date")
     detectionsCount = serializers.IntegerField(source="detections_count")
     detectionValidationStatus = serializers.CharField(
         source="detection_validation_status"
@@ -56,7 +54,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
 
         repo = DetectionRepository(queryset=Detection.objects)
 
-        _, q_detections = repo._filter(
+        queryset, _ = repo._filter(
             filter_collectivity_uuid_in=collectivities_uuids or None,
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE,
@@ -86,29 +84,14 @@ class StatisticsValidationStatusEvolutionView(APIView):
             filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
         )
 
-        queryset = TileSet.objects.filter(
-            uuid__in=endpoint_serializer.validated_data.get("tileSetsUuids")
-        )
-        queryset = queryset.order_by("date")
-
         queryset = queryset.values(
-            "uuid",
-            "name",
-            "date",
+            tile_set_uuid=F("tile_set__uuid"),
+            tile_set_name=F("tile_set__name"),
+            tile_set_date=F("tile_set__date"),
             detection_validation_status=F(
-                "detections__detection_data__detection_validation_status"
+                "detection_data__detection_validation_status"
             ),
-        ).annotate(
-            detections_count=Count(
-                "detections",
-                filter=prefix_q(q_expression=q_detections, prefix="detections"),
-            )
-        )
-        queryset = queryset.filter(
-            detection_validation_status__in=endpoint_serializer.validated_data[
-                "detectionValidationStatuses"
-            ],
-        )
+        ).annotate(detections_count=Count("id"))
         output_serializer = OutputSerializer(data=queryset.all(), many=True)
         output_serializer.is_valid()
 

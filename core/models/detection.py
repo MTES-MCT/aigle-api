@@ -63,4 +63,7 @@ class Detection(
             models.Index(fields=["detection_object"]),
             models.Index(fields=["detection_object", "detection_data"]),
             models.Index(fields=["detection_object", "detection_data", "tile_set"]),
+            models.Index(
+                fields=["detection_object", "detection_data", "tile_set", "score"]
+            ),
         ]
