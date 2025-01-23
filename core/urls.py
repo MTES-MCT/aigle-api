@@ -16,6 +16,9 @@ from core.views.statistics.validation_status_evolution import (
 from core.views.statistics.validation_status_global import (
     StatisticsValidationStatusGlobalView,
 )
+from core.views.statistics.validation_status_object_types_global import (
+    StatisticsValidationStatusObjectTypesGlobalView,
+)
 from core.views.tile_set import TileSetViewSet
 from core.views.user import UserViewSet
 from rest_framework.routers import DefaultRouter
@@ -70,6 +73,11 @@ urlpatterns += [
         "statistics/validation-status-global/",
         StatisticsValidationStatusGlobalView.as_view(),
         name="StatisticsValidationStatusGlobalView",
+    ),
+    path(
+        "statistics/validation-status-object-types-global/",
+        StatisticsValidationStatusObjectTypesGlobalView.as_view(),
+        name="StatisticsValidationStatusObjectTypesGlobalView",
     ),
 ]
 
