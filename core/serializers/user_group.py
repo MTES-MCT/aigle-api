@@ -42,21 +42,33 @@ class UserGroupDetailSerializer(UserGroupSerializer):
 
     def get_communes(self, obj):
         return GeoZoneSerializer(
-            obj.geo_zones.filter(geo_zone_type=GeoZoneType.COMMUNE),
+            [
+                obj
+                for obj in obj.geo_zones.all()
+                if obj.geo_zone_type == GeoZoneType.COMMUNE
+            ],
             many=True,
             read_only=True,
         ).data
 
     def get_departments(self, obj):
         return GeoZoneSerializer(
-            obj.geo_zones.filter(geo_zone_type=GeoZoneType.DEPARTMENT),
+            [
+                obj
+                for obj in obj.geo_zones.all()
+                if obj.geo_zone_type == GeoZoneType.DEPARTMENT
+            ],
             many=True,
             read_only=True,
         ).data
 
     def get_regions(self, obj):
         return GeoZoneSerializer(
-            obj.geo_zones.filter(geo_zone_type=GeoZoneType.REGION),
+            [
+                obj
+                for obj in obj.geo_zones.all()
+                if obj.geo_zone_type == GeoZoneType.REGION
+            ],
             many=True,
             read_only=True,
         ).data

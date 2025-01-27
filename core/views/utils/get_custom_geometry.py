@@ -1,3 +1,5 @@
+import json
+from typing import List
 from django.http import JsonResponse
 
 from rest_framework import serializers
@@ -8,6 +10,8 @@ from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.serializers.geo_custom_zone import GeoCustomZoneGeoFeatureSerializer
 from django.contrib.gis.geos import Polygon
 from django.contrib.gis.db.models.functions import Intersection
+from django.contrib.gis.db.models.aggregates import Union
+from django.contrib.gis.geos import GEOSGeometry
 
 
 class GeometrySerializer(serializers.Serializer):
@@ -17,6 +21,7 @@ class GeometrySerializer(serializers.Serializer):
     swLng = serializers.FloatField()
 
     uuids = serializers.CharField(required=False, allow_null=True)
+    uuidsNegative = serializers.CharField(required=False, allow_null=True)
 
 
 def endpoint(request):
@@ -33,15 +38,51 @@ def endpoint(request):
     )
     polygon_requested.srid = 4326
 
-    queryset = GeoCustomZone.objects.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
+    custom_zones = []
 
     if geometry_serializer.data.get("uuids"):
-        try:
-            queryset = queryset.filter(
-                uuid__in=geometry_serializer.data["uuids"].split(",")
-            )
-        except Exception:
-            pass
+        queryset = get_queryset_geocustomzone(
+            uuids=geometry_serializer.data["uuids"].split(","),
+            polygon_requested=polygon_requested,
+        )
+
+        custom_zones = queryset.all()
+
+    geometry_negative = []
+
+    if geometry_serializer.data.get("uuidsNegative"):
+        queryset_covered = get_queryset_geocustomzone(
+            uuids=geometry_serializer.data["uuidsNegative"].split(","),
+            polygon_requested=polygon_requested,
+        )
+        geometry_covered = queryset_covered.aggregate(union_geometry=Union("geometry"))[
+            "union_geometry"
+        ]
+
+        if geometry_covered:
+            geometry_negative = polygon_requested.difference(geometry_covered)
+        else:
+            geometry_negative = polygon_requested
+
+    return JsonResponse(
+        {
+            "customZones": GeoCustomZoneGeoFeatureSerializer(
+                custom_zones, many=True
+            ).data,
+            "customZoneNegative": json.loads(GEOSGeometry(geometry_negative).geojson)
+            if geometry_negative
+            else None,
+        }
+    )
+
+
+def get_queryset_geocustomzone(uuids: List[str], polygon_requested: Polygon):
+    queryset = GeoCustomZone.objects.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
+
+    try:
+        queryset = queryset.filter(uuid__in=uuids)
+    except Exception:
+        pass
 
     queryset = queryset.filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
     queryset = queryset.filter(geometry__intersects=polygon_requested)
@@ -50,9 +91,7 @@ def endpoint(request):
     )
     queryset = queryset.annotate(geometry=Intersection("geometry", polygon_requested))
 
-    return JsonResponse(
-        GeoCustomZoneGeoFeatureSerializer(queryset.all(), many=True).data, safe=False
-    )
+    return queryset
 
 
 URL = "get-custom-geometry/"

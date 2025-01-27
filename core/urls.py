@@ -1,4 +1,5 @@
-from core.views.detection import DetectionViewSet
+from core.views.detection import DetectionGeoViewSet
+from core.views.detection.detection_list import DetectionListViewSet
 from core.views.detection_data import DetectionDataViewSet
 from core.views.detection_object import DetectionObjectViewSet
 from core.views.geo_commune import GeoCommuneViewSet
@@ -11,6 +12,12 @@ from core.views.object_type_category import ObjectTypeCategoryViewSet
 from core.views.parcel import ParcelViewSet
 from core.views.statistics.validation_status_evolution import (
     StatisticsValidationStatusEvolutionView,
+)
+from core.views.statistics.validation_status_global import (
+    StatisticsValidationStatusGlobalView,
+)
+from core.views.statistics.validation_status_object_types_global import (
+    StatisticsValidationStatusObjectTypesGlobalView,
 )
 from core.views.tile_set import TileSetViewSet
 from core.views.user import UserViewSet
@@ -42,7 +49,8 @@ router.register(
 
 router.register("tile-set", TileSetViewSet, basename="TileSetViewSet")
 
-router.register("detection", DetectionViewSet, basename="DetectionViewSet")
+router.register("detection", DetectionGeoViewSet, basename="DetectionGeoViewSet")
+router.register("detection-list", DetectionListViewSet, basename="DetectionListViewSet")
 router.register(
     "detection-object", DetectionObjectViewSet, basename="DetectionObjectViewSet"
 )
@@ -60,7 +68,18 @@ urlpatterns += [
         "statistics/validation-status-evolution/",
         StatisticsValidationStatusEvolutionView.as_view(),
         name="StatisticsValidationStatusEvolutionView",
-    )
+    ),
+    path(
+        "statistics/validation-status-global/",
+        StatisticsValidationStatusGlobalView.as_view(),
+        name="StatisticsValidationStatusGlobalView",
+    ),
+    path(
+        "statistics/validation-status-object-types-global/",
+        StatisticsValidationStatusObjectTypesGlobalView.as_view(),
+        name="StatisticsValidationStatusObjectTypesGlobalView",
+    ),
 ]
+
 
 urlpatterns += utils_urls

@@ -13,8 +13,6 @@ from core.models.user import User
 
 class DetectionControlStatus(models.TextChoices):
     NOT_CONTROLLED = "NOT_CONTROLLED", "NOT_CONTROLLED"
-    SIGNALED_COLLECTIVITY = "SIGNALED_COLLECTIVITY", "SIGNALED_COLLECTIVITY"
-    SIGNALED_COMMUNE = "SIGNALED_COMMUNE", "SIGNALED_COMMUNE"
     CONTROLLED_FIELD = "CONTROLLED_FIELD", "CONTROLLED_FIELD"
     PRIOR_LETTER_SENT = "PRIOR_LETTER_SENT", "PRIOR_LETTER_SENT"
     OFFICIAL_REPORT_DRAWN_UP = "OFFICIAL_REPORT_DRAWN_UP", "OFFICIAL_REPORT_DRAWN_UP"
@@ -22,7 +20,7 @@ class DetectionControlStatus(models.TextChoices):
         "OBSERVARTION_REPORT_REDACTED",
         "OBSERVARTION_REPORT_REDACTED",
     )
-    VERBALIZED = "VERBALIZED", "VERBALIZED"
+    ADMINISTRATIVE_CONSTRAINT = "ADMINISTRATIVE_CONSTRAINT", "ADMINISTRATIVE_CONSTRAINT"
     REHABILITATED = "REHABILITATED", "REHABILITATED"
 
 
@@ -64,7 +62,12 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         indexes = UuidModelMixin.Meta.indexes + [
             models.Index(fields=["detection_validation_status"]),
             models.Index(fields=["detection_control_status"]),
+            models.Index(fields=["detection_prescription_status"]),
             models.Index(
-                fields=["detection_validation_status", "detection_control_status"]
+                fields=[
+                    "detection_validation_status",
+                    "detection_control_status",
+                    "detection_prescription_status",
+                ]
             ),
         ]

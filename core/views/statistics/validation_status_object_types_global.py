@@ -17,16 +17,16 @@ from core.views.statistics.utils import (
 
 
 class OutputSerializer(serializers.Serializer):
-    uuid = serializers.UUIDField(source="tile_set_uuid")
-    name = serializers.CharField(source="tile_set_name")
-    date = serializers.DateTimeField(source="tile_set_date")
     detectionsCount = serializers.IntegerField(source="detections_count")
     detectionValidationStatus = serializers.CharField(
         source="detection_validation_status"
     )
+    objectTypeUuid = serializers.CharField(source="object_type_uuid")
+    objectTypeName = serializers.CharField(source="object_type_name")
+    objectTypeColor = serializers.CharField(source="object_type_color")
 
 
-class StatisticsValidationStatusEvolutionView(APIView):
+class StatisticsValidationStatusObjectTypesGlobalView(APIView):
     def get(self, request):
         endpoint_serializer = StatisticsEndpointSerializer(data=request.GET)
         endpoint_serializer.is_valid(raise_exception=True)
@@ -67,12 +67,12 @@ class StatisticsValidationStatusEvolutionView(APIView):
         )
 
         queryset = queryset.values(
-            tile_set_uuid=F("tile_set__uuid"),
-            tile_set_name=F("tile_set__name"),
-            tile_set_date=F("tile_set__date"),
             detection_validation_status=F(
-                "detection_data__detection_validation_status"
+                "detection_data__detection_validation_status",
             ),
+            object_type_uuid=F("detection_object__object_type__uuid"),
+            object_type_name=F("detection_object__object_type__name"),
+            object_type_color=F("detection_object__object_type__color"),
         ).annotate(detections_count=Count("id"))
         output_serializer = OutputSerializer(data=queryset.all(), many=True)
         output_serializer.is_valid()
