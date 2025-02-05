@@ -1,5 +1,5 @@
 import json
-from typing import List, TypedDict
+from typing import List, TypedDict, Union
 from django.core.management.base import BaseCommand
 import shapefile
 
@@ -81,7 +81,9 @@ class Command(BaseCommand):
             if not region:
                 continue
 
-            department_numero_region_map[str(data_item["num_dep"])] = region
+            department_numero_region_map[process_code_insee(data_item["num_dep"])] = (
+                region
+            )
 
         for feature in shape.shapeRecords():
             properties: RegionProperties = feature.__geo_interface__["properties"]
@@ -93,16 +95,11 @@ class Command(BaseCommand):
 
             geometry = GEOSGeometry(json.dumps(feature.__geo_interface__["geometry"]))
 
-            # special case for 69
-            code_insee_simplified = (
-                "69"
-                if properties["code_insee"].startswith("69")
-                else properties["code_insee"]
-            )
+            code_insee_simplified = process_code_insee(properties["code_insee"])
 
             department = GeoDepartment(
                 name=properties["nom"],
-                insee_code=properties["code_insee"],
+                insee_code=code_insee_simplified,
                 surface_km2=properties["surf_km2"],
                 geometry=geometry,
                 region=department_numero_region_map[code_insee_simplified],
@@ -111,3 +108,8 @@ class Command(BaseCommand):
             department.save()
 
         temp_dir.cleanup()
+
+
+def process_code_insee(code_insee: Union[str, int]):
+    # special case for 69
+    return "69" if str(code_insee).startswith("69") else code_insee
