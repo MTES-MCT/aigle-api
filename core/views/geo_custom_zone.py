@@ -91,7 +91,6 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
             geometry=Intersection("geometry", polygon_requested)
         )
 
-        serializer = GeoCustomZoneGeoFeatureSerializer(data=queryset.all(), many=True)
-        serializer.is_valid()
+        serializer = GeoCustomZoneGeoFeatureSerializer(queryset.all(), many=True)
 
         return Response(serializer.data)

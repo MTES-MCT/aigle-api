@@ -1,17 +1,6 @@
-import json
-import tempfile
-from typing import Any, Dict, List, Tuple, TypedDict
 from django.core.management.base import BaseCommand
-from datetime import datetime
-import gzip
 
-from core.management.commands._common.file import (
-    download_file,
-)
 from core.models.detection_object import DetectionObject
-from core.models.geo_commune import GeoCommune
-from core.models.geo_department import GeoDepartment
-from django.contrib.gis.geos import GEOSGeometry
 
 from core.models.parcel import Parcel
 from django.contrib.gis.db.models.functions import Centroid

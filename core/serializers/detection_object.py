@@ -160,9 +160,7 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
 
         detections = obj.detections.filter(tile_set__in=tile_sets)
 
-        detections_serialized = DetectionWithTileSerializer(data=detections, many=True)
-        detections_serialized.is_valid()
-
+        detections_serialized = DetectionWithTileSerializer(detections, many=True)
         return detections_serialized.data
 
     def get_tile_sets(self, obj: DetectionObject):

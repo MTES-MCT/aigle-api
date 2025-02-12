@@ -74,12 +74,11 @@ class MapSettingsView(APIView):
 
         for object_type, status in object_types_with_status:
             setting_object_type = MapSettingObjectTypeSerializer(
-                data={
+                {
                     "object_type": ObjectTypeSerializer(object_type).data,
                     "object_type_category_object_type_status": status,
                 }
             )
-            setting_object_type.is_valid()
             setting_object_types.append(setting_object_type.data)
 
         geo_custom_zones_data = GeoCustomZone.objects.order_by(

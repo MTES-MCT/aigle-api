@@ -74,8 +74,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
                 "detection_data__detection_validation_status"
             ),
         ).annotate(detections_count=Count("id"))
-        output_serializer = OutputSerializer(data=queryset.all(), many=True)
-        output_serializer.is_valid()
+        output_serializer = OutputSerializer(queryset.all(), many=True)
 
         return JsonResponse(output_serializer.data, safe=False)
 

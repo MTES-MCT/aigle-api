@@ -36,7 +36,7 @@ def endpoint(request):
     DetectionValidationStatus.choices
 
     serializer = InfoImportsSerializer(
-        data={
+        {
             "objectTypes": format_list(list(object_types_names), format_fn=normalize),
             "tileSets": format_list(list(tile_sets_names), format_fn=normalize),
             "detectionSources": format_list(DetectionSource.choices),
@@ -49,7 +49,6 @@ def endpoint(request):
             ),
         }
     )
-    serializer.is_valid()
 
     return JsonResponse(serializer.data)
 
