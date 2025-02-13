@@ -1,9 +1,11 @@
 from django.utils import timezone
 from typing import List, Optional
 from common.constants.models import DEFAULT_MAX_LENGTH
+from core.models.detection import Detection
+from core.models.detection_data import DetectionValidationStatus
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
-from core.models.tile_set import TileSet, TileSetType
+from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 from core.models.user_group import UserGroupRight
 from core.serializers import UuidTimestampedModelSerializerMixin
 from django.contrib.gis.db.models.functions import Centroid
@@ -87,9 +89,11 @@ class DetectionObjectHistorySerializer(DetectionObjectSerializer):
             history = DetectionHistorySerializer(
                 data={
                     "tile_set": TileSetMinimalSerializer(tile_set).data,
-                    "detection": DetectionWithTileMinimalSerializer(detection).data
-                    if detection
-                    else None,
+                    "detection": (
+                        DetectionWithTileMinimalSerializer(detection).data
+                        if detection
+                        else None
+                    ),
                 }
             )
             detection_history.append(history.initial_data)
@@ -123,11 +127,7 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
     user_group_last_update = serializers.SerializerMethodField(read_only=True)
 
     def get_user_group_last_update(self, obj: DetectionObject):
-        most_recent_detection_update = (
-            obj.detections.select_related("detection_data")
-            .order_by("-updated_at")
-            .first()
-        )
+        most_recent_detection_update = get_most_recent_detection(detection_object=obj)
         detection_data = most_recent_detection_update.detection_data
 
         if not detection_data.user_last_update:
@@ -160,9 +160,7 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
 
         detections = obj.detections.filter(tile_set__in=tile_sets)
 
-        detections_serialized = DetectionWithTileSerializer(data=detections, many=True)
-        detections_serialized.is_valid()
-
+        detections_serialized = DetectionWithTileSerializer(detections, many=True)
         return detections_serialized.data
 
     def get_tile_sets(self, obj: DetectionObject):
@@ -223,11 +221,11 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
 
     object_type_uuid = serializers.UUIDField(write_only=True)
 
-    def update(self, instance, validated_data):
+    def update(self, instance: DetectionObject, validated_data):
         object_type = None
         object_type_uuid = validated_data.pop("object_type_uuid", None)
 
-        if object_type_uuid:
+        if object_type_uuid and instance.object_type.uuid != object_type_uuid:
             object_type = ObjectType.objects.filter(uuid=object_type_uuid).first()
 
             if not object_type:
@@ -237,20 +235,33 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
                 )
 
         user = self.context["request"].user
-        centroid = Centroid(instance.detections.first().geometry)
+
+        latest_detection = get_most_recent_detection(detection_object=instance)
+
+        centroid = Centroid(latest_detection.geometry)
 
         get_user_group_rights(
             user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
         )
 
-        if object_type:
-            instance.object_type = object_type
-            compute_prescription(instance)
-
         for key, value in validated_data.items():
             setattr(instance, key, value)
 
         instance.save()
+
+        if object_type:
+            instance.object_type = object_type
+            compute_prescription(instance)
+
+            # change last detection validation status to suspect if was not verified
+            if (
+                latest_detection.detection_data.detection_validation_status
+                == DetectionValidationStatus.DETECTED_NOT_VERIFIED
+            ):
+                latest_detection.detection_data.detection_validation_status = (
+                    DetectionValidationStatus.SUSPECT
+                )
+                latest_detection.detection_data.save()
 
         return instance
 
@@ -271,3 +282,17 @@ def get_tile_set_years_ago(
             break
 
     return tile_set_years_ago
+
+
+def get_most_recent_detection(detection_object: DetectionObject) -> Detection:
+    return (
+        detection_object.detections.exclude(
+            tile_set__tile_set_status=TileSetStatus.DEACTIVATED
+        )
+        .filter(
+            tile_set__tile_set_type__in=[TileSetType.BACKGROUND, TileSetType.PARTIAL]
+        )
+        .select_related("detection_data")
+        .order_by("-tile_set__date")
+        .first()
+    )

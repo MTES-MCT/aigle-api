@@ -111,6 +111,13 @@ def get_user_tile_sets(
     return tile_sets, final_union
 
 
+object_type_category_object_type_status_priorities = {
+    ObjectTypeCategoryObjectTypeStatus.VISIBLE: 3,
+    ObjectTypeCategoryObjectTypeStatus.OTHER_CATEGORY: 2,
+    ObjectTypeCategoryObjectTypeStatus.HIDDEN: 1,
+}
+
+
 def get_user_object_types_with_status(
     user,
 ) -> List[Tuple[ObjectType, ObjectTypeCategoryObjectTypeStatus]]:
@@ -148,8 +155,10 @@ def get_user_object_types_with_status(
 
             if (
                 object_type_uuids_statuses_map.get(object_type.uuid)
-                and object_type_uuids_statuses_map.get(object_type.uuid)[1]
-                == ObjectTypeCategoryObjectTypeStatus.VISIBLE
+                and object_type_category_object_type_status_priorities[
+                    object_type_uuids_statuses_map.get(object_type.uuid)[1]
+                ]
+                >= object_type_category_object_type_status_priorities[status]
             ):
                 continue
 

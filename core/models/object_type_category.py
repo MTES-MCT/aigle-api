@@ -18,6 +18,7 @@ class ObjectTypeCategory(TimestampedModelMixin, UuidModelMixin, DeletableModelMi
 
 class ObjectTypeCategoryObjectTypeStatus(models.TextChoices):
     VISIBLE = "VISIBLE", "VISIBLE"
+    OTHER_CATEGORY = "OTHER_CATEGORY", "OTHER_CATEGORY"
     HIDDEN = "HIDDEN", "HIDDEN"
 
 
