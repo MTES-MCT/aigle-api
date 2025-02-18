@@ -5,7 +5,8 @@ from django.db.models import Q
 from functools import reduce
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
-from core.models.detection import Detection
+from core.contants.geo import SRID
+from core.models.detection import Detection, DetectionSource
 from django.core.exceptions import BadRequest
 
 from core.models.detection_data import (
@@ -13,8 +14,8 @@ from core.models.detection_data import (
     DetectionData,
     DetectionValidationStatus,
 )
-from rest_framework.status import HTTP_200_OK
 from django.http import HttpResponse
+from rest_framework.status import HTTP_200_OK, HTTP_202_ACCEPTED
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSetStatus, TileSetType
@@ -139,7 +140,7 @@ class DetectionGeoFilter(FilterSet):
             polygon_requested = None
         else:
             polygon_requested = Polygon.from_bbox((sw_lng, sw_lat, ne_lng, ne_lat))
-            polygon_requested.srid = 4326
+            polygon_requested.srid = SRID
 
         filter_tile_set_status__in = None
 
@@ -333,3 +334,14 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
             "detection_object", "detection_object__object_type", "tile", "tile_set"
         ).select_related("detection_data")
         return queryset
+
+    @action(methods=["patch"], detail=True, url_path="force-visible")
+    def force_visible(self, request, uuid, *args, **kwargs):
+        queryset = self.get_queryset()
+        queryset = queryset.filter(uuid=uuid)
+        detection = queryset.first()
+
+        detection.detection_source = DetectionSource.INTERFACE_FORCED_VISIBLE
+        detection.save()
+
+        return HttpResponse(status=HTTP_202_ACCEPTED)

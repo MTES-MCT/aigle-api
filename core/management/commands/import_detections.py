@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from rest_framework import serializers
 from django.db import connection
 
+from core.contants.geo import SRID
 from core.models.detection import Detection, DetectionSource
 from core.models.detection_data import (
     DetectionControlStatus,
@@ -223,7 +224,7 @@ class Command(BaseCommand):
         if not object_type:
             raise CommandError(f"Unknown object type: {object_type_raw}")
 
-        geometry = GEOSGeometry(geometry_raw, srid=4326)
+        geometry = GEOSGeometry(geometry_raw, srid=SRID)
 
         serializer = DetectionRowSerializer(data=detection_row)
         if not serializer.is_valid():

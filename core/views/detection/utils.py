@@ -16,7 +16,15 @@ def filter_score(queryset, name, value):
     if not value:
         return queryset
 
-    return queryset.filter(score__gte=value)
+    return queryset.filter(
+        Q(score__gte=value)
+        | Q(
+            detection_source__in=[
+                DetectionSource.INTERFACE_DRAWN,
+                DetectionSource.INTERFACE_FORCED_VISIBLE,
+            ]
+        )
+    )
 
 
 def filter_prescripted(queryset, name, value):
@@ -45,7 +53,12 @@ def filter_custom_zones_uuids(data, queryset):
         if data.get("interfaceDrawn") == "ALL":
             queryset = queryset.filter(
                 Q(detection_object__geo_custom_zones__uuid__in=custom_zones_uuids)
-                | Q(detection_source=DetectionSource.INTERFACE_DRAWN)
+                | Q(
+                    detection_source__in=[
+                        DetectionSource.INTERFACE_DRAWN,
+                        DetectionSource.INTERFACE_FORCED_VISIBLE,
+                    ]
+                )
             )
 
         if not data.get("interfaceDrawn") or data.get("interfaceDrawn") in [
@@ -57,6 +70,11 @@ def filter_custom_zones_uuids(data, queryset):
             )
 
     if data.get("interfaceDrawn") == "NONE":
-        queryset = queryset.exclude(detection_source=DetectionSource.INTERFACE_DRAWN)
+        queryset = queryset.exclude(
+            detection_source__in=[
+                DetectionSource.INTERFACE_DRAWN,
+                DetectionSource.INTERFACE_FORCED_VISIBLE,
+            ]
+        )
 
     return queryset

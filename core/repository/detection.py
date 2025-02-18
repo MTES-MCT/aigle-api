@@ -146,7 +146,12 @@ class DetectionRepository(
         filter_score: Optional[NumberRepoFilter] = None,
     ) -> Tuple[QuerySet[Detection], Q]:
         if filter_score is not None:
-            q_ = Q(**{f"score__{filter_score.lookup.value}": filter_score.number})
+            q_ = Q(**{f"score__{filter_score.lookup.value}": filter_score.number}) | Q(
+                detection_source__in=[
+                    DetectionSource.INTERFACE_DRAWN,
+                    DetectionSource.INTERFACE_FORCED_VISIBLE,
+                ]
+            )
             queryset = queryset.filter(q_)
             q &= q_
 
@@ -175,7 +180,12 @@ class DetectionRepository(
             if filter_custom_zone.interface_drawn == RepoFilterInterfaceDrawn.ALL:
                 q_ = Q(
                     detection_object__geo_custom_zones__uuid__in=filter_custom_zone.custom_zone_uuids
-                ) | Q(detection_source=DetectionSource.INTERFACE_DRAWN)
+                ) | Q(
+                    detection_source__in=[
+                        DetectionSource.INTERFACE_DRAWN,
+                        DetectionSource.INTERFACE_FORCED_VISIBLE,
+                    ]
+                )
                 queryset = queryset.filter(q_)
                 q &= q_
 
@@ -190,7 +200,12 @@ class DetectionRepository(
                 q &= q_
 
         if filter_custom_zone.interface_drawn == RepoFilterInterfaceDrawn.NONE:
-            q_ = ~Q(detection_source=DetectionSource.INTERFACE_DRAWN)
+            q_ = ~Q(
+                detection_source__in=[
+                    DetectionSource.INTERFACE_DRAWN,
+                    DetectionSource.INTERFACE_FORCED_VISIBLE,
+                ]
+            )
             queryset = queryset.filter(q_)
             q &= q_
 
