@@ -56,7 +56,6 @@ def filter_custom_zones_uuids(data, queryset):
                 | Q(
                     detection_source__in=[
                         DetectionSource.INTERFACE_DRAWN,
-                        DetectionSource.INTERFACE_FORCED_VISIBLE,
                     ]
                 )
             )
@@ -73,7 +72,6 @@ def filter_custom_zones_uuids(data, queryset):
         queryset = queryset.exclude(
             detection_source__in=[
                 DetectionSource.INTERFACE_DRAWN,
-                DetectionSource.INTERFACE_FORCED_VISIBLE,
             ]
         )
 

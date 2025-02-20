@@ -183,7 +183,6 @@ class DetectionRepository(
                 ) | Q(
                     detection_source__in=[
                         DetectionSource.INTERFACE_DRAWN,
-                        DetectionSource.INTERFACE_FORCED_VISIBLE,
                     ]
                 )
                 queryset = queryset.filter(q_)
@@ -203,7 +202,6 @@ class DetectionRepository(
             q_ = ~Q(
                 detection_source__in=[
                     DetectionSource.INTERFACE_DRAWN,
-                    DetectionSource.INTERFACE_FORCED_VISIBLE,
                 ]
             )
             queryset = queryset.filter(q_)
