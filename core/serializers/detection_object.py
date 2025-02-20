@@ -67,7 +67,7 @@ class DetectionObjectHistorySerializer(DetectionObjectSerializer):
 
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
-        detections = obj.detections.all()
+        detections = obj.detections.order_by("-tile_set__date").all()
         tile_sets, _ = get_user_tile_sets(
             user=user,
             filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
@@ -158,7 +158,9 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
             )
             self.context["tile_sets"] = tile_sets
 
-        detections = obj.detections.filter(tile_set__in=tile_sets)
+        detections = obj.detections.order_by("-tile_set__date").filter(
+            tile_set__in=tile_sets
+        )
 
         detections_serialized = DetectionWithTileSerializer(detections, many=True)
         return detections_serialized.data
@@ -210,7 +212,7 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
 
     def get_user_group_rights(self, obj: DetectionObject):
         user = self.context["request"].user
-        point = Centroid(obj.detections.first().geometry)
+        point = Centroid(obj.detections.order_by("-tile_set__date").first().geometry)
 
         return get_user_group_rights(user=user, points=[point])
 
