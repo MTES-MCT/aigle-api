@@ -47,11 +47,14 @@ class TileSetSerializer(TileSetMinimalSerializer):
             "regions",
             "last_import_started_at",
             "last_import_ended_at",
+            "detections_count",
         ]
 
     communes = serializers.SerializerMethodField()
     departments = serializers.SerializerMethodField()
     regions = serializers.SerializerMethodField()
+
+    detections_count = serializers.IntegerField()
 
     def get_communes(self, obj):
         return GeoZoneSerializer(

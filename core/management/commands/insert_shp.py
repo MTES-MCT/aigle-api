@@ -7,6 +7,8 @@ import uuid
 import json
 import shapefile
 
+from core.contants.geo import SRID
+
 BATCH_SIZE = 10000
 
 
@@ -37,7 +39,7 @@ class Command(BaseCommand):
         else:
             geometry_to_insert = Intersection(*geometries)
 
-        geometry_to_insert.transform(2154, 4326)
+        geometry_to_insert.transform(2154, SRID)
         cursor.execute(
             f"""
             INSERT INTO {options["table_schema"]}.{options["table_name"]} (name, geometry)

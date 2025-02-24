@@ -1,7 +1,9 @@
 from common.views.base import BaseViewSetMixin
 
 from rest_framework.response import Response
-
+from rest_framework import serializers
+from django.contrib.gis.geos import Point
+from core.contants.geo import SRID
 from core.models.detection_object import DetectionObject
 from core.serializers.detection_object import (
     DetectionObjectDetailSerializer,
@@ -9,11 +11,26 @@ from core.serializers.detection_object import (
     DetectionObjectInputSerializer,
     DetectionObjectSerializer,
 )
+from rest_framework_gis.fields import GeometryField
 from rest_framework.decorators import action
+from django.db.models import F
 
 from core.utils.filters import UuidInFilter
 from core.views.utils.save_user_position import save_user_position
 from django_filters import FilterSet
+
+
+class GetFromCoordinatesParamsSerializer(serializers.Serializer):
+    lat = serializers.FloatField(required=True, allow_null=False)
+    lng = serializers.FloatField(required=True, allow_null=False)
+    tileSetUuid = serializers.UUIDField(required=True, allow_null=False)
+
+
+class GetFromCoordinatesOutputSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField(required=True, allow_null=False)
+    geometry = GeometryField()
+    object_type_uuid = serializers.UUIDField(required=True, allow_null=False)
+    object_type_color = serializers.CharField(required=True, allow_null=False)
 
 
 class DetectionObjectFilter(FilterSet):
@@ -84,6 +101,35 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             pass
 
         return Response(serializer.data)
+
+    @action(methods=["get"], detail=False, url_path="from-coordinates")
+    def get_from_coordinates(self, request):
+        params_serializer = GetFromCoordinatesParamsSerializer(data=request.GET)
+        params_serializer.is_valid(raise_exception=True)
+
+        point_requested = Point(
+            x=params_serializer.data["lng"], y=params_serializer.data["lat"], srid=SRID
+        )
+
+        queryset = DetectionObject.objects.filter(
+            detections__geometry__intersects=point_requested,
+            detections__tile_set__uuid=params_serializer.data["tileSetUuid"],
+        )
+        queryset = queryset.order_by("-detections__score")
+        queryset = queryset.annotate(
+            geometry=F("detections__geometry"),
+            object_type_uuid=F("object_type__uuid"),
+            object_type_color=F("object_type__color"),
+        ).values("uuid", "geometry", "object_type_uuid", "object_type_color")
+        detection_object = queryset.first()
+
+        if detection_object:
+            output_serializer = GetFromCoordinatesOutputSerializer(detection_object)
+            output_data = output_serializer.data
+        else:
+            output_data = None
+
+        return Response(output_data)
 
     @action(methods=["get"], detail=True)
     def history(self, request, uuid):

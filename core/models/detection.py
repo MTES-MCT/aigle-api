@@ -19,6 +19,7 @@ from simple_history.models import HistoricalRecords
 
 class DetectionSource(models.TextChoices):
     INTERFACE_DRAWN = "INTERFACE_DRAWN", "INTERFACE_DRAWN"
+    INTERFACE_FORCED_VISIBLE = "INTERFACE_FORCED_VISIBLE", "INTERFACE_FORCED_VISIBLE"
     ANALYSIS = "ANALYSIS", "ANALYSIS"
 
 

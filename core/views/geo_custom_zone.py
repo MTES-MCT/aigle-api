@@ -3,6 +3,7 @@ from common.views.base import BaseViewSetMixin
 
 
 from rest_framework import serializers
+from core.contants.geo import SRID
 from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.serializers.geo_custom_zone import (
@@ -67,7 +68,7 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
                 geometry_serializer.data["neLat"],
             )
         )
-        polygon_requested.srid = 4326
+        polygon_requested.srid = SRID
 
         queryset = self.get_queryset()
 

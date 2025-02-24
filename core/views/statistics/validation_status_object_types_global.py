@@ -110,7 +110,7 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
                         "detection_validation_status": detection_validation_status,
                         "object_type_uuid": "OTHER_OBJECT_TYPES",
                         "object_type_name": "Autres",
-                        "object_type_color": "#808080",
+                        "object_type_color": "#FFFFFF",
                         "detections_count": detections_count,
                     }
                 )

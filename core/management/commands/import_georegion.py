@@ -3,6 +3,7 @@ from typing import TypedDict
 from django.core.management.base import BaseCommand
 import shapefile
 
+from core.contants.geo import SRID
 from core.management.commands._common.file import download_file, extract_zip
 from core.models import GeoRegion
 from django.contrib.gis.geos import GEOSGeometry
@@ -55,7 +56,7 @@ class Command(BaseCommand):
 
             print(f"Inserting region: {insee_codes}")
             geometry = GEOSGeometry(json.dumps(feature.__geo_interface__["geometry"]))
-            geometry.transform(2154, 4326)
+            geometry.transform(2154, SRID)
 
             region = GeoRegion(
                 name=properties["nom"],

@@ -2,6 +2,7 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet, CharFilter
 
 from django.db.models import Q
+from django.db.models import Count
 
 from core.contants.order_by import TILE_SETS_ORDER_BYS
 from core.models.tile_set import TileSet, TileSetScheme, TileSetStatus, TileSetType
@@ -47,4 +48,6 @@ class TileSetViewSet(BaseViewSetMixin[TileSet]):
 
     def get_queryset(self):
         queryset = TileSet.objects.order_by(*TILE_SETS_ORDER_BYS)
+        queryset = queryset.annotate(detections_count=Count("detections"))
+
         return queryset
