@@ -30,7 +30,7 @@ from simple_history.utils import bulk_create_with_history
 
 PERCENTAGE_SAME_DETECTION_THRESHOLD = 0.5
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
-INSERT_BATCH_SIZE = 1000
+INSERT_BATCH_SIZE = 10000
 
 
 class DetectionRowSerializer(serializers.Serializer):
