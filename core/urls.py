@@ -4,6 +4,7 @@ from core.views.detection_data import DetectionDataViewSet
 from core.views.detection_object import DetectionObjectViewSet
 from core.views.geo_commune import GeoCommuneViewSet
 from core.views.geo_custom_zone import GeoCustomZoneViewSet
+from core.views.geo_custom_zone_category import GeoCustomZoneCategoryViewSet
 from core.views.geo_department import GeoDepartmentViewSet
 from core.views.geo_region import GeoRegionViewSet
 from core.views.map_settings import MapSettingsView
@@ -37,6 +38,12 @@ router.register("geo/region", GeoRegionViewSet, basename="GeoRegionViewSet")
 router.register(
     "geo/custom-zone", GeoCustomZoneViewSet, basename="GeoCustomZoneViewSet"
 )
+router.register(
+    "geo/custom-zone-category",
+    GeoCustomZoneCategoryViewSet,
+    basename="GeoCustomZoneCategoryViewSet",
+)
+
 
 router.register("parcel", ParcelViewSet, basename="ParcelViewSet")
 

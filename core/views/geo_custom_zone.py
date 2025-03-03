@@ -8,7 +8,9 @@ from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.serializers.geo_custom_zone import (
     GeoCustomZoneGeoFeatureSerializer,
+    GeoCustomZoneInputSerializer,
     GeoCustomZoneSerializer,
+    GeoCustomZoneWithCollectivitiesSerializer,
 )
 from django_filters import FilterSet, CharFilter
 
@@ -44,14 +46,22 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
     permission_classes = [AdminRolePermission]
 
     def get_serializer_class(self):
-        if self.action in ["retrieve", "create", "partial_update", "update"]:
+        if self.action in ["create", "partial_update", "update"]:
+            return GeoCustomZoneInputSerializer
+
+        if self.action in ["retrieve"]:
             if self.request.GET.get("geometry"):
                 return GeoCustomZoneGeoFeatureSerializer
+
+        if self.request.GET.get("with_collectivities"):
+            return GeoCustomZoneWithCollectivitiesSerializer
 
         return GeoCustomZoneSerializer
 
     def get_queryset(self):
         queryset = GeoCustomZone.objects.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
+        queryset = queryset.prefetch_related("geo_zones")
+        queryset = queryset.select_related("geo_custom_zone_category")
 
         return queryset
 
