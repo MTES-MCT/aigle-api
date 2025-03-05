@@ -56,6 +56,11 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         on_delete=models.SET_NULL,
         null=True,
     )
+
+    official_report_date = models.DateField(
+        null=True
+    )  # can be set if detection_control_status is OFFICIAL_REPORT_DRAWN_UP
+
     history = HistoricalRecords(bases=[HistoriedModelMixin])
 
     class Meta:
