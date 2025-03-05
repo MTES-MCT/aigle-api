@@ -156,20 +156,22 @@ class GeoCustomZoneInputSerializer(
         if user.user_role == UserRole.SUPER_ADMIN:
             collectivities = extract_collectivities(validated_data)
 
-        if validated_data.get("geo_custom_zone_category_uuid"):
-            validated_data["name"] = None
+        geo_custom_zone_category_uuid = validated_data.pop(
+            "geo_custom_zone_category_uuid", None
+        )
+
+        if geo_custom_zone_category_uuid:
             validated_data["color"] = None
 
         instance = GeoCustomZone(
             **validated_data,
         )
+        # for now inactive by default because impossible to set geometry
+        instance.geo_custom_zone_status = GeoCustomZoneStatus.INACTIVE
 
         if collectivities:
-            instance.geo_zones.set(collectivities)
-
-        if not instance.geometry:
-            instance.geo_custom_zone_status = GeoCustomZoneStatus.INACTIVE
             instance.save()
+            instance.geo_zones.set(collectivities)
 
         user = self.context["request"].user
 
@@ -179,10 +181,6 @@ class GeoCustomZoneInputSerializer(
             for user_group in user_groups:
                 user_group.geo_custom_zones.add(instance)
                 user_group.save()
-
-        geo_custom_zone_category_uuid = validated_data.pop(
-            "geo_custom_zone_category_uuid", None
-        )
 
         if geo_custom_zone_category_uuid:
             geo_custom_zone_category = GeoCustomZoneCategory.objects.filter(
@@ -197,6 +195,7 @@ class GeoCustomZoneInputSerializer(
             validated_data["name"] = None
             validated_data["color"] = None
 
+            instance.save()
             instance.geo_custom_zone_category = geo_custom_zone_category
 
         instance.save()

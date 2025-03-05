@@ -15,6 +15,9 @@ from django.contrib.gis.db.models.aggregates import Union
 from core.utils.postgis import GeometryType, GetGeometryType
 from django.contrib.gis.geos import Point
 from django.db.models import Count
+from django.contrib.gis.db.models.functions import Area
+from django.db.models import FloatField
+from django.db.models.functions import Cast
 
 
 def get_user_tile_sets(
@@ -78,6 +81,7 @@ def get_user_tile_sets(
         intersection=intersection,
         intersection_type=GetGeometryType("intersection"),
         geo_zone_count=Count("geo_zones"),
+        intersection_area=Cast(Area("intersection"), FloatField()),
     )
 
     tile_sets = tile_sets.filter(
@@ -91,6 +95,7 @@ def get_user_tile_sets(
                         GeometryType.MULTIPOLYGON,
                     ]
                 )
+                & Q(intersection_area__gt=0)
             )
         )
     )
