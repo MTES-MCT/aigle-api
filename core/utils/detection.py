@@ -32,8 +32,8 @@ def get_linked_detections(
     linked_detections_queryset = linked_detections_queryset.order_by(
         "-intersection_area"
     )
-    linked_detections_queryset = linked_detections_queryset.prefetch_related(
-        "detection_object", "detection_object__object_type"
+    linked_detections_queryset = linked_detections_queryset.select_related(
+        "detection_object", "detection_object__object_type", "tile_set"
     )
 
     # we filter out detections that have too small intersection area with the detection

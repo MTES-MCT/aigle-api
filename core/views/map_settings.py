@@ -6,9 +6,10 @@ from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS, TILE_SETS_ORDER_B
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.tile_set import TileSet, TileSetStatus
 from core.models.user import UserRole
-from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
+from core.serializers.geo_custom_zone import GeoCustomZoneMinimalSerializer
 from core.serializers.map_settings import (
     MapSettingObjectTypeSerializer,
+    MapSettingsGeoCustomZoneCategorySerializer,
     MapSettingsSerializer,
     MapSettingTileSetSerializer,
 )
@@ -90,16 +91,40 @@ class MapSettingsView(APIView):
                 user_groups_custom_geo_zones__user_user_groups__user=request.user
             )
 
-        geo_custom_zones_data = geo_custom_zones_data.values(
-            "uuid", "name", "color", "geo_custom_zone_status"
+        geo_custom_zones_data = geo_custom_zones_data.select_related(
+            "geo_custom_zone_category"
         )
 
         geo_custom_zones_data = geo_custom_zones_data.all()
 
-        geo_custom_zones = []
+        geo_custom_zones_uncategorized = []
+        geo_custom_zone_categories_map = {}
 
         for geo_custom_zone in geo_custom_zones_data:
-            geo_custom_zones.append(GeoCustomZoneSerializer(geo_custom_zone).data)
+            if not geo_custom_zone.geo_custom_zone_category:
+                geo_custom_zones_uncategorized.append(
+                    GeoCustomZoneMinimalSerializer(geo_custom_zone).data
+                )
+                continue
+
+            if (
+                geo_custom_zone_categories_map.get(
+                    geo_custom_zone.geo_custom_zone_category.uuid
+                )
+                is None
+            ):
+                geo_custom_zone_categories_map[
+                    geo_custom_zone.geo_custom_zone_category.uuid
+                ] = {
+                    "geo_custom_zone_category": geo_custom_zone.geo_custom_zone_category,
+                    "geo_custom_zones": [],
+                }
+
+            geo_custom_zone_categories_map[
+                geo_custom_zone.geo_custom_zone_category.uuid
+            ]["geo_custom_zones"].append(
+                GeoCustomZoneMinimalSerializer(geo_custom_zone).data
+            )
 
         setting = MapSettingsSerializer(
             data={
@@ -108,7 +133,13 @@ class MapSettingsView(APIView):
                 "global_geometry": json.loads(GEOSGeometry(global_geometry).geojson)
                 if global_geometry
                 else None,
-                "geo_custom_zones": geo_custom_zones,
+                "geo_custom_zones_uncategorized": geo_custom_zones_uncategorized,
+                "geo_custom_zone_categories": [
+                    MapSettingsGeoCustomZoneCategorySerializer(
+                        geo_custom_zone_category_data
+                    ).data
+                    for geo_custom_zone_category_data in geo_custom_zone_categories_map.values()
+                ],
                 "user_last_position": request.user.last_position,
             }
         )

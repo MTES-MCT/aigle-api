@@ -18,6 +18,11 @@ class TileManager(models_gis.Manager):
 
         super().bulk_create(objs, **kwargs)
 
+    def get_queryset(self):
+        # by default we defer geometry field as it's heavy to load in memory and not necessary
+        # we prefer to handle geometric operations at database level for better performances
+        return super().get_queryset().defer("geometry")
+
 
 class Tile(TimestampedModelMixin):
     class Meta:

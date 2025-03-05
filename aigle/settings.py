@@ -14,6 +14,8 @@ from datetime import timedelta
 import os
 from pathlib import Path
 
+from core.utils.parsing import strtobool
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -28,7 +30,8 @@ SECRET_KEY = os.environ.get(
 )
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = bool(os.environ.get("DEBUG", 0))
+DEBUG = strtobool(os.environ.get("DEBUG", "false"))
+
 if os.environ.get("ENVIRONMENT") == "development":
     GDAL_LIBRARY_PATH = os.environ.get(
         "GDAL_LIBRARY_PATH", "/opt/homebrew/opt/gdal/lib/libgdal.dylib"
@@ -37,6 +40,7 @@ if os.environ.get("ENVIRONMENT") == "development":
         "GEOS_LIBRARY_PATH", "/opt/homebrew/opt/geos/lib/libgeos_c.dylib"
     )
 
+SQL_ECHO = strtobool(os.environ.get("SQL_ECHO", "false"))
 
 LOGGING = {
     "version": 1,
@@ -54,7 +58,7 @@ LOGGING = {
     },
     "loggers": {
         "django.db.backends": {
-            "level": "DEBUG",
+            "level": "DEBUG" if SQL_ECHO else "WARNING",
             "handlers": ["console"],
         }
     },
