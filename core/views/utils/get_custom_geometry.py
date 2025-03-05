@@ -13,6 +13,7 @@ from django.contrib.gis.geos import Polygon
 from django.contrib.gis.db.models.functions import Intersection
 from django.contrib.gis.db.models.aggregates import Union
 from django.contrib.gis.geos import GEOSGeometry
+from django.db.models.functions import Coalesce
 
 
 class GeometrySerializer(serializers.Serializer):
@@ -87,8 +88,11 @@ def get_queryset_geocustomzone(uuids: List[str], polygon_requested: Polygon):
 
     queryset = queryset.filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
     queryset = queryset.filter(geometry__intersects=polygon_requested)
-    queryset = queryset.values(
-        "uuid", "name", "color", "geo_custom_zone_status", "geo_custom_zone_type"
+    queryset = queryset.select_related("geo_custom_zone_category")
+    queryset = queryset.values("uuid", "geo_custom_zone_status", "geo_custom_zone_type")
+    queryset = queryset.annotate(
+        name=Coalesce("name", "geo_custom_zone_category__name"),
+        color=Coalesce("color", "geo_custom_zone_category__color"),
     )
     queryset = queryset.annotate(geometry=Intersection("geometry", polygon_requested))
 

@@ -11,7 +11,6 @@ from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from django.core.exceptions import PermissionDenied
 from rest_framework import serializers
 
-from core.serializers.geo_custom_zone_category import GeoCustomZoneCategorySerializer
 from core.serializers.utils.with_collectivities import (
     WithCollectivitiesInputSerializerMixin,
     WithCollectivitiesSerializerMixin,
@@ -33,7 +32,7 @@ class GeoCustomZoneGeoFeatureSerializer(GeoFeatureModelSerializer):
         ]
 
 
-class GeoCustomZoneSerializer(UuidTimestampedModelSerializerMixin):
+class GeoCustomZoneMinimalSerializer(serializers.ModelSerializer):
     class Meta(UuidTimestampedModelSerializerMixin.Meta):
         model = GeoCustomZone
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
@@ -41,10 +40,27 @@ class GeoCustomZoneSerializer(UuidTimestampedModelSerializerMixin):
             "color",
             "geo_custom_zone_status",
             "geo_custom_zone_type",
+        ]
+
+
+class GeoCustomZoneSerializer(GeoCustomZoneMinimalSerializer):
+    class Meta(GeoCustomZoneMinimalSerializer.Meta):
+        fields = GeoCustomZoneMinimalSerializer.Meta.fields + [
             "geo_custom_zone_category",
         ]
 
-    geo_custom_zone_category = GeoCustomZoneCategorySerializer(read_only=True)
+    geo_custom_zone_category = serializers.SerializerMethodField()
+
+    def get_geo_custom_zone_category(self, obj):
+        from core.serializers.geo_custom_zone_category import (
+            GeoCustomZoneCategorySerializer,
+        )
+
+        return (
+            GeoCustomZoneCategorySerializer(obj.geo_custom_zone_category).data
+            if obj.geo_custom_zone_category
+            else None
+        )
 
 
 class GeoCustomZoneInputSerializer(
@@ -60,7 +76,7 @@ class GeoCustomZoneInputSerializer(
         ]
 
     geo_custom_zone_category_uuid = serializers.UUIDField(
-        write_only=True, required=False
+        write_only=True, required=False, allow_null=True
     )
 
     def validate(self, attrs):
@@ -114,6 +130,8 @@ class GeoCustomZoneInputSerializer(
             validated_data["color"] = None
 
             instance.geo_custom_zone_category = geo_custom_zone_category
+        else:
+            instance.geo_custom_zone_category = None
 
         for key, value in validated_data.items():
             setattr(instance, key, value)
@@ -125,7 +143,6 @@ class GeoCustomZoneInputSerializer(
             and instance.geo_custom_zone_status != GeoCustomZoneStatus.INACTIVE
         ):
             instance.geo_custom_zone_status = GeoCustomZoneStatus.INACTIVE
-            instance.save()
 
         instance.save()
 
