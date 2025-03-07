@@ -1,4 +1,5 @@
 from core.models.detection_data import (
+    DetectionControlStatus,
     DetectionData,
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
@@ -23,6 +24,7 @@ class DetectionDataSerializer(UuidTimestampedModelSerializerMixin):
             "detection_validation_status",
             "detection_prescription_status",
             "user_last_update_uuid",
+            "official_report_date",
         ]
 
     user_last_update_uuid = serializers.UUIDField(
@@ -36,6 +38,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             "detection_control_status",
             "detection_validation_status",
             "detection_prescription_status",
+            "official_report_date",
         ]
 
     def update(self, instance: DetectionData, validated_data):
@@ -115,6 +118,15 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
                 tile_set__date__gte=date_min,
                 tile_set__date__lt=date_max,
             ).delete()
+
+        detection_control_status = (
+            validated_data.get("detection_control_status")
+            or instance.detection_control_status
+        )
+
+        # allow update official_report_date only if detection_control_status isOFFICIAL_REPORT_DRAWN_UP
+        if detection_control_status != DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP:
+            validated_data.pop("official_report_date", None)
 
         for key, value in validated_data.items():
             setattr(instance, key, value)
