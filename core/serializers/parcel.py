@@ -76,20 +76,10 @@ class ParcelDetailSerializer(ParcelSerializer):
         return json.loads(GEOSGeometry(obj.commune.geometry.envelope).geojson)
 
     def get_custom_geo_zones(self, obj: Parcel):
-        geo_custom_zones_data = GeoCustomZone.objects.order_by(
+        geo_custom_zones = GeoCustomZone.objects.order_by(
             *GEO_CUSTOM_ZONES_ORDER_BYS
         ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
-        geo_custom_zones_data = geo_custom_zones_data.filter(
-            geometry__intersects=obj.geometry
-        )
-        geo_custom_zones_data = geo_custom_zones_data.values(
-            "uuid", "name", "color", "geo_custom_zone_status"
-        )
-        geo_custom_zones_data = geo_custom_zones_data.all()
+        geo_custom_zones = geo_custom_zones.filter(geometry__intersects=obj.geometry)
+        geo_custom_zones = geo_custom_zones.all()
 
-        geo_custom_zones = []
-
-        for geo_custom_zone in geo_custom_zones_data:
-            geo_custom_zones.append(GeoCustomZoneSerializer(geo_custom_zone).data)
-
-        return geo_custom_zones
+        return GeoCustomZoneSerializer(geo_custom_zones, many=True).data
