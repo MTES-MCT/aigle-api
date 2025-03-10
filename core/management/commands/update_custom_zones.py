@@ -1,10 +1,8 @@
 from django.core.management.base import BaseCommand
 
-from core.models.detection_object import DetectionObject
+from core.models.detection import Detection
 from core.models.geo_custom_zone import GeoCustomZone
-
-
-BATCH_SIZE = 10000
+from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 
 
 class Command(BaseCommand):
@@ -12,9 +10,13 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--zones-uuids", action="append", required=False)
+        parser.add_argument("--batch-uuids", action="append", required=False)
+        parser.add_argument("--tile-set-uuids", action="append", required=False)
 
     def handle(self, *args, **options):
         zones_uuids = options["zones_uuids"]
+        batch_uuids = options["batch_uuids"]
+        tile_set_uuids = options["tile_set_uuids"]
 
         custom_zones_queryset = GeoCustomZone.objects
 
@@ -27,34 +29,53 @@ class Command(BaseCommand):
             f"Starting updating detection data for zones: {", ".join([zone.name for zone in custom_zones])}"
         )
 
+        if not batch_uuids:
+            batch_uuids_queryset = (
+                Detection.objects.exclude(batch_id=None)
+                .values_list("batch_id", flat=True)
+                .distinct()
+            )
+            batch_uuids = list(batch_uuids_queryset)
+
+        if not tile_set_uuids:
+            tile_set_uuids_queryset = TileSet.objects.exclude(
+                tile_set_type=TileSetType.INDICATIVE,
+                tile_set_status=TileSetStatus.DEACTIVATED,
+            ).values_list("uuid", flat=True)
+            tile_set_uuids = list(tile_set_uuids_queryset)
+
         for zone in custom_zones:
             print(f"Updating detection data for zone: {zone.name}")
 
-            # clean previously inside detections that are now outside
-
-            detection_objects_outside = (
-                DetectionObject.objects.filter(geo_custom_zones__uuid=zone.uuid)
-                .exclude(detections__geometry__intersects=zone.geometry)
-                .prefetch_related("geo_custom_zones")
-                .all()
-            )
-
-            for detection_object in detection_objects_outside:
-                geo_custom_zone_to_remove = detection_object.geo_custom_zones.filter(
-                    uuid=zone.uuid
-                ).all()
-                detection_object.geo_custom_zones.remove(geo_custom_zone_to_remove)
-
-            # update detections that are now inside
-
-            detection_objects_inside = (
-                DetectionObject.objects.filter(
-                    detections__geometry__intersects=zone.geometry
+            GeoCustomZone.objects.raw(
+                """
+            insert into core_detectionobject_geo_custom_zones(
+                    detectionobject_id,
+                    geocustomzone_id
                 )
-                .exclude(geo_custom_zones__uuid=zone.uuid)
-                .prefetch_related("geo_custom_zones")
-                .all()
+            select
+                distinct
+                dobj.id as detectionobject_id,
+                %s as geocustomzone_id
+            from
+                core_detectionobject dobj
+            join core_detection detec on
+                detec.detection_object_id = dobj.id
+            WHERE
+                detec.batch_id = ANY(%s) and
+                detec.tile_set_id = ANY(%s) and
+                ST_Intersects(
+                    detec.geometry,
+                    (
+                    select
+                        geozone.geometry
+                    from
+                        core_geozone geozone
+                    where
+                        id = %s
+                    )
+                )
+            on conflict do nothing;
+            """,
+                [zone.id, batch_uuids, tile_set_uuids, zone.id],
             )
-
-            for detection_object in detection_objects_inside:
-                detection_object.geo_custom_zones.add(zone)
