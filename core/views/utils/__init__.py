@@ -3,6 +3,7 @@ from . import get_tile_view
 from . import get_import_infos
 from . import get_custom_geometry
 from . import get_annotation_grid
+from . import contact_us
 
 URL_PREFIX = "utils/"
 
@@ -13,5 +14,6 @@ urls = [
         get_import_infos,
         get_custom_geometry,
         get_annotation_grid,
+        contact_us,
     ]
 ]
