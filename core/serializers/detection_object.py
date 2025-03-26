@@ -254,6 +254,7 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
         if object_type:
             instance.object_type = object_type
             compute_prescription(instance)
+            instance.save()
 
             # change last detection validation status to suspect if was not verified
             if (
