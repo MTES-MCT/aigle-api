@@ -1,7 +1,6 @@
 from django.http import JsonResponse
 from rest_framework import serializers
 
-from core.models.detection import Detection
 from django.db.models import Count
 
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
@@ -28,7 +27,7 @@ class StatisticsValidationStatusGlobalView(APIView):
         endpoint_serializer = StatisticsEndpointSerializer(data=request.GET)
         endpoint_serializer.is_valid(raise_exception=True)
 
-        repo = DetectionRepository(queryset=Detection.objects)
+        repo = DetectionRepository()
         collectivities_uuids = get_collectivities_uuids(
             endpoint_serializer=endpoint_serializer
         )

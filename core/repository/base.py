@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Generic, List, Optional, Tuple, TypeVar
+from typing import Generic, List, Optional, TypeVar
 from django.db.models import Model, QuerySet
 from enum import Enum
 from common.models.uuid import UuidModelMixin
 from django.db.models import Q
+
 
 T_MODEL = TypeVar("T_MODEL", bound=Model)
 T_UUID_MODEL = TypeVar("T_UUID_MODEL", bound=UuidModelMixin)
@@ -13,27 +14,41 @@ T_UUID_MODEL = TypeVar("T_UUID_MODEL", bound=UuidModelMixin)
 class BaseRepository(
     Generic[T_MODEL],
 ):
-    queryset: QuerySet[T_MODEL]
-    q: Q
+    initial_queryset: QuerySet[T_MODEL]
+    model: T_MODEL
 
-    def __init__(self, queryset: Optional[QuerySet[T_MODEL]]):
-        self.queryset = queryset
-        self.q = Q()
+    def __init__(self, initial_queryset: Optional[QuerySet[T_MODEL]] = None):
+        if initial_queryset:
+            self.initial_queryset = initial_queryset
+        else:
+            self.initial_queryset = self.model.objects
 
-    def _order_by(self, order_bys: Optional[List[str]] = None, *args, **kwargs):
+    def _order_by(
+        self,
+        queryset: QuerySet[T_MODEL],
+        order_bys: Optional[List[str]] = None,
+        *args,
+        **kwargs,
+    ) -> QuerySet[T_MODEL]:
         if order_bys is not None:
-            self.queryset = self.queryset.order_by(order_bys)
+            queryset = queryset.order_by(*order_bys)
 
-    def _filter(self, *args, **kwargs):
+        return queryset
+
+    def _filter(
+        self, queryset: QuerySet[T_MODEL], *args, **kwargs
+    ) -> QuerySet[T_MODEL]:
         raise NotImplementedError(
             f"Filter method not implemented for {self.__class__.__name__}"
         )
 
     def list_(self, *args, **kwargs):
-        self._filter(*args, **kwargs)
-        self._order_by(*args, **kwargs)
+        queryset = self.initial_queryset
 
-        return self.queryset.all()
+        queryset = self._filter(queryset=queryset, *args, **kwargs)
+        queryset = self._order_by(queryset=queryset, *args, **kwargs)
+
+        return queryset.all()
 
 
 class RepoFilterLookup(Enum):
@@ -55,35 +70,39 @@ class DateRepoFilter:
     date: datetime
 
 
+@dataclass
+class CollectivityRepoFilter:
+    commune_ids: Optional[List[int]] = None
+    department_ids: Optional[List[int]] = None
+    region_ids: Optional[List[int]] = None
+
+
 class TimestampedBaseRepositoryMixin(
     Generic[T_UUID_MODEL],
 ):
     @staticmethod
     def _filter_timestamped(
         queryset: QuerySet[T_MODEL],
-        q: Q,
         filter_created_at: Optional[DateRepoFilter] = None,
         filter_updated_at: Optional[DateRepoFilter] = None,
-    ) -> Tuple[QuerySet[T_MODEL], List[Q]]:
+    ) -> List[Q]:
         if filter_created_at is not None:
-            q_ = Q(
+            q = Q(
                 **{
                     f"created_at__{filter_created_at.lookup.value}": filter_created_at.date
                 }
             )
-            queryset = queryset.filter(q_)
-            q &= q_
+            queryset = queryset.filter(q)
 
         if filter_updated_at is not None:
-            q_ = Q(
+            q = Q(
                 **{
                     f"updated_at__{filter_updated_at.lookup.value}": filter_updated_at.date
                 }
             )
-            queryset = queryset.filter(q_)
-            q &= q_
+            queryset = queryset.filter(q)
 
-        return queryset, q
+        return queryset
 
 
 class UuidBaseRepositoryMixin(
@@ -92,18 +111,15 @@ class UuidBaseRepositoryMixin(
     @staticmethod
     def _filter_uuid(
         queryset: QuerySet[T_MODEL],
-        q: Q,
         filter_uuid_in: Optional[List[str]] = None,
         filter_uuid_notin: Optional[List[str]] = None,
-    ) -> Tuple[QuerySet[T_MODEL], List[Q]]:
+    ) -> List[Q]:
         if filter_uuid_in is not None:
-            q_ = Q(uuid__in=filter_uuid_in)
-            queryset = queryset.filter(q_)
-            q &= q_
+            q = Q(uuid__in=filter_uuid_in)
+            queryset = queryset.filter(q)
 
         if filter_uuid_notin:
-            q_ = ~Q(uuid__in=filter_uuid_notin)
-            queryset = queryset.filter(q_)
-            q &= q_
+            q = ~Q(uuid__in=filter_uuid_notin)
+            queryset = queryset.filter(q)
 
-        return queryset, q
+        return queryset

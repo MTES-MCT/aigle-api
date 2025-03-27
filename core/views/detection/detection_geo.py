@@ -21,6 +21,8 @@ from core.models.object_type import ObjectType
 from core.models.tile_set import TileSetStatus, TileSetType
 from core.models.user import UserRole
 from core.models.user_group import UserGroupRight
+from core.permissions.tile_set import TileSetPermission
+from core.permissions.user import UserPermission
 from core.serializers.detection import (
     DetectionDetailSerializer,
     DetectionInputSerializer,
@@ -32,7 +34,6 @@ from core.serializers.detection import (
 from core.utils.data_permissions import (
     get_user_group_rights,
     get_user_object_types_with_status,
-    get_user_tile_sets,
 )
 from simple_history.utils import bulk_update_with_history
 from core.utils.filters import ChoiceInFilter, UuidInFilter
@@ -151,13 +152,18 @@ class DetectionGeoFilter(FilterSet):
                 TileSetStatus.DEACTIVATED,
             ]
 
-        tile_sets, global_geometry = get_user_tile_sets(
+        tile_sets = TileSetPermission(
             user=self.request.user,
-            filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-            filter_tile_set_status__in=filter_tile_set_status__in,
+        ).list_(
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status_in=filter_tile_set_status__in,
             filter_tile_set_intersects_geometry=polygon_requested,
-            filter_tile_set_uuid__in=tile_sets_uuids,
+            filter_tile_set_uuid_in=tile_sets_uuids,
+            with_intersection=True,
         )
+        global_geometry = UserPermission(
+            user=self.request.user
+        ).get_accessible_geometry(intersects_geometry=polygon_requested)
 
         wheres = []
 

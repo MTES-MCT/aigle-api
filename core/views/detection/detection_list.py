@@ -74,7 +74,7 @@ class DetectionListFilter(FilterSet):
 
         collectivities_uuids = communes_uuids + departments_uuids + regions_uuids
 
-        repo = DetectionRepository(queryset=queryset)
+        repo = DetectionRepository(initial_queryset=queryset)
 
         queryset = repo._filter(
             filter_collectivity_uuid_in=collectivities_uuids or None,

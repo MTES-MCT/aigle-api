@@ -7,6 +7,7 @@ from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 from core.models.user_group import UserGroupRight
+from core.permissions.tile_set import TileSetPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
 from django.contrib.gis.db.models.functions import Centroid
 
@@ -20,7 +21,7 @@ from rest_framework import serializers
 
 from core.serializers.tile_set import TileSetMinimalSerializer
 from core.serializers.user_group import UserGroupSerializer
-from core.utils.data_permissions import get_user_group_rights, get_user_tile_sets
+from core.utils.data_permissions import get_user_group_rights
 from core.utils.prescription import compute_prescription
 
 
@@ -68,9 +69,8 @@ class DetectionObjectHistorySerializer(DetectionObjectSerializer):
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
         detections = obj.detections.order_by("-tile_set__date").all()
-        tile_sets, _ = get_user_tile_sets(
-            user=user,
-            filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+        tile_sets = TileSetPermission(user=user).list_(
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             order_bys=["-date"],
             filter_tile_set_intersects_geometry=detections[0].geometry,
         )
@@ -150,9 +150,8 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
         if self.context.get("tile_sets"):
             tile_sets = self.context["tile_sets"]
         else:
-            tile_sets, _ = get_user_tile_sets(
-                user=user,
-                filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            tile_sets = TileSetPermission(user=user).list_(
+                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
                 order_bys=["-date"],
                 filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
@@ -171,9 +170,8 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
         if self.context.get("tile_sets"):
             tile_sets = self.context["tile_sets"]
         else:
-            tile_sets, _ = get_user_tile_sets(
-                user=user,
-                filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            tile_sets = TileSetPermission(user=user).list_(
+                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
                 order_bys=["-date"],
                 filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
