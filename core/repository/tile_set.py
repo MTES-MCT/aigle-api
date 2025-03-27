@@ -16,7 +16,11 @@ from core.repository.base import (
 )
 from django.db.models import Q, Subquery
 from django.contrib.gis.geos import Polygon, Point, MultiPolygon
-from django.contrib.gis.db.models.functions import Intersection, Union
+from django.contrib.gis.db.models.functions import Intersection
+from django.db.models import F
+from django.contrib.gis.db.models import Union
+from django.db.models import Count
+
 
 DEFAULT_VALUES = {
     "filter_tile_set_status_in": [TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
@@ -122,14 +126,14 @@ class TileSetRepository(
         if not with_intersection:
             return queryset
 
+        intersection = Union(F("geo_zones__geometry"))
+
         if filter_tile_set_intersects_geometry:
-            queryset = queryset.annotate(
-                intersection=Intersection(
-                    "geo_zones__geometry", filter_tile_set_intersects_geometry
-                )
+            intersection = Intersection(
+                intersection, filter_tile_set_intersects_geometry
             )
-        else:
-            queryset = queryset.annotate(intersection=Union("geo_zones__geometry"))
+
+        queryset = queryset.annotate(intersection=intersection)
 
         return queryset
 
@@ -184,6 +188,9 @@ class TileSetRepository(
     ) -> QuerySet[TileSet]:
         if filter_collectivities is not None:
             q = Q()
+            queryset = queryset.annotate(geo_zones_count=Count("geo_zones"))
+            q = q | Q(geo_zones_count=0)
+
             if filter_collectivities.commune_ids:
                 q = q | (
                     (

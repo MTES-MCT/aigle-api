@@ -39,9 +39,7 @@ from simple_history.utils import bulk_update_with_history
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 from django.contrib.gis.geos import Polygon
 from rest_framework.decorators import action
-from django.contrib.gis.db.models.functions import Intersection
 
-from core.utils.geo import get_geometry
 from core.views.detection.utils import (
     BOOLEAN_CHOICES,
     INTERFACE_DRAWN_CHOICES,
@@ -152,50 +150,22 @@ class DetectionGeoFilter(FilterSet):
                 TileSetStatus.DEACTIVATED,
             ]
 
+        geometry_requested = UserPermission(
+            user=self.request.user
+        ).get_accessible_geometry(intersects_geometry=polygon_requested)
+        queryset = queryset.filter(geometry__intersects=geometry_requested)
+
         tile_sets = TileSetPermission(
             user=self.request.user,
         ).list_(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=filter_tile_set_status__in,
-            filter_tile_set_intersects_geometry=polygon_requested,
+            filter_tile_set_intersects_geometry=geometry_requested,
             filter_tile_set_uuid_in=tile_sets_uuids,
             with_intersection=True,
         )
-        global_geometry = UserPermission(
-            user=self.request.user
-        ).get_accessible_geometry(intersects_geometry=polygon_requested)
 
         wheres = []
-
-        # filter geo collectivities
-
-        communes_uuids = (
-            self.data.get("communesUuids").split(",")
-            if self.data.get("communesUuids")
-            else []
-        )
-        departments_uuids = (
-            self.data.get("departmentsUuids").split(",")
-            if self.data.get("departmentsUuids")
-            else []
-        )
-        regions_uuids = (
-            self.data.get("regionsUuids").split(",")
-            if self.data.get("regionsUuids")
-            else []
-        )
-
-        if communes_uuids or departments_uuids or regions_uuids:
-            geozones_geometry = get_geometry(
-                communes_uuids=communes_uuids,
-                departments_uuids=departments_uuids,
-                regions_uuids=regions_uuids,
-            )
-
-            if global_geometry:
-                global_geometry = Intersection(global_geometry, geozones_geometry)
-            else:
-                global_geometry = geozones_geometry
 
         for i in range(len(tile_sets)):
             tile_set = tile_sets[i]
@@ -206,15 +176,15 @@ class DetectionGeoFilter(FilterSet):
                     geometry__intersects=tile_set.intersection
                 )
             else:
-                if global_geometry:
+                if geometry_requested:
                     where = Q(tile_set__uuid=tile_set.uuid) & Q(
-                        geometry__intersects=polygon_requested
+                        geometry__intersects=geometry_requested
                     )
                 else:
                     where = Q(tile_set__uuid=tile_set.uuid)
 
-            if polygon_requested:
-                where = where & Q(geometry__intersects=polygon_requested)
+            if geometry_requested:
+                where = where & Q(geometry__intersects=geometry_requested)
 
             for previous_tile_set in previous_tile_sets:
                 # custom logic here: we want to display the detections on the last tileset
@@ -233,6 +203,8 @@ class DetectionGeoFilter(FilterSet):
             if not tile_set.intersection:
                 break
 
+        queryset = filter_custom_zones_uuids(data=self.data, queryset=queryset)
+
         if not wheres:
             return queryset.distinct()
 
@@ -240,8 +212,6 @@ class DetectionGeoFilter(FilterSet):
             queryset = queryset.filter(wheres[0])
         else:
             queryset = queryset.filter(reduce(or_, wheres))
-
-        queryset = filter_custom_zones_uuids(data=self.data, queryset=queryset)
 
         return queryset.distinct()
 
