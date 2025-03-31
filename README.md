@@ -119,7 +119,7 @@ from
 join core_detection detec on
 	detec.detection_object_id = dobj.id
 where
-	ST_Intersects(
+	ST_Within(
 		detec.geometry,
 		(
 		select

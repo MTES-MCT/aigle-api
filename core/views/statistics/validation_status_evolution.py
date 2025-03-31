@@ -1,9 +1,9 @@
 from django.http import JsonResponse
 from rest_framework import serializers
 
-from core.models.detection import Detection
 from django.db.models import Count
 
+from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.detection import DetectionRepository, RepoFilterCustomZone
 from rest_framework.views import APIView
@@ -12,7 +12,6 @@ from django.db.models import F
 
 from core.views.statistics.utils import (
     StatisticsEndpointSerializer,
-    get_collectivities_uuids,
 )
 
 
@@ -31,13 +30,18 @@ class StatisticsValidationStatusEvolutionView(APIView):
         endpoint_serializer = StatisticsEndpointSerializer(data=request.GET)
         endpoint_serializer.is_valid(raise_exception=True)
 
-        repo = DetectionRepository(queryset=Detection.objects)
-        collectivities_uuids = get_collectivities_uuids(
-            endpoint_serializer=endpoint_serializer
+        repo = DetectionRepository()
+
+        collectivity_filter = UserPermission(user=request.user).get_collectivity_filter(
+            communes_uuids=endpoint_serializer.validated_data.get("communesUuids"),
+            departments_uuids=endpoint_serializer.validated_data.get(
+                "departmentsUuids"
+            ),
+            regions_uuids=endpoint_serializer.validated_data.get("regionsUuids"),
         )
 
-        queryset, _ = repo._filter(
-            filter_collectivity_uuid_in=collectivities_uuids,
+        queryset = repo.filter_(
+            queryset=repo.initial_queryset,
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE,
                 number=float(endpoint_serializer.validated_data.get("score", "0")),
@@ -64,6 +68,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
                 "detectionControlStatuses"
             ),
             filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
+            filter_collectivities=collectivity_filter,
         )
 
         queryset = queryset.values(

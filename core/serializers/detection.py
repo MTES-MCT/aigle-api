@@ -18,7 +18,7 @@ from core.serializers.detection_data import DetectionDataInputSerializer
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from rest_framework import serializers
 
-from core.serializers.tile import TileSerializer
+from core.serializers.tile import TileMinimalSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
 from django.contrib.gis.db.models.functions import Centroid
 
@@ -85,7 +85,7 @@ class DetectionWithTileMinimalSerializer(DetectionSerializer):
             "tile",
         ]
 
-    tile = TileSerializer(read_only=True)
+    tile = TileMinimalSerializer(read_only=True)
 
 
 class DetectionWithTileSerializer(DetectionWithTileMinimalSerializer):
@@ -223,7 +223,7 @@ class DetectionInputSerializer(DetectionSerializer):
                 # update geo_custom_zones
 
                 geo_custom_zones = GeoCustomZone.objects.filter(
-                    geometry__intersects=validated_data["geometry"]
+                    geometry__contains=validated_data["geometry"]
                 ).all()
 
                 detection_object.geo_custom_zones.add(*geo_custom_zones)

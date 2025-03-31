@@ -8,6 +8,7 @@ from core.models.detection_data import (
     DetectionControlStatus,
     DetectionValidationStatus,
 )
+from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.detection import DetectionRepository, RepoFilterCustomZone
 from core.serializers.detection import (
@@ -64,20 +65,17 @@ class DetectionListFilter(FilterSet):
         return queryset
 
     def filter_queryset(self, queryset):
-        # filter geo collectivities
-
-        communes_uuids = to_array(self.data.get("communesUuids"), default_value=[])
-        departments_uuids = to_array(
-            self.data.get("departmentsUuids"), default_value=[]
+        collectivity_filter = UserPermission(
+            user=self.request.user
+        ).get_collectivity_filter(
+            communes_uuids=to_array(self.data.get("communesUuids")),
+            departments_uuids=to_array(self.data.get("departmentsUuids")),
+            regions_uuids=to_array(self.data.get("regionsUuids")),
         )
-        regions_uuids = to_array(self.data.get("regionsUuids"), default_value=[])
 
-        collectivities_uuids = communes_uuids + departments_uuids + regions_uuids
+        repo = DetectionRepository()
 
-        repo = DetectionRepository(queryset=queryset)
-
-        queryset = repo._filter(
-            filter_collectivity_uuid_in=collectivities_uuids or None,
+        queryset = repo.list_(
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE, number=float(self.data.get("score", "0"))
             ),
@@ -100,7 +98,26 @@ class DetectionListFilter(FilterSet):
                 self.data.get("detectionControlStatuses"),
             ),
             filter_prescribed=to_bool(self.data.get("prescripted")),
+            filter_collectivities=collectivity_filter,
         )
+        queryset = queryset.order_by("tile_set__date", "id")
+        queryset.defer(
+            "geometry",
+            "tile__geometry",
+            "tile_set__geometry",
+            "detection_object__parcel__geometry",
+            "detection_object__parcel__commune__geometry",
+        )
+        queryset = queryset.prefetch_related(
+            "detection_object",
+            "detection_object__object_type",
+            "detection_object__parcel",
+            "detection_object__parcel__commune",
+            "detection_data",
+            "detection_data__user_last_update",
+            "tile",
+            "tile_set",
+        ).select_related("detection_data")
 
         return queryset
 
@@ -108,14 +125,4 @@ class DetectionListFilter(FilterSet):
 class DetectionListViewSet(BaseViewSetMixin[Detection]):
     filterset_class = DetectionListFilter
     serializer_class = DetectionDetailSerializer
-
-    def get_queryset(self):
-        queryset = Detection.objects.order_by("tile_set__date", "id")
-        queryset = queryset.prefetch_related(
-            "detection_object",
-            "detection_object__object_type",
-            "detection_object__parcel",
-            "tile",
-            "tile_set",
-        ).select_related("detection_data")
-        return queryset
+    queryset = Detection.objects
