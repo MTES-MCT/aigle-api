@@ -22,6 +22,11 @@ class UserRole(models.TextChoices):
     REGULAR = "REGULAR", "REGULAR"
 
 
+class UserManager_(UserManager):
+    def get_queryset(self):
+        return super().get_queryset().defer("last_position")
+
+
 class User(
     AbstractBaseUser,
     PermissionsMixin,
@@ -52,7 +57,7 @@ class User(
     )
     last_position = models_gis.PointField(null=True, blank=True)
 
-    objects = UserManager()
+    objects = UserManager_()
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["user_role"]

@@ -18,7 +18,7 @@ from core.serializers.detection_data import DetectionDataInputSerializer
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from rest_framework import serializers
 
-from core.serializers.tile import TileMinimalSerializer, TileSerializer
+from core.serializers.tile import TileMinimalSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
 from django.contrib.gis.db.models.functions import Centroid
 

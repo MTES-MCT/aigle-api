@@ -48,7 +48,7 @@ class BaseRepository(
         queryset = self.filter_(queryset=queryset, *args, **kwargs)
         queryset = self.order_by(queryset=queryset, *args, **kwargs)
 
-        return queryset.all()
+        return queryset.distinct()
 
 
 class RepoFilterLookup(Enum):

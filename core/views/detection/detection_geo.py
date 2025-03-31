@@ -19,7 +19,6 @@ from rest_framework.status import HTTP_200_OK, HTTP_202_ACCEPTED
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSetStatus, TileSetType
-from core.models.user import UserRole
 from core.models.user_group import UserGroupRight
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
@@ -47,8 +46,6 @@ from rest_framework.decorators import action
 
 from core.views.detection.utils import (
     BOOLEAN_CHOICES,
-    INTERFACE_DRAWN_CHOICES,
-    filter_custom_zones_uuids,
     filter_prescripted,
     filter_score,
 )
@@ -149,15 +146,6 @@ class DetectionGeoFilter(FilterSet):
             polygon_requested = Polygon.from_bbox((sw_lng, sw_lat, ne_lng, ne_lat))
             polygon_requested.srid = SRID
 
-        filter_tile_set_status__in = None
-
-        if self.request.user.user_role == UserRole.SUPER_ADMIN:
-            filter_tile_set_status__in = [
-                TileSetStatus.VISIBLE,
-                TileSetStatus.HIDDEN,
-                TileSetStatus.DEACTIVATED,
-            ]
-
         geometry_accessible = UserPermission(
             user=self.request.user
         ).get_accessible_geometry(intersects_geometry=polygon_requested)
@@ -165,15 +153,14 @@ class DetectionGeoFilter(FilterSet):
         if not geometry_accessible:
             return []
 
-        queryset = queryset.filter(geometry__intersects=geometry_accessible)
-
         tile_sets = TileSetPermission(
             user=self.request.user,
         ).list_(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-            filter_tile_set_status_in=filter_tile_set_status__in,
+            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
             filter_tile_set_intersects_geometry=geometry_accessible,
             filter_tile_set_uuid_in=tile_sets_uuids,
+            filter_has_collectivities=True,
             with_intersection=True,
         )
 
@@ -184,10 +171,7 @@ class DetectionGeoFilter(FilterSet):
             previous_tile_sets = tile_sets[:i]
             where = Q(tile_set__uuid=tile_set.uuid)
 
-            if tile_set.intersection:
-                where &= Q(geometry__intersects=tile_set.intersection)
-            elif geometry_accessible:
-                where &= Q(geometry__intersects=geometry_accessible)
+            where &= Q(geometry__intersects=tile_set.intersection)
 
             for previous_tile_set in previous_tile_sets:
                 # custom logic here: we want to display the detections on the last tileset
@@ -201,10 +185,6 @@ class DetectionGeoFilter(FilterSet):
                 where &= ~Q(geometry__intersects=previous_tile_set.intersection)
 
             wheres.append(where)
-
-            # if no geometry, we can stop the loop
-            if not tile_set.intersection:
-                break
 
         if len(wheres) == 1:
             queryset = queryset.filter(wheres[0])

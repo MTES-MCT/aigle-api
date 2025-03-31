@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
 from django.db.models import QuerySet
-from django.contrib.gis.db.models.aggregates import Union
 
 from core.models.detection import Detection, DetectionSource
 from core.models.detection_data import (
@@ -10,7 +9,6 @@ from core.models.detection_data import (
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
-from core.models.geo_zone import GeoZone
 from core.repository.base import (
     BaseRepository,
     CollectivityRepoFilter,

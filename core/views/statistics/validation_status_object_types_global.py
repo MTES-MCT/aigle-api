@@ -12,10 +12,8 @@ from rest_framework.views import APIView
 from django.db.models import F
 
 from core.utils.serializers import CommaSeparatedUUIDField
-from core.utils.string import to_array
 from core.views.statistics.utils import (
     StatisticsEndpointSerializer,
-    get_collectivities_uuids,
 )
 
 

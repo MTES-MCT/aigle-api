@@ -54,6 +54,7 @@ class TileSetRepository(
         filter_tile_set_contains_point: Optional[Point] = None,
         filter_tile_set_intersects_geometry: Optional[MultiPolygon] = None,
         filter_collectivities: Optional[CollectivityRepoFilter] = None,
+        filter_has_collectivities: bool = False,
         with_intersection: bool = False,
         order_bys: Optional[List[str]] = None,
         *args,
@@ -79,6 +80,18 @@ class TileSetRepository(
             queryset=queryset,
             filter_uuid_in=filter_uuid_in,
             filter_uuid_notin=filter_uuid_notin,
+        )
+
+        # annotations
+        queryset = self._annotate_intersection(
+            queryset=queryset,
+            with_intersection=with_intersection,
+            filter_tile_set_intersects_geometry=filter_tile_set_intersects_geometry,
+        )
+        queryset = self._annotate_collectivities_count(
+            queryset=queryset,
+            filter_has_collectivities=filter_has_collectivities,
+            filter_collectivities=filter_collectivities,
         )
 
         # custom filters
@@ -108,11 +121,6 @@ class TileSetRepository(
             filter_collectivities=filter_collectivities,
         )
 
-        queryset = self._annotate_intersection(
-            queryset=queryset,
-            with_intersection=with_intersection,
-            filter_tile_set_intersects_geometry=filter_tile_set_intersects_geometry,
-        )
         queryset = self.order_by(queryset=queryset, order_bys=order_bys)
 
         return queryset
@@ -134,6 +142,19 @@ class TileSetRepository(
             )
 
         queryset = queryset.annotate(intersection=intersection)
+
+        return queryset
+
+    @staticmethod
+    def _annotate_collectivities_count(
+        queryset: QuerySet[TileSet],
+        filter_collectivities: Optional[CollectivityRepoFilter] = None,
+        filter_has_collectivities: Optional[bool] = None,
+    ):
+        if (
+            filter_collectivities is not None and not filter_collectivities.is_empty()
+        ) or filter_has_collectivities:
+            queryset = queryset.annotate(geo_zones_count=Count("geo_zones"))
 
         return queryset
 
@@ -177,6 +198,17 @@ class TileSetRepository(
     ) -> QuerySet[TileSet]:
         if filter_tile_set_intersects_geometry is not None:
             q = Q(geo_zones__geometry__intersects=filter_tile_set_intersects_geometry)
+            queryset = queryset.filter(q)
+
+        return queryset
+
+    @staticmethod
+    def _filter_has_collectivities(
+        queryset: QuerySet[TileSet],
+        filter_has_collectivities: Optional[bool] = None,
+    ) -> QuerySet[TileSet]:
+        if filter_has_collectivities is not None:
+            q = Q(geo_zones_count__gt=0)
             queryset = queryset.filter(q)
 
         return queryset
