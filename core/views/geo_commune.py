@@ -29,11 +29,12 @@ class GeoCommuneFilter(FilterSet):
             user=self.request.user
         ).get_collectivity_filter()
 
-        queryset = queryset.filter(
-            Q(id__in=collectivity_filter.commune_ids or [])
-            | Q(department__id__in=collectivity_filter.department_ids or [])
-            | Q(department__region__id__in=collectivity_filter.region_ids or [])
-        )
+        if collectivity_filter:
+            queryset = queryset.filter(
+                Q(id__in=collectivity_filter.commune_ids or [])
+                | Q(department__id__in=collectivity_filter.department_ids or [])
+                | Q(department__region__id__in=collectivity_filter.region_ids or [])
+            )
 
         queryset = queryset.annotate(
             match_score=Case(

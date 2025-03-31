@@ -31,11 +31,12 @@ class GeoDepartmentFilter(FilterSet):
             user=self.request.user
         ).get_collectivity_filter()
 
-        queryset = queryset.filter(
-            Q(communes__id__in=collectivity_filter.commune_ids or [])
-            | Q(id__in=collectivity_filter.department_ids or [])
-            | Q(region__id__in=collectivity_filter.region_ids or [])
-        )
+        if collectivity_filter:
+            queryset = queryset.filter(
+                Q(communes__id__in=collectivity_filter.commune_ids or [])
+                | Q(id__in=collectivity_filter.department_ids or [])
+                | Q(region__id__in=collectivity_filter.region_ids or [])
+            )
 
         queryset = queryset.annotate(
             match_score=Case(
