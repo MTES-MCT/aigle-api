@@ -23,6 +23,11 @@ from core.models.user import UserRole
 from core.models.user_group import UserGroupRight
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
+from core.repository.detection import (
+    DetectionRepository,
+    RepoFilterCustomZone,
+    RepoFilterInterfaceDrawn,
+)
 from core.serializers.detection import (
     DetectionDetailSerializer,
     DetectionInputSerializer,
@@ -78,7 +83,10 @@ class DetectionGeoFilter(FilterSet):
 
     score = NumberFilter(method="filter_score")
     prescripted = ChoiceFilter(choices=BOOLEAN_CHOICES, method="filter_prescripted")
-    interfaceDrawn = ChoiceFilter(choices=INTERFACE_DRAWN_CHOICES, method="pass_")
+    interfaceDrawn = ChoiceFilter(
+        choices=[(choice.value, choice.name) for choice in RepoFilterInterfaceDrawn],
+        method="pass_",
+    )
 
     def pass_(self, queryset, name, value):
         return queryset
@@ -150,17 +158,21 @@ class DetectionGeoFilter(FilterSet):
                 TileSetStatus.DEACTIVATED,
             ]
 
-        geometry_requested = UserPermission(
+        geometry_accessible = UserPermission(
             user=self.request.user
         ).get_accessible_geometry(intersects_geometry=polygon_requested)
-        queryset = queryset.filter(geometry__intersects=geometry_requested)
+
+        if not geometry_accessible:
+            return []
+
+        queryset = queryset.filter(geometry__intersects=geometry_accessible)
 
         tile_sets = TileSetPermission(
             user=self.request.user,
         ).list_(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=filter_tile_set_status__in,
-            filter_tile_set_intersects_geometry=geometry_requested,
+            filter_tile_set_intersects_geometry=geometry_accessible,
             filter_tile_set_uuid_in=tile_sets_uuids,
             with_intersection=True,
         )
@@ -170,21 +182,12 @@ class DetectionGeoFilter(FilterSet):
         for i in range(len(tile_sets)):
             tile_set = tile_sets[i]
             previous_tile_sets = tile_sets[:i]
+            where = Q(tile_set__uuid=tile_set.uuid)
 
             if tile_set.intersection:
-                where = Q(tile_set__uuid=tile_set.uuid) & Q(
-                    geometry__intersects=tile_set.intersection
-                )
-            else:
-                if geometry_requested:
-                    where = Q(tile_set__uuid=tile_set.uuid) & Q(
-                        geometry__intersects=geometry_requested
-                    )
-                else:
-                    where = Q(tile_set__uuid=tile_set.uuid)
-
-            if geometry_requested:
-                where = where & Q(geometry__intersects=geometry_requested)
+                where &= Q(geometry__intersects=tile_set.intersection)
+            elif geometry_accessible:
+                where &= Q(geometry__intersects=geometry_accessible)
 
             for previous_tile_set in previous_tile_sets:
                 # custom logic here: we want to display the detections on the last tileset
@@ -195,7 +198,7 @@ class DetectionGeoFilter(FilterSet):
                 ):
                     continue
 
-                where = where & ~Q(geometry__intersects=previous_tile_set.intersection)
+                where &= ~Q(geometry__intersects=previous_tile_set.intersection)
 
             wheres.append(where)
 
@@ -203,17 +206,30 @@ class DetectionGeoFilter(FilterSet):
             if not tile_set.intersection:
                 break
 
-        queryset = filter_custom_zones_uuids(data=self.data, queryset=queryset)
-
-        if not wheres:
-            return queryset.distinct()
-
         if len(wheres) == 1:
             queryset = queryset.filter(wheres[0])
-        else:
+
+        if len(wheres) > 1:
             queryset = queryset.filter(reduce(or_, wheres))
 
-        return queryset.distinct()
+        filter_custom_zone = RepoFilterCustomZone(
+            custom_zone_uuids=(
+                self.data.get("customZonesUuids").split(",")
+                if self.data.get("customZonesUuids")
+                else []
+            ),
+            interface_drawn=RepoFilterInterfaceDrawn[
+                self.data.get(
+                    "interfaceDrawn",
+                    RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES.value,
+                )
+            ],
+        )
+        detections = DetectionRepository(initial_queryset=queryset).list_(
+            filter_custom_zone=filter_custom_zone
+        )
+
+        return detections
 
 
 class DetectionGeoViewSet(BaseViewSetMixin[Detection]):

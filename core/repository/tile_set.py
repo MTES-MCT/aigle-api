@@ -40,9 +40,9 @@ class TileSetRepository(
 ):
     def __init__(self, initial_queryset: Optional[QuerySet[TileSet]] = None):
         self.model = TileSet
-        super().__init__(initial_queryset=initial_queryset)
+        self.initial_queryset = initial_queryset or self.model.objects
 
-    def _filter(
+    def filter_(
         self,
         queryset: QuerySet[TileSet],
         filter_created_at: Optional[DateRepoFilter] = None,
@@ -113,7 +113,7 @@ class TileSetRepository(
             with_intersection=with_intersection,
             filter_tile_set_intersects_geometry=filter_tile_set_intersects_geometry,
         )
-        queryset = self._order_by(queryset=queryset, order_bys=order_bys)
+        queryset = self.order_by(queryset=queryset, order_bys=order_bys)
 
         return queryset
 
@@ -121,7 +121,7 @@ class TileSetRepository(
     def _annotate_intersection(
         queryset: QuerySet[TileSet],
         with_intersection: bool = False,
-        filter_tile_set_intersects_geometry: Optional[Polygon] = None,
+        filter_tile_set_intersects_geometry: Optional[MultiPolygon] = None,
     ):
         if not with_intersection:
             return queryset
@@ -186,13 +186,13 @@ class TileSetRepository(
         queryset: QuerySet[TileSet],
         filter_collectivities: Optional[CollectivityRepoFilter] = None,
     ) -> QuerySet[TileSet]:
-        if filter_collectivities is not None:
+        if filter_collectivities is not None and not filter_collectivities.is_empty():
             q = Q()
             queryset = queryset.annotate(geo_zones_count=Count("geo_zones"))
-            q = q | Q(geo_zones_count=0)
+            q |= Q(geo_zones_count=0)
 
             if filter_collectivities.commune_ids:
-                q = q | (
+                q |= (
                     (
                         Q(geo_zones__geo_zone_type=GeoZoneType.COMMUNE)
                         & Q(geo_zones__id__in=filter_collectivities.commune_ids)
@@ -220,7 +220,7 @@ class TileSetRepository(
                 )
 
             if filter_collectivities.department_ids:
-                q = q | (
+                q |= (
                     (
                         Q(geo_zones__geo_zone_type=GeoZoneType.COMMUNE)
                         & Q(
@@ -248,7 +248,7 @@ class TileSetRepository(
                 )
 
             if filter_collectivities.region_ids:
-                q = q | (
+                q |= (
                     (
                         Q(geo_zones__geo_zone_type=GeoZoneType.COMMUNE)
                         & Q(

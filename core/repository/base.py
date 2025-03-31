@@ -23,7 +23,7 @@ class BaseRepository(
         else:
             self.initial_queryset = self.model.objects
 
-    def _order_by(
+    def order_by(
         self,
         queryset: QuerySet[T_MODEL],
         order_bys: Optional[List[str]] = None,
@@ -35,7 +35,7 @@ class BaseRepository(
 
         return queryset
 
-    def _filter(
+    def filter_(
         self, queryset: QuerySet[T_MODEL], *args, **kwargs
     ) -> QuerySet[T_MODEL]:
         raise NotImplementedError(
@@ -45,8 +45,8 @@ class BaseRepository(
     def list_(self, *args, **kwargs):
         queryset = self.initial_queryset
 
-        queryset = self._filter(queryset=queryset, *args, **kwargs)
-        queryset = self._order_by(queryset=queryset, *args, **kwargs)
+        queryset = self.filter_(queryset=queryset, *args, **kwargs)
+        queryset = self.order_by(queryset=queryset, *args, **kwargs)
 
         return queryset.all()
 
@@ -75,6 +75,13 @@ class CollectivityRepoFilter:
     commune_ids: Optional[List[int]] = None
     department_ids: Optional[List[int]] = None
     region_ids: Optional[List[int]] = None
+
+    def is_empty(self) -> bool:
+        return (
+            self.commune_ids is None
+            and self.department_ids is None
+            and self.region_ids is None
+        )
 
 
 class TimestampedBaseRepositoryMixin(

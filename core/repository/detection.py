@@ -13,6 +13,7 @@ from core.models.detection_data import (
 from core.models.geo_zone import GeoZone
 from core.repository.base import (
     BaseRepository,
+    CollectivityRepoFilter,
     DateRepoFilter,
     NumberRepoFilter,
     TimestampedBaseRepositoryMixin,
@@ -41,16 +42,16 @@ class DetectionRepository(
 ):
     def __init__(self, initial_queryset: Optional[QuerySet[Detection]] = None):
         self.model = Detection
-        super().__init__(initial_queryset=initial_queryset)
+        self.initial_queryset = initial_queryset or self.model.objects
 
-    def _filter(
+    def filter_(
         self,
         queryset: QuerySet[Detection],
         filter_created_at: Optional[DateRepoFilter] = None,
         filter_updated_at: Optional[DateRepoFilter] = None,
         filter_uuid_in: Optional[List[str]] = None,
         filter_uuid_notin: Optional[List[str]] = None,
-        filter_collectivity_uuid_in: Optional[List[str]] = None,
+        filter_collectivities: Optional[CollectivityRepoFilter] = None,
         filter_score: Optional[NumberRepoFilter] = None,
         filter_object_type_uuid_in: Optional[List[str]] = None,
         filter_custom_zone: Optional[RepoFilterCustomZone] = None,
@@ -81,9 +82,9 @@ class DetectionRepository(
 
         # custom filters
 
-        queryset = self._filter_collectivity_uuid_in(
+        queryset = self._filter_collectivities(
             queryset=queryset,
-            filter_collectivity_uuid_in=filter_collectivity_uuid_in,
+            filter_collectivities=filter_collectivities,
         )
         queryset = self._filter_score(
             queryset=queryset,
@@ -119,16 +120,28 @@ class DetectionRepository(
         return queryset
 
     @staticmethod
-    def _filter_collectivity_uuid_in(
+    def _filter_collectivities(
         queryset: QuerySet[Detection],
-        filter_collectivity_uuid_in: Optional[List[str]] = None,
+        filter_collectivities: Optional[CollectivityRepoFilter] = None,
     ) -> QuerySet[Detection]:
-        if filter_collectivity_uuid_in is not None:
-            collectivity_area = GeoZone.objects.filter(
-                uuid__in=filter_collectivity_uuid_in
-            ).aggregate(area=Union("geometry"))["area"]
+        if filter_collectivities is not None and not filter_collectivities.is_empty():
+            q = Q()
 
-            q = Q(geometry__intersects=collectivity_area)
+            if filter_collectivities.commune_ids:
+                q |= Q(
+                    detection_object__parcel__commune__id__in=filter_collectivities.commune_ids
+                )
+
+            if filter_collectivities.department_ids:
+                q |= Q(
+                    detection_object__parcel__commune__department__id__in=filter_collectivities.department_ids
+                )
+
+            if filter_collectivities.region_ids:
+                q |= Q(
+                    detection_object__parcel__commune__department__region__id__in=filter_collectivities.region_ids
+                )
+
             queryset = queryset.filter(q)
 
         return queryset
@@ -165,6 +178,9 @@ class DetectionRepository(
         queryset: QuerySet[Detection],
         filter_custom_zone: Optional[RepoFilterCustomZone] = None,
     ) -> QuerySet[Detection]:
+        if filter_custom_zone is None:
+            return queryset
+
         if filter_custom_zone.custom_zone_uuids:
             if filter_custom_zone.interface_drawn == RepoFilterInterfaceDrawn.ALL:
                 q = Q(

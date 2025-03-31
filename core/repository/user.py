@@ -16,9 +16,9 @@ class UserRepository(
 ):
     def __init__(self, initial_queryset: Optional[QuerySet[User]] = None):
         self.model = User
-        super().__init__(initial_queryset=initial_queryset)
+        self.initial_queryset = initial_queryset or self.model.objects
 
-    def _filter(
+    def filter_(
         self,
         queryset: QuerySet[User],
         filter_created_at: Optional[DateRepoFilter] = None,
@@ -42,6 +42,6 @@ class UserRepository(
             filter_uuid_notin=filter_uuid_notin,
         )
 
-        queryset = self._order_by(queryset=queryset, order_bys=order_bys)
+        queryset = self.order_by(queryset=queryset, order_bys=order_bys)
 
         return queryset
