@@ -8,11 +8,13 @@ from core.models.detection_data import (
     DetectionControlStatus,
     DetectionValidationStatus,
 )
+from core.models.tile_set import TileSetType
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.detection import DetectionRepository, RepoFilterCustomZone
+from core.repository.tile_set import DEFAULT_VALUES
 from core.serializers.detection import (
-    DetectionDetailSerializer,
+    DetectionListItemSerializer,
 )
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 
@@ -108,14 +110,25 @@ class DetectionListFilter(FilterSet):
             "detection_object__parcel__geometry",
             "detection_object__parcel__commune__geometry",
         )
+        queryset.filter(
+            detection_object__detections__tile_set__tile_set_status__in=DEFAULT_VALUES[
+                "filter_tile_set_status_in"
+            ],
+            detection_object__detections__tile_set__tile_set_type__in=[
+                TileSetType.BACKGROUND,
+                TileSetType.PARTIAL,
+            ],
+        )
         queryset = queryset.prefetch_related(
             "detection_object",
             "detection_object__object_type",
             "detection_object__parcel",
             "detection_object__parcel__commune",
+            "detection_object__detections",
+            "detection_object__detections__tile_set",
+            "detection_object__geo_custom_zones",
+            "detection_object__geo_custom_zones__geo_custom_zone_category",
             "detection_data",
-            "detection_data__user_last_update",
-            "tile",
             "tile_set",
         ).select_related("detection_data")
 
@@ -124,5 +137,5 @@ class DetectionListFilter(FilterSet):
 
 class DetectionListViewSet(BaseViewSetMixin[Detection]):
     filterset_class = DetectionListFilter
-    serializer_class = DetectionDetailSerializer
+    serializer_class = DetectionListItemSerializer
     queryset = Detection.objects

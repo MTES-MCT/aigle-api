@@ -55,6 +55,8 @@ class TileSetRepository(
         filter_tile_set_intersects_geometry: Optional[MultiPolygon] = None,
         filter_collectivities: Optional[CollectivityRepoFilter] = None,
         filter_has_collectivities: bool = False,
+        filter_detection_object_id_in: Optional[List[int]] = None,
+        filter_detection_id_in: Optional[List[int]] = None,
         with_intersection: bool = False,
         order_bys: Optional[List[str]] = None,
         *args,
@@ -119,6 +121,15 @@ class TileSetRepository(
         queryset = self._filter_collectivities(
             queryset=queryset,
             filter_collectivities=filter_collectivities,
+        )
+
+        queryset = self._filter_detection_object_id_in(
+            queryset=queryset,
+            filter_detection_object_id_in=filter_detection_object_id_in,
+        )
+
+        queryset = self._filter_detection_id_in(
+            queryset=queryset, filter_detection_id_in=filter_detection_id_in
         )
 
         queryset = self.order_by(queryset=queryset, order_bys=order_bys)
@@ -307,6 +318,28 @@ class TileSetRepository(
                     )
                 )
 
+            queryset = queryset.filter(q)
+
+        return queryset
+
+    @staticmethod
+    def _filter_detection_object_id_in(
+        queryset: QuerySet[TileSet],
+        filter_detection_object_id_in: Optional[List[int]] = None,
+    ) -> QuerySet[TileSet]:
+        if filter_detection_object_id_in is not None:
+            q = Q(detections__detection_object__id__in=filter_detection_object_id_in)
+            queryset = queryset.filter(q)
+
+        return queryset
+
+    @staticmethod
+    def _filter_detection_id_in(
+        queryset: QuerySet[TileSet],
+        filter_detection_id_in: Optional[List[int]] = None,
+    ) -> QuerySet[TileSet]:
+        if filter_detection_id_in is not None:
+            q = Q(detections__id__in=filter_detection_id_in)
             queryset = queryset.filter(q)
 
         return queryset

@@ -18,6 +18,8 @@ from core.serializers.detection_data import DetectionDataInputSerializer
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from rest_framework import serializers
 
+from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
+from core.serializers.object_type import ObjectTypeSerializer
 from core.serializers.tile import TileMinimalSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
 from django.contrib.gis.db.models.functions import Centroid
@@ -325,3 +327,52 @@ class DetectionUpdateSerializer(DetectionSerializer):
         instance.save()
 
         return instance
+
+
+class DetectionListItemSerializer(serializers.ModelSerializer):
+    from core.serializers.parcel import ParcelMinimalSerializer
+
+    class Meta:
+        model = Detection
+        fields = [
+            "uuid",
+            "id",
+            "detection_object_id",
+            "address",
+            "detection_source",
+            "score",
+            "parcel",
+            "geo_custom_zones",
+            "object_type",
+            "detection_control_status",
+            "detection_validation_status",
+            "detection_prescription_status",
+            "tile_sets",
+        ]
+
+    detection_object_id = serializers.IntegerField(
+        source="detection_object.id", read_only=True
+    )
+    address = serializers.CharField(source="detection_object.address", read_only=True)
+    parcel = ParcelMinimalSerializer(read_only=True, source="detection_object.parcel")
+    geo_custom_zones = GeoCustomZoneSerializer(
+        many=True, read_only=True, source="detection_object.geo_custom_zones"
+    )
+    object_type = ObjectTypeSerializer(
+        read_only=True, source="detection_object.object_type"
+    )
+    detection_control_status = serializers.ChoiceField(
+        source="detection_data.detection_validation_status",
+        choices=DetectionControlStatus.choices,
+    )
+    detection_validation_status = serializers.ChoiceField(
+        source="detection_data.detection_validation_status",
+        choices=DetectionValidationStatus.choices,
+    )
+    detection_prescription_status = serializers.ChoiceField(
+        source="detection_data.detection_validation_status",
+        choices=DetectionPrescriptionStatus.choices,
+    )
+    tile_sets = TileSetMinimalSerializer(
+        many=True, read_only=True, source="detection_object.detections.tile_set"
+    )

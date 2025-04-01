@@ -62,3 +62,13 @@ class GetGeometryType(Func):
     output_field = CharField(
         choices=GeometryType.choices,
     )
+
+
+def estimate_count(queryset):
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT reltuples::bigint FROM pg_class WHERE relname = %s",
+        [queryset.model._meta.db_table],
+    )
+    count = cursor.fetchone()[0]
+    return max(0, int(count))
