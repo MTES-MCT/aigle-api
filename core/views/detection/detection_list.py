@@ -18,6 +18,7 @@ from core.serializers.detection import (
 )
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 
+from core.utils.pagination import CachedCountLimitOffsetPagination
 from core.utils.string import to_array, to_bool, to_enum_array
 from core.views.detection.utils import (
     BOOLEAN_CHOICES,
@@ -139,3 +140,4 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
     filterset_class = DetectionListFilter
     serializer_class = DetectionListItemSerializer
     queryset = Detection.objects
+    pagination_class = CachedCountLimitOffsetPagination
