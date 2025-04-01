@@ -50,6 +50,14 @@ class BaseRepository(
 
         return queryset.distinct()
 
+    def get(self, *args, **kwargs):
+        queryset = self.initial_queryset
+
+        queryset = self.filter_(queryset=queryset, *args, **kwargs)
+        queryset = self.order_by(queryset=queryset, *args, **kwargs)
+
+        return queryset.first()
+
 
 class RepoFilterLookup(Enum):
     GTE = "gte"

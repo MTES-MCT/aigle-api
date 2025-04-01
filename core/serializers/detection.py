@@ -12,6 +12,7 @@ from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
 from core.models.user_group import UserGroupRight
+from core.repository.tile_set import DEFAULT_VALUES
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.detection_data import DetectionDataInputSerializer
 
@@ -362,7 +363,7 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
         read_only=True, source="detection_object.object_type"
     )
     detection_control_status = serializers.ChoiceField(
-        source="detection_data.detection_validation_status",
+        source="detection_data.detection_control_status",
         choices=DetectionControlStatus.choices,
     )
     detection_validation_status = serializers.ChoiceField(
@@ -370,9 +371,18 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
         choices=DetectionValidationStatus.choices,
     )
     detection_prescription_status = serializers.ChoiceField(
-        source="detection_data.detection_validation_status",
+        source="detection_data.detection_prescription_status",
         choices=DetectionPrescriptionStatus.choices,
     )
-    tile_sets = TileSetMinimalSerializer(
-        many=True, read_only=True, source="detection_object.detections.tile_set"
-    )
+    tile_sets = serializers.SerializerMethodField()
+
+    def get_tile_sets(self, obj):
+        return TileSetMinimalSerializer(
+            [
+                detection.tile_set
+                for detection in obj.detection_object.detections.distinct()
+                if detection.tile_set.tile_set_status
+                in DEFAULT_VALUES["filter_tile_set_status_in"]
+            ],
+            many=True,
+        ).data

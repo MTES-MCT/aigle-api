@@ -8,10 +8,15 @@ from core.models.detection_data import (
     DetectionControlStatus,
     DetectionValidationStatus,
 )
-from core.models.tile_set import TileSetType
+from core.models.tile_set import TileSetStatus, TileSetType
+from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
-from core.repository.detection import DetectionRepository, RepoFilterCustomZone
+from core.repository.detection import (
+    DetectionRepository,
+    RepoFilterCustomZone,
+    RepoFilterInterfaceDrawn,
+)
 from core.repository.tile_set import DEFAULT_VALUES
 from core.serializers.detection import (
     DetectionListItemSerializer,
@@ -40,7 +45,6 @@ class DetectionListFilter(FilterSet):
             "communesUuids",
             "departmentsUuids",
             "regionsUuids",
-            "tileSetsUuids",
         ]
 
     objectTypesUuids = UuidInFilter(method="pass_")
@@ -62,8 +66,6 @@ class DetectionListFilter(FilterSet):
     departmentsUuids = UuidInFilter(method="pass_")
     regionsUuids = UuidInFilter(method="pass_")
 
-    tileSetsUuids = UuidInFilter(method="pass_")
-
     def pass_(self, queryset, name, value):
         return queryset
 
@@ -76,21 +78,36 @@ class DetectionListFilter(FilterSet):
             regions_uuids=to_array(self.data.get("regionsUuids")),
         )
 
+        detection_tilesets_filter = TileSetPermission(
+            user=self.request.user,
+        ).get_last_detections_filters(
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
+            filter_collectivities=collectivity_filter,
+            filter_has_collectivities=True,
+        )
+
+        if not detection_tilesets_filter:
+            return []
+
         repo = DetectionRepository()
 
-        queryset = repo.list_(
+        queryset = repo.filter_(
+            queryset=queryset,
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE, number=float(self.data.get("score", "0"))
             ),
             filter_object_type_uuid_in=to_array(self.data.get("objectTypesUuids")),
             filter_custom_zone=RepoFilterCustomZone(
-                interface_drawn=self.data.get("interfaceDrawn"),
+                interface_drawn=RepoFilterInterfaceDrawn[
+                    self.data.get(
+                        "interfaceDrawn",
+                        RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES.value,
+                    )
+                ],
                 custom_zone_uuids=to_array(
                     self.data.get("customZonesUuids"), default_value=[]
                 ),
-            ),
-            filter_tile_set_uuid_in=to_array(
-                self.data.get("tileSetsUuids"), default_value=None
             ),
             filter_detection_validation_status_in=to_enum_array(
                 DetectionValidationStatus,
@@ -104,14 +121,14 @@ class DetectionListFilter(FilterSet):
             filter_collectivities=collectivity_filter,
         )
         queryset = queryset.order_by("tile_set__date", "id")
-        queryset.defer(
+        queryset = queryset.filter(detection_tilesets_filter)
+        queryset = queryset.defer(
             "geometry",
             "tile__geometry",
-            "tile_set__geometry",
             "detection_object__parcel__geometry",
             "detection_object__parcel__commune__geometry",
         )
-        queryset.filter(
+        queryset = queryset.filter(
             detection_object__detections__tile_set__tile_set_status__in=DEFAULT_VALUES[
                 "filter_tile_set_status_in"
             ],
@@ -133,7 +150,7 @@ class DetectionListFilter(FilterSet):
             "tile_set",
         ).select_related("detection_data")
 
-        return queryset
+        return queryset.distinct()
 
 
 class DetectionListViewSet(BaseViewSetMixin[Detection]):

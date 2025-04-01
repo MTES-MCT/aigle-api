@@ -16,6 +16,7 @@ from core.repository.base import (
 )
 from django.db.models import Q, Subquery
 from django.contrib.gis.geos import Polygon, Point, MultiPolygon
+from django.contrib.postgres.aggregates import ArrayAgg
 from django.contrib.gis.db.models.functions import Intersection
 from django.db.models import F
 from django.contrib.gis.db.models import Union
@@ -58,6 +59,7 @@ class TileSetRepository(
         filter_detection_object_id_in: Optional[List[int]] = None,
         filter_detection_id_in: Optional[List[int]] = None,
         with_intersection: bool = False,
+        with_geozone_ids: bool = False,
         order_bys: Optional[List[str]] = None,
         *args,
         **kwargs,
@@ -89,6 +91,10 @@ class TileSetRepository(
             queryset=queryset,
             with_intersection=with_intersection,
             filter_tile_set_intersects_geometry=filter_tile_set_intersects_geometry,
+        )
+        queryset = self._annotate_geozone_ids(
+            queryset=queryset,
+            with_geozone_ids=with_geozone_ids,
         )
         queryset = self._annotate_collectivities_count(
             queryset=queryset,
@@ -153,6 +159,18 @@ class TileSetRepository(
             )
 
         queryset = queryset.annotate(intersection=intersection)
+
+        return queryset
+
+    @staticmethod
+    def _annotate_geozone_ids(
+        queryset: QuerySet[TileSet],
+        with_geozone_ids: bool = False,
+    ):
+        if not with_geozone_ids:
+            return queryset
+
+        queryset = queryset.annotate(geo_zone_ids=ArrayAgg("geo_zones__id"))
 
         return queryset
 
@@ -307,7 +325,7 @@ class TileSetRepository(
                         & Q(
                             geo_zones__id__in=Subquery(
                                 GeoRegion.objects.filter(
-                                    id__in=filter_collectivities.commune_ids
+                                    id__in=filter_collectivities.region_ids
                                 ).values("departments__id")
                             )
                         )

@@ -1,8 +1,5 @@
 from common.views.base import BaseViewSetMixin
 
-from operator import or_
-from django.db.models import Q
-from functools import reduce
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
 from core.contants.geo import SRID
@@ -153,44 +150,20 @@ class DetectionGeoFilter(FilterSet):
         if not geometry_accessible:
             return []
 
-        tile_sets = TileSetPermission(
+        detection_tilesets_filter = TileSetPermission(
             user=self.request.user,
-        ).list_(
+        ).get_last_detections_filters(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
             filter_tile_set_intersects_geometry=geometry_accessible,
             filter_tile_set_uuid_in=tile_sets_uuids,
             filter_has_collectivities=True,
-            with_intersection=True,
         )
 
-        wheres = []
+        if not detection_tilesets_filter:
+            return []
 
-        for i in range(len(tile_sets)):
-            tile_set = tile_sets[i]
-            previous_tile_sets = tile_sets[:i]
-            where = Q(tile_set__uuid=tile_set.uuid)
-
-            where &= Q(geometry__intersects=tile_set.intersection)
-
-            for previous_tile_set in previous_tile_sets:
-                # custom logic here: we want to display the detections on the last tileset
-                # if the last tileset for a zone is partial, we also want to display detections for the last BACKGROUND tileset
-                if (
-                    tile_set.tile_set_type == TileSetType.BACKGROUND
-                    and previous_tile_set.tile_set_type == TileSetType.PARTIAL
-                ):
-                    continue
-
-                where &= ~Q(geometry__intersects=previous_tile_set.intersection)
-
-            wheres.append(where)
-
-        if len(wheres) == 1:
-            queryset = queryset.filter(wheres[0])
-
-        if len(wheres) > 1:
-            queryset = queryset.filter(reduce(or_, wheres))
+        queryset = queryset.filter(detection_tilesets_filter)
 
         filter_custom_zone = RepoFilterCustomZone(
             custom_zone_uuids=(
