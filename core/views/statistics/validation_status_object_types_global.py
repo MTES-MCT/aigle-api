@@ -4,9 +4,15 @@ from rest_framework import serializers
 
 from django.db.models import Count
 
+from core.models.tile_set import TileSetStatus, TileSetType
+from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
-from core.repository.detection import DetectionRepository, RepoFilterCustomZone
+from core.repository.detection import (
+    DetectionRepository,
+    RepoFilterCustomZone,
+    RepoFilterInterfaceDrawn,
+)
 from rest_framework.views import APIView
 
 from django.db.models import F
@@ -55,6 +61,15 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
             + other_object_types_uuids
         )
 
+        detection_tilesets_filter = TileSetPermission(
+            user=self.request.user,
+        ).get_last_detections_filters(
+            filter_uuid_in=endpoint_serializer.validated_data.get("tileSetsUuids"),
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
+            filter_collectivities=collectivity_filter,
+            filter_has_collectivities=True,
+        )
         queryset = repo.filter_(
             queryset=repo.initial_queryset,
             filter_score=NumberRepoFilter(
@@ -63,9 +78,12 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
             ),
             filter_object_type_uuid_in=all_object_types_uuids or None,
             filter_custom_zone=RepoFilterCustomZone(
-                interface_drawn=endpoint_serializer.validated_data.get(
-                    "interfaceDrawn"
-                ),
+                interface_drawn=RepoFilterInterfaceDrawn[
+                    endpoint_serializer.validated_data.get(
+                        "interfaceDrawn",
+                        RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES.value,
+                    )
+                ],
                 custom_zone_uuids=endpoint_serializer.validated_data.get(
                     "customZonesUuids"
                 )
@@ -83,6 +101,7 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
             filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
             filter_collectivities=collectivity_filter,
         )
+        queryset = queryset.filter(detection_tilesets_filter)
 
         queryset = queryset.values(
             detection_validation_status=F(
@@ -91,7 +110,7 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
             object_type_uuid=F("detection_object__object_type__uuid"),
             object_type_name=F("detection_object__object_type__name"),
             object_type_color=F("detection_object__object_type__color"),
-        ).annotate(detections_count=Count("id"))
+        ).annotate(detections_count=Count("id", distinct=True))
 
         if other_object_types_uuids:
             data_others_map = defaultdict(int)

@@ -3,9 +3,15 @@ from rest_framework import serializers
 
 from django.db.models import Count
 
+from core.models.tile_set import TileSetStatus, TileSetType
+from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
-from core.repository.detection import DetectionRepository, RepoFilterCustomZone
+from core.repository.detection import (
+    DetectionRepository,
+    RepoFilterCustomZone,
+    RepoFilterInterfaceDrawn,
+)
 from rest_framework.views import APIView
 
 from django.db.models import F
@@ -31,13 +37,22 @@ class StatisticsValidationStatusEvolutionView(APIView):
         endpoint_serializer.is_valid(raise_exception=True)
 
         repo = DetectionRepository()
-
         collectivity_filter = UserPermission(user=request.user).get_collectivity_filter(
             communes_uuids=endpoint_serializer.validated_data.get("communesUuids"),
             departments_uuids=endpoint_serializer.validated_data.get(
                 "departmentsUuids"
             ),
             regions_uuids=endpoint_serializer.validated_data.get("regionsUuids"),
+        )
+
+        detection_tilesets_filter = TileSetPermission(
+            user=self.request.user,
+        ).get_last_detections_filters(
+            filter_uuid_in=endpoint_serializer.validated_data.get("tileSetsUuids"),
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
+            filter_collectivities=collectivity_filter,
+            filter_has_collectivities=True,
         )
 
         queryset = repo.filter_(
@@ -50,9 +65,12 @@ class StatisticsValidationStatusEvolutionView(APIView):
                 "objectTypesUuids"
             ),
             filter_custom_zone=RepoFilterCustomZone(
-                interface_drawn=endpoint_serializer.validated_data.get(
-                    "interfaceDrawn"
-                ),
+                interface_drawn=RepoFilterInterfaceDrawn[
+                    endpoint_serializer.validated_data.get(
+                        "interfaceDrawn",
+                        RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES.value,
+                    )
+                ],
                 custom_zone_uuids=endpoint_serializer.validated_data.get(
                     "customZonesUuids"
                 )
@@ -70,7 +88,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
             filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
             filter_collectivities=collectivity_filter,
         )
-
+        queryset = queryset.filter(detection_tilesets_filter)
         queryset = queryset.values(
             tile_set_uuid=F("tile_set__uuid"),
             tile_set_name=F("tile_set__name"),
@@ -78,7 +96,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
             detection_validation_status=F(
                 "detection_data__detection_validation_status"
             ),
-        ).annotate(detections_count=Count("id"))
+        ).annotate(detections_count=Count("id", distinct=True))
         output_serializer = OutputSerializer(queryset.all(), many=True)
 
         return JsonResponse(output_serializer.data, safe=False)
