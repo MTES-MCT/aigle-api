@@ -9,5 +9,5 @@ class TileMinimalSerializer(serializers.ModelSerializer):
 
 
 class TileSerializer(TileMinimalSerializer):
-    class Meta:
+    class Meta(TileMinimalSerializer.Meta):
         fields = TileMinimalSerializer.Meta.fields + ["geometry"]

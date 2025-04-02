@@ -21,7 +21,7 @@ from rest_framework import serializers
 
 from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.object_type import ObjectTypeSerializer
-from core.serializers.tile import TileMinimalSerializer
+from core.serializers.tile import TileMinimalSerializer, TileSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
 from django.contrib.gis.db.models.functions import Centroid
 
@@ -97,6 +97,7 @@ class DetectionWithTileSerializer(DetectionWithTileMinimalSerializer):
             "tile_set",
         ]
 
+    tile = TileSerializer(read_only=True)
     tile_set = TileSetMinimalSerializer(read_only=True)
 
 
