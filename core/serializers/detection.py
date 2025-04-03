@@ -375,15 +375,4 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
         source="detection_data.detection_prescription_status",
         choices=DetectionPrescriptionStatus.choices,
     )
-    tile_sets = serializers.SerializerMethodField()
-
-    def get_tile_sets(self, obj):
-        return TileSetMinimalSerializer(
-            [
-                detection.tile_set
-                for detection in obj.detection_object.detections.distinct()
-                if detection.tile_set.tile_set_status
-                in DEFAULT_VALUES["filter_tile_set_status_in"]
-            ],
-            many=True,
-        ).data
+    tile_sets = TileSetMinimalSerializer(source="detection_object.tile_sets", many=True)

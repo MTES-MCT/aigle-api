@@ -3,12 +3,13 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
 from core.models.detection import Detection
+from django.db.models import Prefetch
 
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionValidationStatus,
 )
-from core.models.tile_set import TileSetStatus, TileSetType
+from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
@@ -120,22 +121,14 @@ class DetectionListFilter(FilterSet):
             filter_prescribed=to_bool(self.data.get("prescripted")),
             filter_collectivities=collectivity_filter,
         )
-        queryset = queryset.order_by("tile_set__date", "id")
+        queryset = queryset.order_by("id")
         queryset = queryset.filter(detection_tilesets_filter)
+        queryset = queryset.filter(detection_object__tile_sets__id__in=[17, 25, 27, 28])
         queryset = queryset.defer(
             "geometry",
             "tile__geometry",
             "detection_object__parcel__geometry",
             "detection_object__parcel__commune__geometry",
-        )
-        queryset = queryset.filter(
-            detection_object__detections__tile_set__tile_set_status__in=DEFAULT_VALUES[
-                "filter_tile_set_status_in"
-            ],
-            detection_object__detections__tile_set__tile_set_type__in=[
-                TileSetType.BACKGROUND,
-                TileSetType.PARTIAL,
-            ],
         )
         queryset = queryset.prefetch_related(
             "detection_object",
@@ -143,7 +136,18 @@ class DetectionListFilter(FilterSet):
             "detection_object__parcel",
             "detection_object__parcel__commune",
             "detection_object__detections",
-            "detection_object__detections__tile_set",
+            Prefetch(
+                "detection_object__tile_sets",
+                queryset=TileSet.objects.filter(
+                    tile_set_status__in=DEFAULT_VALUES["filter_tile_set_status_in"],
+                    tile_set_type__in=[
+                        TileSetType.BACKGROUND,
+                        TileSetType.PARTIAL,
+                    ],
+                )
+                .order_by(*DEFAULT_VALUES["order_bys"])
+                .distinct(),
+            ),
             "detection_object__geo_custom_zones",
             "detection_object__geo_custom_zones__geo_custom_zone_category",
             "detection_data",

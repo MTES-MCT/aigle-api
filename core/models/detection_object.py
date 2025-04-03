@@ -12,6 +12,9 @@ from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from simple_history.models import HistoricalRecords
 
+from core.models.tile_set import TileSet, TileSetType
+from core.repository.tile_set import DEFAULT_VALUES
+
 
 class DetectionObject(
     TimestampedModelMixin, UuidModelMixin, DeletableModelMixin, ImportableModelMixin
@@ -31,6 +34,7 @@ class DetectionObject(
     geo_custom_zones = models.ManyToManyField(
         GeoCustomZone, related_name="detection_objects"
     )
+    tile_sets = models.ManyToManyField(TileSet, through="Detection")
     history = HistoricalRecords(bases=[HistoriedModelMixin])
 
     class Meta:
