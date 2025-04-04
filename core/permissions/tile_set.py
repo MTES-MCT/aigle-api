@@ -63,10 +63,9 @@ class TileSetPermission(
         queryset = self.filter_(
             *args,
             **kwargs,
-            with_intersection=True,
-            with_geozone_ids=True,
             order_bys=["-date"],
         )
+        queryset = queryset.prefetch_related("geo_zones")
         # if tilesets have exactly the same geozones, we only retrieve the most recent
         tile_sets = queryset.annotate(
             row_number=Window(
@@ -76,16 +75,50 @@ class TileSetPermission(
             )
         ).filter(row_number=1)
 
+        wheres_zones: List[Q] = []
         wheres: List[Q] = []
 
         for i in range(len(tile_sets)):
             tile_set = tile_sets[i]
             previous_tile_sets = tile_sets[:i]
-            where = Q(tile_set__uuid=tile_set.uuid)
+            where = Q(tile_set__id=tile_set.id)
 
-            where &= Q(geometry__intersects=tile_set.intersection)
+            if kwargs.get("filter_tile_set_intersects_geometry"):
+                where &= Q(
+                    geometry__intersects=kwargs.get(
+                        "filter_tile_set_intersects_geometry"
+                    )
+                )
 
-            for previous_tile_set in previous_tile_sets:
+            geo_zones_map = defaultdict(list)
+            for geo_zone in tile_set.geo_zones.all():
+                geo_zones_map[geo_zone.geo_zone_type].append(geo_zone.id)
+
+            where_zones = Q()
+            if geo_zones_map.get(GeoZoneType.COMMUNE):
+                where_zones &= Q(
+                    detection_object__parcel__commune__id__in=geo_zones_map.get(
+                        GeoZoneType.COMMUNE
+                    )
+                )
+            if geo_zones_map.get(GeoZoneType.DEPARTMENT):
+                where_zones &= Q(
+                    detection_object__parcel__commune__department__id__in=geo_zones_map.get(
+                        GeoZoneType.DEPARTMENT
+                    )
+                )
+            if geo_zones_map.get(GeoZoneType.REGION):
+                where_zones &= Q(
+                    detection_object__parcel__commune__department__region__id__in=geo_zones_map.get(
+                        GeoZoneType.REGION
+                    )
+                )
+            wheres_zones.append(where_zones)
+            where &= where_zones
+
+            for i_previous in range(len(previous_tile_sets)):
+                previous_tile_set = previous_tile_sets[i_previous]
+
                 # custom logic here: we want to display the detections on the last tileset
                 # if the last tileset for a zone is partial, we also want to display detections for the last BACKGROUND tileset
                 if (
@@ -94,7 +127,7 @@ class TileSetPermission(
                 ):
                     continue
 
-                where &= ~Q(geometry__intersects=previous_tile_set.intersection)
+                where &= ~where_zones[i_previous]
 
             wheres.append(where)
 
