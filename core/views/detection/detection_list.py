@@ -3,8 +3,13 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
 from core.models.detection import Detection
+from django.http import JsonResponse
 from django.db.models import Prefetch
+from django.http import HttpResponse
+import csv
 
+from django.db.models import F
+from django.db.models import Count
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionValidationStatus,
@@ -30,6 +35,23 @@ from core.views.detection.utils import (
     BOOLEAN_CHOICES,
     INTERFACE_DRAWN_CHOICES,
 )
+from rest_framework.decorators import action
+from rest_framework import serializers
+from rest_framework.response import Response
+
+
+class DetectionListOverviewValidationStatusItemSerializer(serializers.Serializer):
+    detectionValidationStatus = serializers.CharField(
+        source="detection_validation_status"
+    )
+    count = serializers.IntegerField()
+
+
+class DetectionListOverviewSerializer(serializers.Serializer):
+    validationStatusesCount = DetectionListOverviewValidationStatusItemSerializer(
+        many=True,
+    )
+    totalCount = serializers.IntegerField()
 
 
 class DetectionListFilter(FilterSet):
@@ -154,7 +176,7 @@ class DetectionListFilter(FilterSet):
             "tile_set",
         ).select_related("detection_data")
 
-        return queryset.distinct()
+        return queryset
 
 
 class DetectionListViewSet(BaseViewSetMixin[Detection]):
@@ -162,3 +184,103 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
     serializer_class = DetectionListItemSerializer
     queryset = Detection.objects
     pagination_class = CachedCountLimitOffsetPagination
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+
+        queryset = queryset.distinct("id")
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(serializer.data)
+
+    @action(methods=["get"], detail=False, url_path="download-csv")
+    def download_csv(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        queryset = queryset.distinct("id")
+
+        response = HttpResponse(
+            content_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="somefilename.csv"'},
+        )
+        queryset = queryset.values_list(
+            "detection_object__id",
+            "detection_object__address",
+            "detection_object__object_type__name",
+            "detection_object__parcel__section",
+            "detection_object__parcel__num_parcel",
+            "score",
+            "detection_source",
+            "detection_data__detection_control_status",
+            "detection_data__detection_prescription_status",
+            "detection_data__detection_validation_status",
+            # geo_zones=StringAgg(
+            #     'detection_object__geo_custom_zones__geo_custom_zone_category__name',
+            #     delimiter=', ',
+            #     distinct=True,
+            #     ordering='detection_object__geo_custom_zones__geo_custom_zone_category__name'
+            # ),
+            # tile_sets=StringAgg(
+            #     'detection_object__tile_sets',
+            #     delimiter=', ',
+            #     distinct=True,
+            #     ordering='detection_object__tile_sets__date'
+            # ),
+        )
+
+        writer = csv.writer(response)
+        writer.writerow(
+            [
+                "Object n°",
+                "Adresse",
+                "Type",
+                "Parcelle (section)",
+                "Parcelle (numéro)",
+                "Score",
+                "Source",
+                "Statut de contrôle",
+                "Prescription",
+                "Statut de validation",
+            ]
+        )
+        writer.writerows(queryset.all())
+
+        return response
+
+    @action(methods=["get"], detail=False, url_path="overview")
+    def get_overview(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        queryset = (
+            queryset.values(
+                detection_validation_status=F(
+                    "detection_data__detection_validation_status"
+                ),
+            )
+            .annotate(
+                count=Count("id", distinct=True),
+            )
+            .order_by("detection_validation_status")
+        )
+
+        statuses_count_raw = queryset.all()
+        overview = DetectionListOverviewSerializer(
+            data={
+                "validationStatusesCount": [
+                    DetectionListOverviewValidationStatusItemSerializer(
+                        statuses_count
+                    ).data
+                    for statuses_count in statuses_count_raw
+                ],
+                "totalCount": sum(
+                    [status_count["count"] for status_count in statuses_count_raw]
+                ),
+            }
+        )
+
+        return JsonResponse(overview.initial_data)

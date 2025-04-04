@@ -18,6 +18,8 @@ def generate_query_cache_key(queryset):
 
 
 class CachedCountLimitOffsetPagination(LimitOffsetPagination):
+    use_distinct = True
+
     """
     A LimitOffsetPagination class that caches counts for filtered querysets.
     """
@@ -41,7 +43,10 @@ class CachedCountLimitOffsetPagination(LimitOffsetPagination):
 
         if count is None:
             # Cache miss, calculate the actual count
-            count = super().get_count(queryset)
+            if self.use_distinct:
+                count = queryset.distinct().count()
+            else:
+                count = super().get_count(queryset)
             # Store in cache
             cache.set(cache_key, count, self.cache_timeout)
 

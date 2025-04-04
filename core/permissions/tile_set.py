@@ -59,7 +59,6 @@ class TileSetPermission(
         return self.repository.initial_queryset
 
     def get_last_detections_filters(self, *args, **kwargs) -> Optional[Q]:
-        # TODO: do not use intersection BUT collectivities ids
         queryset = self.filter_(
             *args,
             **kwargs,
@@ -127,7 +126,7 @@ class TileSetPermission(
                 ):
                     continue
 
-                where &= ~where_zones[i_previous]
+                where &= ~wheres_zones[i_previous]
 
             wheres.append(where)
 

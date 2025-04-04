@@ -12,8 +12,7 @@ from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from simple_history.models import HistoricalRecords
 
-from core.models.tile_set import TileSet, TileSetType
-from core.repository.tile_set import DEFAULT_VALUES
+from core.models.tile_set import TileSet
 
 
 class DetectionObject(

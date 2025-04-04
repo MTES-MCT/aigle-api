@@ -12,7 +12,6 @@ from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
 from core.models.user_group import UserGroupRight
-from core.repository.tile_set import DEFAULT_VALUES
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.detection_data import DetectionDataInputSerializer
 

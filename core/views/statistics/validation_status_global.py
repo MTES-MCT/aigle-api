@@ -43,9 +43,9 @@ class StatisticsValidationStatusGlobalView(APIView):
             regions_uuids=endpoint_serializer.validated_data.get("regionsUuids"),
         )
 
-        detection_tilesets_filter = TileSetPermission(
+        tile_sets = TileSetPermission(
             user=self.request.user,
-        ).get_last_detections_filters(
+        ).list_(
             filter_uuid_in=endpoint_serializer.validated_data.get("tileSetsUuids"),
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
@@ -74,9 +74,7 @@ class StatisticsValidationStatusGlobalView(APIView):
                 )
                 or [],
             ),
-            filter_tile_set_uuid_in=endpoint_serializer.validated_data.get(
-                "tileSetsUuids"
-            ),
+            filter_tile_set_uuid_in=[tile_set.uuid for tile_set in tile_sets],
             filter_detection_validation_status_in=endpoint_serializer.validated_data.get(
                 "detectionValidationStatuses"
             ),
@@ -86,7 +84,6 @@ class StatisticsValidationStatusGlobalView(APIView):
             filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
             filter_collectivities=collectivity_filter,
         )
-        queryset = queryset.filter(detection_tilesets_filter)
         queryset = queryset.values(
             detection_validation_status=F(
                 "detection_data__detection_validation_status"
