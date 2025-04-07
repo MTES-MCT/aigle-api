@@ -38,6 +38,8 @@ from core.views.detection.utils import (
 from rest_framework.decorators import action
 from rest_framework import serializers
 from rest_framework.response import Response
+from django.contrib.postgres.aggregates import ArrayAgg
+from django.db.models.functions import Coalesce
 
 
 class DetectionListOverviewValidationStatusItemSerializer(serializers.Serializer):
@@ -203,7 +205,6 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
     @action(methods=["get"], detail=False, url_path="download-csv")
     def download_csv(self, request):
         queryset = self.filter_queryset(self.get_queryset())
-        queryset = queryset.distinct("id")
 
         response = HttpResponse(
             content_type="text/csv",
@@ -220,19 +221,18 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
             "detection_data__detection_control_status",
             "detection_data__detection_prescription_status",
             "detection_data__detection_validation_status",
-            # geo_zones=StringAgg(
-            #     'detection_object__geo_custom_zones__geo_custom_zone_category__name',
-            #     delimiter=', ',
-            #     distinct=True,
-            #     ordering='detection_object__geo_custom_zones__geo_custom_zone_category__name'
-            # ),
-            # tile_sets=StringAgg(
-            #     'detection_object__tile_sets',
-            #     delimiter=', ',
-            #     distinct=True,
-            #     ordering='detection_object__tile_sets__date'
-            # ),
+        ).annotate(
+            tile_sets=ArrayAgg("detection_object__tile_sets__name", distinct=True),
+            custom_zones=ArrayAgg(
+                Coalesce(
+                    "detection_object__geo_custom_zones__geo_custom_zone_category__name",
+                    "detection_object__geo_custom_zones__name",
+                ),
+                distinct=True,
+            ),
         )
+
+        results = combine_duplicate_rows(list(queryset))
 
         writer = csv.writer(response)
         writer.writerow(
@@ -247,9 +247,11 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
                 "Statut de contrôle",
                 "Prescription",
                 "Statut de validation",
+                "Millésimes",
+                "Zones à enjeux",
             ]
         )
-        writer.writerows(queryset.all())
+        writer.writerows(results)
 
         return response
 
@@ -284,3 +286,43 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
         )
 
         return JsonResponse(overview.initial_data)
+
+
+# utils
+
+
+def combine_duplicate_rows(results):
+    combined_data = {}
+
+    # Pre-define indices for direct access - faster than repeated indexing
+    ID_INDEX = 0
+    TILE_SETS_INDEX = 10
+    CUSTOM_ZONES_INDEX = 11
+
+    for row in results:
+        obj_id = row[ID_INDEX]
+
+        if obj_id not in combined_data:
+            # Use the entire tuple directly - avoiding dict creation for base data
+            combined_data[obj_id] = [
+                row,
+                set(row[TILE_SETS_INDEX]),
+                set(row[CUSTOM_ZONES_INDEX]),
+            ]
+        else:
+            # Only update the sets, which is what varies between duplicates
+            combined_data[obj_id][1].update(row[TILE_SETS_INDEX])
+            combined_data[obj_id][2].update(row[CUSTOM_ZONES_INDEX])
+
+    # Convert to final format
+    final_results = []
+    for base_data, tile_sets, custom_zones in combined_data.values():
+        # Create dictionary only once per unique ID
+        result = [
+            *base_data[:TILE_SETS_INDEX],
+            ", ".join(tile_sets),
+            ", ".join(custom_zones),
+        ]
+        final_results.append(result)
+
+    return final_results
