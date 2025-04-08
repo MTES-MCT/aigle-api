@@ -2,6 +2,7 @@ from collections import defaultdict
 from typing import List, Optional
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user import User, UserRole
+from core.models.user_group import UserGroupRight
 from core.permissions.base import BasePermission
 from core.repository.base import CollectivityRepoFilter
 from core.repository.user import UserRepository
@@ -11,6 +12,7 @@ from django.db.models import QuerySet
 from django.contrib.gis.db.models.aggregates import Union
 from django.contrib.gis.db.models.functions import Intersection
 from django.core.exceptions import BadRequest
+from django.core.exceptions import PermissionDenied
 
 
 class UserPermission(
@@ -99,3 +101,55 @@ class UserPermission(
         ).get("total_geo_union")
 
         return None if accessible_geometry.empty else accessible_geometry
+
+    def _has_rights(
+        self,
+        geometry: MultiPolygon,
+        user_group_right: UserGroupRight,
+        raise_exception: bool = False,
+    ):
+        if self.user.user_role == UserRole.SUPER_ADMIN:
+            return True
+
+        geo_zones_editables = GeoZone.objects.filter(
+            user_groups__user_user_groups__user=self.user,
+            user_groups__user_user_groups__user_group_rights__contains=[
+                user_group_right
+            ],
+        )
+        geometry_union = Union("geometry")
+        geo_zones_editables = geo_zones_editables.annotate(
+            geometry_union=geometry_union
+        )
+        geo_zones_editables.filter(geometry_union__contains=geometry)
+
+        can_edit = geo_zones_editables.exists()
+
+        if raise_exception and not can_edit:
+            raise PermissionDenied(
+                "Vous n'avez pas les droits suffisants sur ces détections"
+            )
+
+        return can_edit
+
+    def can_edit(
+        self,
+        geometry: MultiPolygon,
+        raise_exception: bool = False,
+    ) -> bool:
+        return self._has_rights(
+            geometry=geometry,
+            user_group_right=UserGroupRight.WRITE,
+            raise_exception=raise_exception,
+        )
+
+    def can_read(
+        self,
+        geometry: MultiPolygon,
+        raise_exception: bool = False,
+    ) -> bool:
+        return self._has_rights(
+            geometry=geometry,
+            user_group_right=UserGroupRight.READ,
+            raise_exception=raise_exception,
+        )

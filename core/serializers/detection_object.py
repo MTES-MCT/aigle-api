@@ -6,8 +6,8 @@ from core.models.detection_data import DetectionValidationStatus
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
-from core.models.user_group import UserGroupRight
 from core.permissions.tile_set import TileSetPermission
+from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
 from django.contrib.gis.db.models.functions import Centroid
 
@@ -238,10 +238,8 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
 
         latest_detection = get_most_recent_detection(detection_object=instance)
 
-        centroid = Centroid(latest_detection.geometry)
-
-        get_user_group_rights(
-            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=user).can_edit(
+            geometry=latest_detection.geometry, raise_exception=True
         )
 
         for key, value in validated_data.items():

@@ -6,14 +6,11 @@ from core.models.detection_data import (
 )
 from core.models.detection import Detection
 from core.models.tile_set import TileSet, TileSetType
-from core.models.user_group import UserGroupRight
+from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
-from django.contrib.gis.db.models.functions import Centroid
 from dateutil.relativedelta import relativedelta
 from simple_history.utils import bulk_create_with_history
 from rest_framework import serializers
-
-from core.utils.data_permissions import get_user_group_rights
 
 
 class DetectionDataSerializer(UuidTimestampedModelSerializerMixin):
@@ -43,10 +40,9 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
 
     def update(self, instance: DetectionData, validated_data):
         user = self.context["request"].user
-        centroid = Centroid(instance.detection.geometry)
 
-        get_user_group_rights(
-            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=user).can_edit(
+            geometry=instance.detection.geometry, raise_exception=True
         )
 
         # if object get prescribed, we add data for the prescribed years

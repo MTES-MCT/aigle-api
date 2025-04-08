@@ -17,6 +17,7 @@ djangorestframework-camel-case==1.4.2
 djangorestframework-gis==1.0
 djangorestframework-simplejwt==5.3.1
 djoser==2.2.2
+et_xmlfile==2.0.0
 filelock==3.14.0
 gunicorn==22.0.0
 identify==2.5.36
@@ -24,6 +25,7 @@ idna==3.7
 Markdown==3.6
 nodeenv==1.9.1
 oauthlib==3.2.2
+openpyxl==3.1.5
 packaging==24.1
 platformdirs==4.2.2
 pre-commit==3.7.1

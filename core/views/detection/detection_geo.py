@@ -16,7 +16,6 @@ from rest_framework.status import HTTP_200_OK, HTTP_202_ACCEPTED
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSetStatus, TileSetType
-from core.models.user_group import UserGroupRight
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.repository.detection import (
@@ -33,7 +32,6 @@ from core.serializers.detection import (
     DetectionUpdateSerializer,
 )
 from core.utils.data_permissions import (
-    get_user_group_rights,
     get_user_object_types_with_status,
 )
 from simple_history.utils import bulk_update_with_history
@@ -46,6 +44,7 @@ from core.views.detection.utils import (
     filter_prescripted,
     filter_score,
 )
+from django.contrib.gis.geos import MultiPolygon
 
 
 class DetectionGeoFilter(FilterSet):
@@ -199,10 +198,10 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         )
         detections = detections_queryset.all()
 
-        points = [detection.geometry.centroid for detection in detections]
+        geometries = [detection.geometry for detection in detections]
 
-        get_user_group_rights(
-            user=request.user, points=points, raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=self.request.user).can_edit(
+            geometry=MultiPolygon(geometries), raise_exception=True
         )
 
         detection_data_fields_to_update = []
@@ -233,6 +232,14 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
                         detection.detection_data,
                         field,
                         serializer.validated_data[field],
+                    )
+
+                if (
+                    detection.detection_data.detection_validation_status
+                    == DetectionValidationStatus.DETECTED_NOT_VERIFIED
+                ):
+                    detection.detection_data.detection_validation_status = (
+                        DetectionValidationStatus.SUSPECT
                     )
 
                 detection_datas_to_update.append(detection.detection_data)

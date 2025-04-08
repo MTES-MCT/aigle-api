@@ -2,6 +2,12 @@ from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
+from core.contants.labels import (
+    DETECTION_CONTROL_STATUSES_NAMES_MAP,
+    DETECTION_PRESCRIPTION_STATUSES_NAMES_MAP,
+    DETECTION_SOURCE_NAMES_MAP,
+    DETECTION_VALIDATION_STATUSES_NAMES_MAP,
+)
 from core.models.detection import Detection
 from django.http import JsonResponse
 from django.db.models import Prefetch
@@ -12,6 +18,7 @@ from django.db.models import F
 from django.db.models import Count
 from core.models.detection_data import (
     DetectionControlStatus,
+    DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
@@ -40,6 +47,9 @@ from rest_framework import serializers
 from rest_framework.response import Response
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models.functions import Coalesce
+from openpyxl import Workbook
+from io import BytesIO
+from core.utils.orm import get_list_values_list
 
 
 class DetectionListOverviewValidationStatusItemSerializer(serializers.Serializer):
@@ -54,6 +64,28 @@ class DetectionListOverviewSerializer(serializers.Serializer):
         many=True,
     )
     totalCount = serializers.IntegerField()
+
+
+DOWNLOAD_FILE_HEADERS = [
+    "Object n°",
+    "Adresse",
+    "Type",
+    "Parcelle (section)",
+    "Parcelle (numéro)",
+    "Score",
+    "Source",
+    "Statut de contrôle",
+    "Prescription",
+    "Statut de validation",
+    "Millésimes",
+    "Zones à enjeux",
+]
+
+
+class DownloadParamsSerializer(serializers.Serializer):
+    FORMAT_CHOICES = ["csv", "xlsx"]
+
+    outputFormat = serializers.ChoiceField(choices=FORMAT_CHOICES)
 
 
 class DetectionListFilter(FilterSet):
@@ -202,15 +234,14 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
 
         return Response(serializer.data)
 
-    @action(methods=["get"], detail=False, url_path="download-csv")
-    def download_csv(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
+    @action(methods=["get"], detail=False, url_path="download")
+    def download(self, request):
+        params_serializer = DownloadParamsSerializer(data=request.GET)
+        params_serializer.is_valid(raise_exception=True)
 
-        response = HttpResponse(
-            content_type="text/csv",
-            headers={"Content-Disposition": 'attachment; filename="somefilename.csv"'},
-        )
-        queryset = queryset.values_list(
+        queryset = self.filter_queryset(self.get_queryset())
+        queryset = get_list_values_list(
+            queryset,
             "detection_object__id",
             "detection_object__address",
             "detection_object__object_type__name",
@@ -232,26 +263,38 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
             ),
         )
 
-        results = combine_duplicate_rows(list(queryset))
+        results = process_rows(list(queryset))
 
-        writer = csv.writer(response)
-        writer.writerow(
-            [
-                "Object n°",
-                "Adresse",
-                "Type",
-                "Parcelle (section)",
-                "Parcelle (numéro)",
-                "Score",
-                "Source",
-                "Statut de contrôle",
-                "Prescription",
-                "Statut de validation",
-                "Millésimes",
-                "Zones à enjeux",
-            ]
-        )
-        writer.writerows(results)
+        response = HttpResponse()
+        if params_serializer.validated_data["outputFormat"] == "xlsx":
+            response["Content-Disposition"] = (
+                'attachment; filename="detection_list.xlsx"'
+            )
+            response.headers["Content-Type"] = (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        if params_serializer.validated_data["outputFormat"] == "csv":
+            response["Content-Disposition"] = (
+                'attachment; filename="detection_list.csv"'
+            )
+            response.headers["Content-Type"] = "text/csv"
+
+        if params_serializer.validated_data["outputFormat"] == "xlsx":
+            workbook = Workbook()
+            worksheet = workbook.active
+            worksheet.append(DOWNLOAD_FILE_HEADERS)
+            for row in results:
+                worksheet.append(row)
+            buffer = BytesIO()
+            workbook.save(buffer)
+            buffer.seek(0)
+            response.write(buffer.getvalue())
+
+        if params_serializer.validated_data["outputFormat"] == "csv":
+            writer = csv.writer(response)
+            writer.writerow(DOWNLOAD_FILE_HEADERS)
+            writer.writerows(results)
 
         return response
 
@@ -291,26 +334,52 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
 # utils
 
 
-def combine_duplicate_rows(results):
+def process_rows(results):
     combined_data = {}
 
-    # Pre-define indices for direct access - faster than repeated indexing
     ID_INDEX = 0
+    SCORE_INDEX = 5
+    SOURCE_INDEX = 6
+    DETECTION_CONTROL_STATUS_INDEX = 7
+    DETECTION_PRESCRIPTION_STATUS_INDEX = 8
+    DETECTION_VALIDATION_STATUS_INDEX = 9
     TILE_SETS_INDEX = 10
     CUSTOM_ZONES_INDEX = 11
 
     for row in results:
         obj_id = row[ID_INDEX]
 
+        # labelize
+        row[SOURCE_INDEX] = DETECTION_SOURCE_NAMES_MAP.get(
+            row[SOURCE_INDEX], row[SOURCE_INDEX]
+        )
+        row[DETECTION_CONTROL_STATUS_INDEX] = DETECTION_CONTROL_STATUSES_NAMES_MAP.get(
+            row[DETECTION_CONTROL_STATUS_INDEX], row[DETECTION_CONTROL_STATUS_INDEX]
+        )
+        row[DETECTION_PRESCRIPTION_STATUS_INDEX] = (
+            DETECTION_PRESCRIPTION_STATUSES_NAMES_MAP.get(
+                row[DETECTION_PRESCRIPTION_STATUS_INDEX]
+                or DetectionPrescriptionStatus.NOT_PRESCRIBED
+            )
+        )
+        row[DETECTION_VALIDATION_STATUS_INDEX] = (
+            DETECTION_VALIDATION_STATUSES_NAMES_MAP.get(
+                row[DETECTION_VALIDATION_STATUS_INDEX],
+                row[DETECTION_VALIDATION_STATUS_INDEX],
+            )
+        )
+
+        # format score
+        row[SCORE_INDEX] = "{:.2f}".format(row[SCORE_INDEX] * 100)
+
+        # combine duplicates
         if obj_id not in combined_data:
-            # Use the entire tuple directly - avoiding dict creation for base data
             combined_data[obj_id] = [
                 row,
                 set(row[TILE_SETS_INDEX]),
                 set(row[CUSTOM_ZONES_INDEX]),
             ]
         else:
-            # Only update the sets, which is what varies between duplicates
             combined_data[obj_id][1].update(row[TILE_SETS_INDEX])
             combined_data[obj_id][2].update(row[CUSTOM_ZONES_INDEX])
 

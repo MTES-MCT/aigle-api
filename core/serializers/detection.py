@@ -11,7 +11,7 @@ from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
-from core.models.user_group import UserGroupRight
+from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.detection_data import DetectionDataInputSerializer
 
@@ -22,11 +22,11 @@ from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.object_type import ObjectTypeSerializer
 from core.serializers.tile import TileMinimalSerializer, TileSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
-from django.contrib.gis.db.models.functions import Centroid
 
-from core.utils.data_permissions import get_user_group_rights
 from core.utils.detection import get_linked_detections
 from core.utils.prescription import compute_prescription
+
+from django.contrib.gis.db.models.functions import Centroid
 
 
 class DetectionMinimalSerializer(
@@ -155,10 +155,9 @@ class DetectionInputSerializer(DetectionSerializer):
 
     def create(self, validated_data):
         user = self.context["request"].user
-        centroid = Centroid(validated_data["geometry"])
 
-        get_user_group_rights(
-            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=user).can_edit(
+            geometry=validated_data["geometry"], raise_exception=True
         )
 
         # create or retrieve detection object
@@ -177,6 +176,8 @@ class DetectionInputSerializer(DetectionSerializer):
                 raise serializers.ValidationError(
                     f"Tile set with following uuid not found: {tile_set_uuid}"
                 )
+
+        centroid = Centroid(validated_data["geometry"])
 
         tile = Tile.objects.filter(
             geometry__contains=centroid, z=TILE_DEFAULT_ZOOM
@@ -303,10 +304,9 @@ class DetectionUpdateSerializer(DetectionSerializer):
 
     def update(self, instance: Detection, validated_data):
         user = self.context["request"].user
-        centroid = Centroid(instance.geometry)
 
-        get_user_group_rights(
-            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=user).can_edit(
+            geometry=instance.geometry, raise_exception=True
         )
 
         object_type_uuid = validated_data.get("object_type_uuid")
