@@ -350,6 +350,8 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
                 distinct=True,
             ),
         )
+        # safety to not consume too much memory and kill the api
+        queryset = queryset[:1000]
 
         results = process_rows(list(queryset))
 
