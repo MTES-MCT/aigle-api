@@ -1,7 +1,8 @@
 from common.views.base import BaseViewSetMixin
 
-from django_filters import FilterSet
-from django_filters import NumberFilter, ChoiceFilter
+from django_filters import FilterSet, NumberFilter, ChoiceFilter, OrderingFilter
+from django.db.models import QuerySet
+
 from core.contants.labels import (
     DETECTION_CONTROL_STATUSES_NAMES_MAP,
     DETECTION_PRESCRIPTION_STATUSES_NAMES_MAP,
@@ -14,8 +15,7 @@ from django.db.models import Prefetch
 from django.http import HttpResponse
 import csv
 
-from django.db.models import F
-from django.db.models import Count
+from django.db.models import F, Case, When, Value, Count
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionPrescriptionStatus,
@@ -88,6 +88,74 @@ class DownloadParamsSerializer(serializers.Serializer):
     outputFormat = serializers.ChoiceField(choices=FORMAT_CHOICES)
 
 
+DEFAULT_ORDERING = "id"
+DETECTION_CONTROL_STATUSES_ORDERED = [
+    DetectionControlStatus.NOT_CONTROLLED,
+    DetectionControlStatus.CONTROLLED_FIELD,
+    DetectionControlStatus.PRIOR_LETTER_SENT,
+    DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+    DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+    DetectionControlStatus.REHABILITATED,
+    DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
+]
+
+# returns order_bys and distincts
+
+
+def order_queryset(queryset: QuerySet[Detection], ordering: str) -> QuerySet[Detection]:
+    if "parcel" in ordering:
+        distincts = [
+            "detection_object__parcel__section",
+            "detection_object__parcel__num_parcel",
+        ]
+
+        if ordering.startswith("-"):
+            order_bys = [f"-{field}" for field in distincts]
+        else:
+            order_bys = distincts
+
+    elif "detectionControlStatus" in ordering:
+        if ordering.startswith("-"):
+            detection_control_statuses_ordered = list(
+                reversed(DETECTION_CONTROL_STATUSES_ORDERED)
+            )
+        else:
+            detection_control_statuses_ordered = DETECTION_CONTROL_STATUSES_ORDERED
+
+        whens = [
+            When(
+                detection_data__detection_control_status=detection_control_status,
+                then=Value(i),
+            )
+            for i, detection_control_status in enumerate(
+                detection_control_statuses_ordered
+            )
+        ]
+
+        case_expression = Case(*whens)
+
+        queryset = (
+            queryset.annotate(status_order=case_expression)
+            .distinct("status_order", DEFAULT_ORDERING)
+            .order_by("status_order", DEFAULT_ORDERING)
+        )
+
+        return queryset
+
+    else:
+        order_bys = [ordering]
+        distincts = [ordering.lstrip("-")]
+
+    if DEFAULT_ORDERING not in ordering:
+        order_bys = [*order_bys, DEFAULT_ORDERING]
+        distincts = [*distincts, DEFAULT_ORDERING]
+
+    queryset = queryset.order_by(*order_bys)
+    queryset = queryset.distinct(*distincts)
+
+    return queryset
+
+
 class DetectionListFilter(FilterSet):
     class Meta:
         model = Detection
@@ -122,6 +190,24 @@ class DetectionListFilter(FilterSet):
     communesUuids = UuidInFilter(method="pass_")
     departmentsUuids = UuidInFilter(method="pass_")
     regionsUuids = UuidInFilter(method="pass_")
+
+    ordering = OrderingFilter(
+        fields=["score", "id", "parcel", "detectionControlStatus"], method="pass_"
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        view = (
+            kwargs.get("request", None).parser_context.get("view")
+            if "request" in kwargs
+            else None
+        )
+
+        if view and view.action in ["list", "download"]:
+            if not self.data.get("ordering"):
+                self.data = self.data.copy()
+                self.data["ordering"] = DEFAULT_ORDERING
 
     def pass_(self, queryset, name, value):
         return queryset
@@ -177,7 +263,6 @@ class DetectionListFilter(FilterSet):
             filter_prescribed=to_bool(self.data.get("prescripted")),
             filter_collectivities=collectivity_filter,
         )
-        queryset = queryset.order_by("id")
         queryset = queryset.filter(detection_tilesets_filter)
         queryset = queryset.filter(detection_object__tile_sets__id__in=[17, 25, 27, 28])
         queryset = queryset.defer(
@@ -210,6 +295,11 @@ class DetectionListFilter(FilterSet):
             "tile_set",
         ).select_related("detection_data")
 
+        ordering = self.data.get("ordering")
+
+        if ordering:
+            queryset = order_queryset(queryset=queryset, ordering=ordering)
+
         return queryset
 
 
@@ -221,8 +311,6 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
-
-        queryset = queryset.distinct("id")
 
         page = self.paginate_queryset(queryset)
 

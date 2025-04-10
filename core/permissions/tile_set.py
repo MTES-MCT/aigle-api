@@ -66,13 +66,15 @@ class TileSetPermission(
         )
         queryset = queryset.prefetch_related("geo_zones")
         # if tilesets have exactly the same geozones, we only retrieve the most recent
-        tile_sets = queryset.annotate(
+        queryset = queryset.annotate(
             row_number=Window(
                 expression=RowNumber(),
                 partition_by=[F("geo_zones")],  # Group by GeoZone
                 order_by=F("date").desc(),
             )
-        ).filter(row_number=1)
+        )
+
+        tile_sets = queryset.filter(row_number=1)
 
         wheres_zones: List[Q] = []
         wheres: List[Q] = []

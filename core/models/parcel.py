@@ -21,7 +21,7 @@ class Parcel(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
 
     prefix = models.CharField(max_length=DEFAULT_MAX_LENGTH)
     section = models.CharField(max_length=DEFAULT_MAX_LENGTH)
-    num_parcel = models.CharField(max_length=DEFAULT_MAX_LENGTH)
+    num_parcel = models.IntegerField()
 
     contenance = models.IntegerField()
     arpente = models.BooleanField()
