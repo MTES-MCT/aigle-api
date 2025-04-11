@@ -339,6 +339,7 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
             "uuid",
             "id",
             "detection_object_id",
+            "detection_object_uuid",
             "address",
             "detection_source",
             "score",
@@ -353,6 +354,9 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
 
     detection_object_id = serializers.IntegerField(
         source="detection_object.id", read_only=True
+    )
+    detection_object_uuid = serializers.UUIDField(
+        source="detection_object.uuid", read_only=True
     )
     address = serializers.CharField(source="detection_object.address", read_only=True)
     parcel = ParcelMinimalSerializer(read_only=True, source="detection_object.parcel")
