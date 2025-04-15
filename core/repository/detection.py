@@ -127,17 +127,17 @@ class DetectionRepository(
 
             if filter_collectivities.commune_ids:
                 q |= Q(
-                    detection_object__parcel__commune__id__in=filter_collectivities.commune_ids
+                    detection_object__commune__id__in=filter_collectivities.commune_ids
                 )
 
             if filter_collectivities.department_ids:
                 q |= Q(
-                    detection_object__parcel__commune__department__id__in=filter_collectivities.department_ids
+                    detection_object__commune__department__id__in=filter_collectivities.department_ids
                 )
 
             if filter_collectivities.region_ids:
                 q |= Q(
-                    detection_object__parcel__commune__department__region__id__in=filter_collectivities.region_ids
+                    detection_object__commune__department__region__id__in=filter_collectivities.region_ids
                 )
 
             queryset = queryset.filter(q)

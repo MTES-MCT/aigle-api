@@ -18,6 +18,7 @@ from django.contrib.gis.geos import GEOSGeometry
 from django.contrib.gis.db.models.functions import Centroid
 
 
+from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
@@ -358,10 +359,32 @@ class Command(BaseCommand):
                     linked_detection.detection_data.detection_validation_status
                 )
         else:
-            parcel = Parcel.objects.filter(geometry__contains=centroid).first()
+            parcel = (
+                Parcel.objects.filter(geometry__contains=centroid)
+                .select_related("commune")
+                .defer("geometry", "commune__geometry")
+                .first()
+            )
+
+            commune_id = None
+            if parcel and parcel.commune:
+                commune_id = parcel.commune.id
+            else:
+                commune_ids = (
+                    GeoZone.objects.filter(
+                        geo_zone_type=GeoZoneType.COMMUNE, geometry__contains=centroid
+                    )
+                    .values_list("id")
+                    .first()
+                )
+
+                if commune_ids:
+                    commune_id = commune_ids[0]
+
             detection_object = DetectionObject(
                 object_type=object_type,
                 parcel=parcel,
+                commune_id=commune_id,
                 address=serialized_detection["address"],
                 batch_id=self.batch_id,
                 import_id=serialized_detection["id"],
