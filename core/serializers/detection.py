@@ -7,6 +7,7 @@ from core.models.detection_data import (
 )
 from core.models.detection_object import DetectionObject
 from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
@@ -219,8 +220,31 @@ class DetectionInputSerializer(DetectionSerializer):
                 detection_object = DetectionObject(**detection_object_data)
                 detection_object.object_type = object_type
 
-                parcel = Parcel.objects.filter(geometry__contains=centroid).first()
+                parcel = (
+                    Parcel.objects.filter(geometry__contains=centroid)
+                    .select_related("commune")
+                    .defer("geometry", "commune__geometry")
+                    .first()
+                )
+
+                commune_id = None
+                if parcel and parcel.commune:
+                    commune_id = parcel.commune.id
+                else:
+                    commune_ids = (
+                        GeoZone.objects.filter(
+                            geo_zone_type=GeoZoneType.COMMUNE,
+                            geometry__contains=centroid,
+                        )
+                        .values_list("id")
+                        .first()
+                    )
+
+                    if commune_ids:
+                        commune_id = commune_ids[0]
+
                 detection_object.parcel = parcel
+                detection_object.commune_id = commune_id
 
                 detection_object.save()
 

@@ -24,7 +24,9 @@ AS SELECT core_tileset.id,
   GROUP BY core_tileset.id, core_tileset.name;
 
 CREATE OR REPLACE VIEW public.users
-AS SELECT DISTINCT ON (core_user.id) core_user.id,
+AS SELECT DISTINCT ON (core_user.id) 
+    core_user.id,
+    core_user.uuid,
     core_user.email,
     core_user.user_role,
     core_user.last_position,

@@ -98,19 +98,19 @@ class TileSetPermission(
             where_zones = Q()
             if geo_zones_map.get(GeoZoneType.COMMUNE):
                 where_zones &= Q(
-                    detection_object__parcel__commune__id__in=geo_zones_map.get(
+                    detection_object__commune__id__in=geo_zones_map.get(
                         GeoZoneType.COMMUNE
                     )
                 )
             if geo_zones_map.get(GeoZoneType.DEPARTMENT):
                 where_zones &= Q(
-                    detection_object__parcel__commune__department__id__in=geo_zones_map.get(
+                    detection_object__commune__department__id__in=geo_zones_map.get(
                         GeoZoneType.DEPARTMENT
                     )
                 )
             if geo_zones_map.get(GeoZoneType.REGION):
                 where_zones &= Q(
-                    detection_object__parcel__commune__department__region__id__in=geo_zones_map.get(
+                    detection_object__commune__department__region__id__in=geo_zones_map.get(
                         GeoZoneType.REGION
                     )
                 )
