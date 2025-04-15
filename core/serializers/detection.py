@@ -11,20 +11,22 @@ from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
-from core.models.user_group import UserGroupRight
+from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.detection_data import DetectionDataInputSerializer
 
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from rest_framework import serializers
 
-from core.serializers.tile import TileSerializer
+from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
+from core.serializers.object_type import ObjectTypeSerializer
+from core.serializers.tile import TileMinimalSerializer, TileSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
-from django.contrib.gis.db.models.functions import Centroid
 
-from core.utils.data_permissions import get_user_group_rights
 from core.utils.detection import get_linked_detections
 from core.utils.prescription import compute_prescription
+
+from django.contrib.gis.db.models.functions import Centroid
 
 
 class DetectionMinimalSerializer(
@@ -85,7 +87,7 @@ class DetectionWithTileMinimalSerializer(DetectionSerializer):
             "tile",
         ]
 
-    tile = TileSerializer(read_only=True)
+    tile = TileMinimalSerializer(read_only=True)
 
 
 class DetectionWithTileSerializer(DetectionWithTileMinimalSerializer):
@@ -94,6 +96,7 @@ class DetectionWithTileSerializer(DetectionWithTileMinimalSerializer):
             "tile_set",
         ]
 
+    tile = TileSerializer(read_only=True)
     tile_set = TileSetMinimalSerializer(read_only=True)
 
 
@@ -152,10 +155,9 @@ class DetectionInputSerializer(DetectionSerializer):
 
     def create(self, validated_data):
         user = self.context["request"].user
-        centroid = Centroid(validated_data["geometry"])
 
-        get_user_group_rights(
-            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=user).can_edit(
+            geometry=validated_data["geometry"], raise_exception=True
         )
 
         # create or retrieve detection object
@@ -174,6 +176,8 @@ class DetectionInputSerializer(DetectionSerializer):
                 raise serializers.ValidationError(
                     f"Tile set with following uuid not found: {tile_set_uuid}"
                 )
+
+        centroid = Centroid(validated_data["geometry"])
 
         tile = Tile.objects.filter(
             geometry__contains=centroid, z=TILE_DEFAULT_ZOOM
@@ -223,7 +227,7 @@ class DetectionInputSerializer(DetectionSerializer):
                 # update geo_custom_zones
 
                 geo_custom_zones = GeoCustomZone.objects.filter(
-                    geometry__intersects=validated_data["geometry"]
+                    geometry__contains=validated_data["geometry"]
                 ).all()
 
                 detection_object.geo_custom_zones.add(*geo_custom_zones)
@@ -300,10 +304,9 @@ class DetectionUpdateSerializer(DetectionSerializer):
 
     def update(self, instance: Detection, validated_data):
         user = self.context["request"].user
-        centroid = Centroid(instance.geometry)
 
-        get_user_group_rights(
-            user=user, points=[centroid], raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=user).can_edit(
+            geometry=instance.geometry, raise_exception=True
         )
 
         object_type_uuid = validated_data.get("object_type_uuid")
@@ -325,3 +328,54 @@ class DetectionUpdateSerializer(DetectionSerializer):
         instance.save()
 
         return instance
+
+
+class DetectionListItemSerializer(serializers.ModelSerializer):
+    from core.serializers.parcel import ParcelMinimalSerializer
+
+    class Meta:
+        model = Detection
+        fields = [
+            "uuid",
+            "id",
+            "detection_object_id",
+            "detection_object_uuid",
+            "address",
+            "detection_source",
+            "score",
+            "parcel",
+            "geo_custom_zones",
+            "object_type",
+            "detection_control_status",
+            "detection_validation_status",
+            "detection_prescription_status",
+            "tile_sets",
+        ]
+
+    detection_object_id = serializers.IntegerField(
+        source="detection_object.id", read_only=True
+    )
+    detection_object_uuid = serializers.UUIDField(
+        source="detection_object.uuid", read_only=True
+    )
+    address = serializers.CharField(source="detection_object.address", read_only=True)
+    parcel = ParcelMinimalSerializer(read_only=True, source="detection_object.parcel")
+    geo_custom_zones = GeoCustomZoneSerializer(
+        many=True, read_only=True, source="detection_object.geo_custom_zones"
+    )
+    object_type = ObjectTypeSerializer(
+        read_only=True, source="detection_object.object_type"
+    )
+    detection_control_status = serializers.ChoiceField(
+        source="detection_data.detection_control_status",
+        choices=DetectionControlStatus.choices,
+    )
+    detection_validation_status = serializers.ChoiceField(
+        source="detection_data.detection_validation_status",
+        choices=DetectionValidationStatus.choices,
+    )
+    detection_prescription_status = serializers.ChoiceField(
+        source="detection_data.detection_prescription_status",
+        choices=DetectionPrescriptionStatus.choices,
+    )
+    tile_sets = TileSetMinimalSerializer(source="detection_object.tile_sets", many=True)

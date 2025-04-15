@@ -4,6 +4,7 @@ from django_filters import FilterSet, CharFilter
 from django.db.models import Q
 
 from core.models.geo_commune import GeoCommune
+from core.permissions.user import UserPermission
 from core.serializers.geo_commune import (
     GeoCommuneDetailSerializer,
     GeoCommuneSerializer,
@@ -24,6 +25,17 @@ class GeoCommuneFilter(FilterSet):
     def search(self, queryset, name, value):
         value_normalized = normalize(value)
 
+        collectivity_filter = UserPermission(
+            user=self.request.user
+        ).get_collectivity_filter()
+
+        if collectivity_filter:
+            queryset = queryset.filter(
+                Q(id__in=collectivity_filter.commune_ids or [])
+                | Q(department__id__in=collectivity_filter.department_ids or [])
+                | Q(department__region__id__in=collectivity_filter.region_ids or [])
+            )
+
         queryset = queryset.annotate(
             match_score=Case(
                 When(name_normalized__iexact=value_normalized, then=Value(5)),
@@ -36,10 +48,14 @@ class GeoCommuneFilter(FilterSet):
             )
         )
 
-        return queryset.filter(
-            Q(name_normalized__icontains=value_normalized)
-            | Q(iso_code__icontains=value_normalized)
-        ).order_by("-match_score", Length("name"))
+        return (
+            queryset.filter(
+                Q(name_normalized__icontains=value_normalized)
+                | Q(iso_code__icontains=value_normalized)
+            )
+            .order_by("-match_score", Length("name"))
+            .distinct()
+        )
 
 
 class GeoCommuneViewSet(BaseViewSetMixin[GeoCommune]):

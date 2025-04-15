@@ -1,8 +1,5 @@
 from common.views.base import BaseViewSetMixin
 
-from operator import or_
-from django.db.models import Q
-from functools import reduce
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
 from core.contants.geo import SRID
@@ -19,8 +16,13 @@ from rest_framework.status import HTTP_200_OK, HTTP_202_ACCEPTED
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSetStatus, TileSetType
-from core.models.user import UserRole
-from core.models.user_group import UserGroupRight
+from core.permissions.tile_set import TileSetPermission
+from core.permissions.user import UserPermission
+from core.repository.detection import (
+    DetectionRepository,
+    RepoFilterCustomZone,
+    RepoFilterInterfaceDrawn,
+)
 from core.serializers.detection import (
     DetectionDetailSerializer,
     DetectionInputSerializer,
@@ -30,24 +32,19 @@ from core.serializers.detection import (
     DetectionUpdateSerializer,
 )
 from core.utils.data_permissions import (
-    get_user_group_rights,
     get_user_object_types_with_status,
-    get_user_tile_sets,
 )
 from simple_history.utils import bulk_update_with_history
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 from django.contrib.gis.geos import Polygon
 from rest_framework.decorators import action
-from django.contrib.gis.db.models.functions import Intersection
 
-from core.utils.geo import get_geometry
 from core.views.detection.utils import (
     BOOLEAN_CHOICES,
-    INTERFACE_DRAWN_CHOICES,
-    filter_custom_zones_uuids,
     filter_prescripted,
     filter_score,
 )
+from django.contrib.gis.geos import MultiPolygon
 
 
 class DetectionGeoFilter(FilterSet):
@@ -79,7 +76,10 @@ class DetectionGeoFilter(FilterSet):
 
     score = NumberFilter(method="filter_score")
     prescripted = ChoiceFilter(choices=BOOLEAN_CHOICES, method="filter_prescripted")
-    interfaceDrawn = ChoiceFilter(choices=INTERFACE_DRAWN_CHOICES, method="pass_")
+    interfaceDrawn = ChoiceFilter(
+        choices=[(choice.value, choice.name) for choice in RepoFilterInterfaceDrawn],
+        method="pass_",
+    )
 
     def pass_(self, queryset, name, value):
         return queryset
@@ -142,102 +142,46 @@ class DetectionGeoFilter(FilterSet):
             polygon_requested = Polygon.from_bbox((sw_lng, sw_lat, ne_lng, ne_lat))
             polygon_requested.srid = SRID
 
-        filter_tile_set_status__in = None
+        geometry_accessible = UserPermission(
+            user=self.request.user
+        ).get_accessible_geometry(intersects_geometry=polygon_requested)
 
-        if self.request.user.user_role == UserRole.SUPER_ADMIN:
-            filter_tile_set_status__in = [
-                TileSetStatus.VISIBLE,
-                TileSetStatus.HIDDEN,
-                TileSetStatus.DEACTIVATED,
-            ]
+        if not geometry_accessible:
+            return []
 
-        tile_sets, global_geometry = get_user_tile_sets(
+        detection_tilesets_filter = TileSetPermission(
             user=self.request.user,
-            filter_tile_set_type__in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-            filter_tile_set_status__in=filter_tile_set_status__in,
-            filter_tile_set_intersects_geometry=polygon_requested,
-            filter_tile_set_uuid__in=tile_sets_uuids,
+        ).get_last_detections_filters(
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
+            filter_tile_set_intersects_geometry=geometry_accessible,
+            filter_tile_set_uuid_in=tile_sets_uuids,
+            filter_has_collectivities=True,
         )
 
-        wheres = []
+        if not detection_tilesets_filter:
+            return []
 
-        # filter geo collectivities
+        queryset = queryset.filter(detection_tilesets_filter)
 
-        communes_uuids = (
-            self.data.get("communesUuids").split(",")
-            if self.data.get("communesUuids")
-            else []
-        )
-        departments_uuids = (
-            self.data.get("departmentsUuids").split(",")
-            if self.data.get("departmentsUuids")
-            else []
-        )
-        regions_uuids = (
-            self.data.get("regionsUuids").split(",")
-            if self.data.get("regionsUuids")
-            else []
-        )
-
-        if communes_uuids or departments_uuids or regions_uuids:
-            geozones_geometry = get_geometry(
-                communes_uuids=communes_uuids,
-                departments_uuids=departments_uuids,
-                regions_uuids=regions_uuids,
-            )
-
-            if global_geometry:
-                global_geometry = Intersection(global_geometry, geozones_geometry)
-            else:
-                global_geometry = geozones_geometry
-
-        for i in range(len(tile_sets)):
-            tile_set = tile_sets[i]
-            previous_tile_sets = tile_sets[:i]
-
-            if tile_set.intersection:
-                where = Q(tile_set__uuid=tile_set.uuid) & Q(
-                    geometry__intersects=tile_set.intersection
+        filter_custom_zone = RepoFilterCustomZone(
+            custom_zone_uuids=(
+                self.data.get("customZonesUuids").split(",")
+                if self.data.get("customZonesUuids")
+                else []
+            ),
+            interface_drawn=RepoFilterInterfaceDrawn[
+                self.data.get(
+                    "interfaceDrawn",
+                    RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES.value,
                 )
-            else:
-                if global_geometry:
-                    where = Q(tile_set__uuid=tile_set.uuid) & Q(
-                        geometry__intersects=polygon_requested
-                    )
-                else:
-                    where = Q(tile_set__uuid=tile_set.uuid)
+            ],
+        )
+        detections = DetectionRepository(initial_queryset=queryset).list_(
+            filter_custom_zone=filter_custom_zone
+        )
 
-            if polygon_requested:
-                where = where & Q(geometry__intersects=polygon_requested)
-
-            for previous_tile_set in previous_tile_sets:
-                # custom logic here: we want to display the detections on the last tileset
-                # if the last tileset for a zone is partial, we also want to display detections for the last BACKGROUND tileset
-                if (
-                    tile_set.tile_set_type == TileSetType.BACKGROUND
-                    and previous_tile_set.tile_set_type == TileSetType.PARTIAL
-                ):
-                    continue
-
-                where = where & ~Q(geometry__intersects=previous_tile_set.intersection)
-
-            wheres.append(where)
-
-            # if no geometry, we can stop the loop
-            if not tile_set.intersection:
-                break
-
-        if not wheres:
-            return queryset.distinct()
-
-        if len(wheres) == 1:
-            queryset = queryset.filter(wheres[0])
-        else:
-            queryset = queryset.filter(reduce(or_, wheres))
-
-        queryset = filter_custom_zones_uuids(data=self.data, queryset=queryset)
-
-        return queryset.distinct()
+        return detections
 
 
 class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
@@ -254,10 +198,10 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         )
         detections = detections_queryset.all()
 
-        points = [detection.geometry.centroid for detection in detections]
+        geometries = [detection.geometry for detection in detections]
 
-        get_user_group_rights(
-            user=request.user, points=points, raise_if_has_no_right=UserGroupRight.WRITE
+        UserPermission(user=self.request.user).can_edit(
+            geometry=MultiPolygon(geometries), raise_exception=True
         )
 
         detection_data_fields_to_update = []
@@ -288,6 +232,14 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
                         detection.detection_data,
                         field,
                         serializer.validated_data[field],
+                    )
+
+                if (
+                    detection.detection_data.detection_validation_status
+                    == DetectionValidationStatus.DETECTED_NOT_VERIFIED
+                ):
+                    detection.detection_data.detection_validation_status = (
+                        DetectionValidationStatus.SUSPECT
                     )
 
                 detection_datas_to_update.append(detection.detection_data)

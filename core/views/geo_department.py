@@ -3,6 +3,7 @@ from common.views.base import BaseViewSetMixin
 from django.db.models import Q
 
 from core.models.geo_department import GeoDepartment
+from core.permissions.user import UserPermission
 from core.serializers.geo_department import (
     GeoDepartmentDetailSerializer,
     GeoDepartmentSerializer,
@@ -26,6 +27,17 @@ class GeoDepartmentFilter(FilterSet):
     def search(self, queryset, name, value):
         value_normalized = normalize(value)
 
+        collectivity_filter = UserPermission(
+            user=self.request.user
+        ).get_collectivity_filter()
+
+        if collectivity_filter:
+            queryset = queryset.filter(
+                Q(communes__id__in=collectivity_filter.commune_ids or [])
+                | Q(id__in=collectivity_filter.department_ids or [])
+                | Q(region__id__in=collectivity_filter.region_ids or [])
+            )
+
         queryset = queryset.annotate(
             match_score=Case(
                 When(name_normalized__iexact=value_normalized, then=Value(5)),
@@ -38,10 +50,14 @@ class GeoDepartmentFilter(FilterSet):
             )
         )
 
-        return queryset.filter(
-            Q(name_normalized__icontains=value_normalized)
-            | Q(insee_code__icontains=value_normalized)
-        ).order_by("-match_score", Length("name"))
+        return (
+            queryset.filter(
+                Q(name_normalized__icontains=value_normalized)
+                | Q(insee_code__icontains=value_normalized)
+            )
+            .order_by("-match_score", Length("name"))
+            .distinct()
+        )
 
 
 class GeoDepartmentViewSet(BaseViewSetMixin[GeoDepartment]):

@@ -35,6 +35,10 @@ class GeoCustomZone(GeoZone):
         null=True,
     )
 
+    @property
+    def namee(self):
+        return self.name
+
     class Meta:
         indexes = [
             models.Index(fields=["geozone_ptr"]),

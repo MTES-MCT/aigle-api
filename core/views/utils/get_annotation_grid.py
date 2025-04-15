@@ -3,7 +3,6 @@ import json
 from django.http import JsonResponse
 
 
-from core.models.detection import Detection
 from django.contrib.gis.geos import Polygon
 
 from core.models.tile import Tile
@@ -85,8 +84,7 @@ def endpoint(request):
         )
         .filter(
             # exclude grouped tiles that are not full to avoid mistakes in counting
-            nbr=GRID_SIZE
-            * GRID_SIZE
+            nbr=GRID_SIZE * GRID_SIZE
         )
     )
 
@@ -106,9 +104,7 @@ def endpoint(request):
     data_requested["neLng"] = ne_lng
     data_requested["neLat"] = ne_lat
 
-    filterset = DetectionGeoFilter(
-        data_requested, queryset=Detection.objects, request=request
-    )
+    filterset = DetectionGeoFilter(data_requested, request=request)
 
     if not filterset.is_valid():
         raise BadRequest(filterset.errors)

@@ -127,4 +127,4 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
         queryset = queryset.order_by("-starts_with_q").distinct()
         queryset = queryset.values_list("num_parcel", flat=True)[:10]
 
-        return Response(list(queryset))
+        return Response([str(num_parcel) for num_parcel in list(queryset)])

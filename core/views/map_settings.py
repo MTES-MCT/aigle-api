@@ -6,6 +6,8 @@ from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS, TILE_SETS_ORDER_B
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.tile_set import TileSet, TileSetStatus
 from core.models.user import UserRole
+from core.permissions.tile_set import TileSetPermission
+from core.permissions.user import UserPermission
 from core.serializers.geo_custom_zone import GeoCustomZoneMinimalSerializer
 from core.serializers.map_settings import (
     MapSettingObjectTypeSerializer,
@@ -21,7 +23,6 @@ from django.contrib.gis.db.models.aggregates import Union
 
 from core.utils.data_permissions import (
     get_user_object_types_with_status,
-    get_user_tile_sets,
 )
 
 
@@ -54,7 +55,12 @@ class MapSettingsView(APIView):
                 setting_tile_sets.append(setting_tile_set.initial_data)
 
         if request.user.user_role != UserRole.SUPER_ADMIN:
-            tile_sets, global_geometry = get_user_tile_sets(request.user)
+            tile_sets = TileSetPermission(user=request.user).list_(
+                with_intersection=True
+            )
+            global_geometry = UserPermission(
+                user=request.user
+            ).get_accessible_geometry()
 
             for tile_set in tile_sets:
                 setting_tile_set = MapSettingTileSetSerializer(

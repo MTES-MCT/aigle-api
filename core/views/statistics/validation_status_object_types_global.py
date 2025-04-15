@@ -2,11 +2,17 @@ from collections import defaultdict
 from django.http import JsonResponse
 from rest_framework import serializers
 
-from core.models.detection import Detection
 from django.db.models import Count
 
+from core.models.tile_set import TileSetStatus, TileSetType
+from core.permissions.tile_set import TileSetPermission
+from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
-from core.repository.detection import DetectionRepository, RepoFilterCustomZone
+from core.repository.detection import (
+    DetectionRepository,
+    RepoFilterCustomZone,
+    RepoFilterInterfaceDrawn,
+)
 from rest_framework.views import APIView
 
 from django.db.models import F
@@ -14,7 +20,6 @@ from django.db.models import F
 from core.utils.serializers import CommaSeparatedUUIDField
 from core.views.statistics.utils import (
     StatisticsEndpointSerializer,
-    get_collectivities_uuids,
 )
 
 
@@ -39,9 +44,13 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
         )
         endpoint_serializer.is_valid(raise_exception=True)
 
-        repo = DetectionRepository(queryset=Detection.objects)
-        collectivities_uuids = get_collectivities_uuids(
-            endpoint_serializer=endpoint_serializer
+        repo = DetectionRepository()
+        collectivity_filter = UserPermission(user=request.user).get_collectivity_filter(
+            communes_uuids=endpoint_serializer.validated_data.get("communesUuids"),
+            departments_uuids=endpoint_serializer.validated_data.get(
+                "departmentsUuids"
+            ),
+            regions_uuids=endpoint_serializer.validated_data.get("regionsUuids"),
         )
 
         other_object_types_uuids = endpoint_serializer.validated_data.get(
@@ -52,25 +61,35 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
             + other_object_types_uuids
         )
 
-        queryset, _ = repo._filter(
-            filter_collectivity_uuid_in=collectivities_uuids,
+        tile_sets = TileSetPermission(
+            user=self.request.user,
+        ).list_(
+            filter_uuid_in=endpoint_serializer.validated_data.get("tileSetsUuids"),
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
+            filter_collectivities=collectivity_filter,
+            filter_has_collectivities=True,
+        )
+        queryset = repo.filter_(
+            queryset=repo.initial_queryset,
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE,
                 number=float(endpoint_serializer.validated_data.get("score", "0")),
             ),
             filter_object_type_uuid_in=all_object_types_uuids or None,
             filter_custom_zone=RepoFilterCustomZone(
-                interface_drawn=endpoint_serializer.validated_data.get(
-                    "interfaceDrawn"
-                ),
+                interface_drawn=RepoFilterInterfaceDrawn[
+                    endpoint_serializer.validated_data.get(
+                        "interfaceDrawn",
+                        RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES.value,
+                    )
+                ],
                 custom_zone_uuids=endpoint_serializer.validated_data.get(
                     "customZonesUuids"
                 )
                 or [],
             ),
-            filter_tile_set_uuid_in=endpoint_serializer.validated_data.get(
-                "tileSetsUuids"
-            ),
+            filter_tile_set_uuid_in=[tile_set.uuid for tile_set in tile_sets],
             filter_detection_validation_status_in=endpoint_serializer.validated_data.get(
                 "detectionValidationStatuses"
             ),
@@ -78,6 +97,7 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
                 "detectionControlStatuses"
             ),
             filter_prescribed=endpoint_serializer.validated_data.get("prescripted"),
+            filter_collectivities=collectivity_filter,
         )
 
         queryset = queryset.values(
@@ -87,7 +107,7 @@ class StatisticsValidationStatusObjectTypesGlobalView(APIView):
             object_type_uuid=F("detection_object__object_type__uuid"),
             object_type_name=F("detection_object__object_type__name"),
             object_type_color=F("detection_object__object_type__color"),
-        ).annotate(detections_count=Count("id"))
+        ).annotate(detections_count=Count("id", distinct=True))
 
         if other_object_types_uuids:
             data_others_map = defaultdict(int)

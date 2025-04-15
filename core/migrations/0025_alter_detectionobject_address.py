@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0024_detection_deleted_at_detectiondata_deleted_at_and_more'),
+        ("core", "0024_detection_deleted_at_detectiondata_deleted_at_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='detectionobject',
-            name='address',
+            model_name="detectionobject",
+            name="address",
             field=models.CharField(max_length=255, null=True),
         ),
     ]
