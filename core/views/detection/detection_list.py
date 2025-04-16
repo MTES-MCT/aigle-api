@@ -1,7 +1,7 @@
 from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet, NumberFilter, ChoiceFilter, OrderingFilter
-from django.db.models import QuerySet
+from django.db.models import QuerySet, OuterRef, Subquery
 
 from core.contants.labels import (
     DETECTION_CONTROL_STATUSES_NAMES_MAP,
@@ -14,6 +14,7 @@ from django.http import JsonResponse
 from django.db.models import Prefetch
 from django.http import HttpResponse
 import csv
+from core.models.detection_object import DetectionObject
 
 from django.db.models import F, Case, When, Value, Count
 from core.models.detection_data import (
@@ -339,15 +340,34 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
             "detection_data__detection_control_status",
             "detection_data__detection_prescription_status",
             "detection_data__detection_validation_status",
-        ).annotate(
-            tile_sets=ArrayAgg("detection_object__tile_sets__name", distinct=True),
-            custom_zones=ArrayAgg(
-                Coalesce(
-                    "detection_object__geo_custom_zones__geo_custom_zone_category__name",
-                    "detection_object__geo_custom_zones__name",
+        )
+        tile_sets_subquery = (
+            DetectionObject.objects.filter(id=OuterRef("detection_object__id"))
+            .annotate(
+                tile_set_names=ArrayAgg(
+                    "tile_sets__name", distinct=True, default=Value([])
+                )
+            )
+            .values("tile_set_names")[:1]
+        )
+
+        custom_zones_subquery = (
+            DetectionObject.objects.filter(id=OuterRef("detection_object__id"))
+            .annotate(
+                zone_names=ArrayAgg(
+                    Coalesce(
+                        "geo_custom_zones__geo_custom_zone_category__name",
+                        "geo_custom_zones__name",
+                    ),
+                    distinct=True,
                 ),
-                distinct=True,
-            ),
+            )
+            .values("zone_names")[:1]
+        )
+
+        queryset = queryset.annotate(
+            tile_sets=Subquery(tile_sets_subquery),
+            custom_zones=Subquery(custom_zones_subquery),
         )
         # safety to not consume too much memory and kill the api
         queryset = queryset[:1000]
@@ -479,7 +499,7 @@ def process_rows(results):
         result = [
             *base_data[:TILE_SETS_INDEX],
             ", ".join(tile_sets),
-            ", ".join(custom_zones),
+            ", ".join([custom_zone for custom_zone in custom_zones if custom_zone]),
         ]
         final_results.append(result)
 
