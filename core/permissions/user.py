@@ -37,13 +37,9 @@ class UserPermission(
 
         geo_zones_accessibles_qs = GeoZone.objects
 
-        if self.user.user_role != UserRole.SUPER_ADMIN:
-            geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
-                user_groups__user_user_groups__user=self.user
-            )
-
         geo_zones_accessibles_qs.values("id", "geo_zone_type")
 
+        # TODO: rework this to make user user has access to uuids
         if (
             communes_uuids is not None
             or departments_uuids is not None
@@ -56,6 +52,10 @@ class UserPermission(
             )
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
                 uuid__in=geozone_uuids
+            )
+        elif self.user.user_role != UserRole.SUPER_ADMIN:
+            geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
+                user_groups__user_user_groups__user=self.user
             )
 
         geo_zones_accessibles = geo_zones_accessibles_qs.all()
