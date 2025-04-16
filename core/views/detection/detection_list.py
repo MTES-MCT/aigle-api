@@ -264,7 +264,6 @@ class DetectionListFilter(FilterSet):
             filter_collectivities=collectivity_filter,
         )
         queryset = queryset.filter(detection_tilesets_filter)
-        queryset = queryset.filter(detection_object__tile_sets__id__in=[17, 25, 27, 28])
         queryset = queryset.defer(
             "geometry",
             "tile__geometry",
