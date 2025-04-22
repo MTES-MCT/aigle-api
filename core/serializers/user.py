@@ -1,12 +1,15 @@
-from typing import Optional
+from typing import List, Optional
 from djoser.serializers import UserSerializer as UserSerializerBase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
+from django.contrib.gis.geos import Point
+from django.contrib.gis.db.models.functions import Centroid
 
 from rest_framework import serializers
 
 from core.models.user import UserRole
 from core.models.user_group import UserGroup, UserUserGroup
+from core.views.utils.save_user_position import save_user_position
 
 UserModel = get_user_model()
 
@@ -135,6 +138,12 @@ class UserInputSerializer(UserSerializer):
 
             UserUserGroup.objects.bulk_create(new_user_user_groups)
 
+            if not instance.last_position:
+                user_group_centroid = get_user_group_centroid(user_groups=new_groups)
+
+                if user_group_centroid:
+                    save_user_position(user=instance, last_position=user_group_centroid)
+
         for key, value in validated_data.items():
             setattr(instance, key, value)
 
@@ -152,3 +161,18 @@ def check_email_exists(email: str, uuid: Optional[str] = None):
         raise serializers.ValidationError(
             {"email": ["Un utilisateur avec cet email existe déjà"]}
         )
+
+
+def get_user_group_centroid(user_groups: List[UserGroup]) -> Optional[Point]:
+    if not user_groups:
+        return None
+
+    for new_group in user_groups:
+        if new_group.geo_zones:
+            for geo_zone in (
+                new_group.geo_zones.all()
+                .annotate(centroid=Centroid("geometry"))
+                .defer("geometry")
+            ):
+                if geo_zone.centroid:
+                    return geo_zone.centroid
