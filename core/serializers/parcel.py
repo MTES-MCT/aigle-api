@@ -22,15 +22,21 @@ class ParcelMinimalSerializer(UuidTimestampedModelSerializerMixin):
             "prefix",
             "section",
             "num_parcel",
+        ]
+
+
+class ParcelWithCommuneSerializer(ParcelMinimalSerializer):
+    class Meta(ParcelMinimalSerializer.Meta):
+        fields = ParcelMinimalSerializer.Meta.fields + [
             "commune",
         ]
 
     commune = GeoCommuneSerializer(read_only=True)
 
 
-class ParcelSerializer(ParcelMinimalSerializer):
-    class Meta(ParcelMinimalSerializer.Meta):
-        fields = ParcelMinimalSerializer.Meta.fields + [
+class ParcelSerializer(ParcelWithCommuneSerializer):
+    class Meta(ParcelWithCommuneSerializer.Meta):
+        fields = ParcelWithCommuneSerializer.Meta.fields + [
             "geometry",
         ]
 

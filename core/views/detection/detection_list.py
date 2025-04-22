@@ -269,13 +269,13 @@ class DetectionListFilter(FilterSet):
             "geometry",
             "tile__geometry",
             "detection_object__parcel__geometry",
-            "detection_object__parcel__commune__geometry",
+            "detection_object__commune__geometry",
         )
         queryset = queryset.prefetch_related(
             "detection_object",
             "detection_object__object_type",
             "detection_object__parcel",
-            "detection_object__parcel__commune",
+            "detection_object__commune",
             "detection_object__detections",
             Prefetch(
                 "detection_object__tile_sets",
