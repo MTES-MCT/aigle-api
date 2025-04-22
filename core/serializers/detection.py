@@ -374,6 +374,8 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
             "detection_validation_status",
             "detection_prescription_status",
             "tile_sets",
+            "commune_name",
+            "commune_iso_code",
         ]
 
     detection_object_id = serializers.IntegerField(
@@ -403,3 +405,10 @@ class DetectionListItemSerializer(serializers.ModelSerializer):
         choices=DetectionPrescriptionStatus.choices,
     )
     tile_sets = TileSetMinimalSerializer(source="detection_object.tile_sets", many=True)
+
+    commune_name = serializers.CharField(
+        source="detection_object.commune.name", read_only=True
+    )
+    commune_iso_code = serializers.CharField(
+        source="detection_object.commune.iso_code", read_only=True
+    )

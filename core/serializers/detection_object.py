@@ -42,14 +42,14 @@ class DetectionObjectMinimalSerializer(UuidTimestampedModelSerializerMixin):
 
 
 class DetectionObjectSerializer(DetectionObjectMinimalSerializer):
-    from core.serializers.parcel import ParcelMinimalSerializer
+    from core.serializers.parcel import ParcelWithCommuneSerializer
 
     class Meta(DetectionObjectMinimalSerializer.Meta):
         fields = DetectionObjectMinimalSerializer.Meta.fields + [
             "parcel",
         ]
 
-    parcel = ParcelMinimalSerializer(read_only=True)
+    parcel = ParcelWithCommuneSerializer(read_only=True)
 
 
 class DetectionHistorySerializer(serializers.Serializer):
