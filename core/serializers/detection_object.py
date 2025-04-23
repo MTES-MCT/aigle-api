@@ -155,6 +155,7 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
                 order_bys=["-date"],
                 filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
+            tile_sets = list(tile_sets)
             self.context["tile_sets"] = tile_sets
 
         detections = obj.detections.order_by("-tile_set__date").filter(
@@ -175,6 +176,7 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
                 order_bys=["-date"],
                 filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
+            tile_sets = list(tile_sets)
             self.context["tile_sets"] = tile_sets
 
         if not tile_sets:
