@@ -69,10 +69,20 @@ class TileSetPermission(
         queryset = queryset.annotate(
             row_number=Window(
                 expression=RowNumber(),
-                partition_by=[F("geo_zones")],  # Group by GeoZone
+                partition_by=[F("geo_zones__id")],  # Group by GeoZone
                 order_by=F("date").desc(),
             )
         )
+        queryset = queryset.only(
+            "id", "tile_set_type", "geo_zones__id", "geo_zones__geo_zone_type"
+        )
+
+        intersects_geometry = kwargs.get("filter_tile_set_intersects_geometry")
+
+        if intersects_geometry:
+            queryset = queryset.filter(
+                geo_zones__geometry__intersects=intersects_geometry
+            )
 
         tile_sets = queryset.filter(row_number=1)
 
@@ -84,12 +94,8 @@ class TileSetPermission(
             previous_tile_sets = tile_sets[:i]
             where = Q(tile_set__id=tile_set.id)
 
-            if kwargs.get("filter_tile_set_intersects_geometry"):
-                where &= Q(
-                    geometry__intersects=kwargs.get(
-                        "filter_tile_set_intersects_geometry"
-                    )
-                )
+            if intersects_geometry:
+                where &= Q(geometry__intersects=intersects_geometry)
 
             geo_zones_map = defaultdict(list)
             for geo_zone in tile_set.geo_zones.all():
