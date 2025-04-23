@@ -84,9 +84,13 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             "detections__detection_data__user_last_update__user_user_groups",
             "detections__detection_data__user_last_update__user_user_groups__user_group",
         )
+        queryset = queryset.defer("detections__tile__geometry")
+        queryset = queryset.defer("parcel__commune__geometry")
+        queryset = queryset.defer("parcel__geometry")
 
         if self.action == "retrieve":
             queryset = queryset.prefetch_related("geo_custom_zones")
+            queryset = queryset.defer("geo_custom_zones__geometry")
 
         return queryset
 
