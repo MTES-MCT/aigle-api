@@ -1,6 +1,6 @@
 import csv
 from datetime import datetime
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, List, Optional
 from django.core.management.base import BaseCommand, CommandError
 from rest_framework import serializers
 from django.db import connection
@@ -84,6 +84,17 @@ TABLE_COLUMNS = list(
 
 class Command(BaseCommand):
     help = "Import detections from CSV"
+    start_time: datetime
+    object_types_map: Dict[str, ObjectType]
+    user_reviewer: User
+
+    detection_objects_to_insert: List[DetectionObject]
+    detection_datas_to_insert: List[DetectionData]
+    detections_to_insert: List[Detection]
+
+    total_inserted_detections: int
+    total: Optional[int]
+    query_colums: Optional[List[str]]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -106,6 +117,7 @@ class Command(BaseCommand):
         self.file = None
         self.total = None
         self.query_colums = None
+        self.cursor = None
 
     def add_arguments(self, parser):
         parser.add_argument("--tile-set-id", type=int, required=True)
@@ -131,6 +143,20 @@ class Command(BaseCommand):
             raise CommandError(
                 "You can't provide both a file path and a table name with parameter --file-path or --table-name"
             )
+
+    def check_object_types(self, table_name: str, table_schema: str, batch_id: str):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT object_type FROM %s.%s WHERE batch_id = %s"
+                % (table_schema, table_name, f"'{batch_id}'")
+            )
+            object_types = [row[0] for row in cursor.fetchall()]
+            object_types_unknown = set(object_types).difference(
+                set(self.object_types_map.keys())
+            )
+
+            if len(object_types_unknown) > 0:
+                raise CommandError("Unknown object types in the specified batch")
 
     def get_detection_rows_to_insert_from_file(
         self, file_path: str
@@ -168,6 +194,12 @@ class Command(BaseCommand):
         self.clean_step = options["clean_step"]
         self.batch_id = options.get("batch_id") or datetime.now().strftime(
             "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+        self.check_object_types(
+            table_name=options["table_name"],
+            table_schema=options["table_schema"],
+            batch_id=self.batch_id,
         )
 
         print(f"Starting importing detections for batch: {self.batch_id}")
@@ -451,8 +483,7 @@ class Command(BaseCommand):
 
         if self.total:
             print(
-                f"Inserted {
-                    self.total_inserted_detections}/{self.total} detections in total"
+                f"Inserted {self.total_inserted_detections}/{self.total} detections in total ({(self.total_inserted_detections/self.total)*100:.2f})"
             )
         else:
             print(f"Inserted {
