@@ -64,10 +64,6 @@ class DetectionGeoFilter(FilterSet):
         choices=DetectionControlStatus.choices,
     )
 
-    communesUuids = UuidInFilter(method="pass_")
-    departmentsUuids = UuidInFilter(method="pass_")
-    regionsUuids = UuidInFilter(method="pass_")
-
     neLat = NumberFilter(method="pass_")
     neLng = NumberFilter(method="pass_")
 

@@ -40,7 +40,9 @@ class DetectionRepository(
 ):
     def __init__(self, initial_queryset: Optional[QuerySet[Detection]] = None):
         self.model = Detection
-        self.initial_queryset = initial_queryset or self.model.objects
+        self.initial_queryset = (
+            initial_queryset if initial_queryset is not None else self.model.objects
+        )
 
     def filter_(
         self,
@@ -54,6 +56,7 @@ class DetectionRepository(
         filter_object_type_uuid_in: Optional[List[str]] = None,
         filter_custom_zone: Optional[RepoFilterCustomZone] = None,
         filter_tile_set_uuid_in: Optional[List[str]] = None,
+        filter_parcel_uuid_in: Optional[List[str]] = None,
         filter_detection_validation_status_in: Optional[
             List[DetectionValidationStatus]
         ] = None,
@@ -98,6 +101,10 @@ class DetectionRepository(
         queryset = self._filter_tile_set_uuids(
             queryset=queryset,
             filter_tile_set_uuid_in=filter_tile_set_uuid_in,
+        )
+        queryset = self._filter_parcel_uuids(
+            queryset=queryset,
+            filter_parcel_uuid_in=filter_parcel_uuid_in,
         )
         queryset = self._filter_detection_validation_statuses(
             queryset=queryset,
@@ -216,6 +223,17 @@ class DetectionRepository(
     ) -> QuerySet[Detection]:
         if filter_tile_set_uuid_in is not None:
             q = Q(tile_set__uuid__in=filter_tile_set_uuid_in)
+            queryset = queryset.filter(q)
+
+        return queryset
+
+    @staticmethod
+    def _filter_parcel_uuids(
+        queryset: QuerySet[Detection],
+        filter_parcel_uuid_in: Optional[List[str]] = None,
+    ) -> QuerySet[Detection]:
+        if filter_parcel_uuid_in is not None:
+            q = Q(detection_object__parcel__uuid__in=filter_parcel_uuid_in)
             queryset = queryset.filter(q)
 
         return queryset

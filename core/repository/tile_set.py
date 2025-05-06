@@ -41,7 +41,9 @@ class TileSetRepository(
 ):
     def __init__(self, initial_queryset: Optional[QuerySet[TileSet]] = None):
         self.model = TileSet
-        self.initial_queryset = initial_queryset or self.model.objects
+        self.initial_queryset = (
+            initial_queryset if initial_queryset is not None else self.model.objects
+        )
 
     def filter_(
         self,

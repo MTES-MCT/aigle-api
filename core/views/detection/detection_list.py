@@ -171,6 +171,7 @@ class DetectionListFilter(FilterSet):
             "communesUuids",
             "departmentsUuids",
             "regionsUuids",
+            "parcelsUuids",
         ]
 
     objectTypesUuids = UuidInFilter(method="pass_")
@@ -191,6 +192,8 @@ class DetectionListFilter(FilterSet):
     communesUuids = UuidInFilter(method="pass_")
     departmentsUuids = UuidInFilter(method="pass_")
     regionsUuids = UuidInFilter(method="pass_")
+
+    parcelsUuids = UuidInFilter(method="pass_")
 
     ordering = OrderingFilter(
         fields=["score", "id", "parcel", "detectionControlStatus"], method="pass_"
@@ -241,6 +244,7 @@ class DetectionListFilter(FilterSet):
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE, number=float(self.data.get("score", "0"))
             ),
+            filter_parcel_uuid_in=to_array(self.data.get("parcelsUuids")),
             filter_object_type_uuid_in=to_array(self.data.get("objectTypesUuids")),
             filter_custom_zone=RepoFilterCustomZone(
                 interface_drawn=RepoFilterInterfaceDrawn[

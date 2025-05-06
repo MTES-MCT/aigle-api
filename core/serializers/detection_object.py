@@ -1,11 +1,9 @@
-from django.utils import timezone
-from typing import List, Optional
 from common.constants.models import DEFAULT_MAX_LENGTH
 from core.models.detection import Detection
 from core.models.detection_data import DetectionValidationStatus
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
-from core.models.tile_set import TileSet, TileSetStatus, TileSetType
+from core.models.tile_set import TileSetStatus, TileSetType
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
@@ -101,7 +99,7 @@ class DetectionObjectHistorySerializer(DetectionObjectSerializer):
         return detection_history
 
 
-class DetectionObjectTileSetPreview(serializers.Serializer):
+class DetectionObjectTileSetPreviewSerializer(serializers.Serializer):
     preview = serializers.BooleanField()
     tile_set = TileSetMinimalSerializer()
 
@@ -147,19 +145,16 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
 
-        if self.context.get("tile_sets"):
-            tile_sets = self.context["tile_sets"]
+        if self.context.get("tile_set_previews"):
+            tile_set_previews = self.context["tile_set_previews"]
         else:
-            tile_sets = TileSetPermission(user=user).list_(
-                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-                order_bys=["-date"],
+            tile_set_previews = TileSetPermission(user=user).get_previews(
                 filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
-            tile_sets = list(tile_sets)
-            self.context["tile_sets"] = tile_sets
+            self.context["tile_set_previews"] = tile_set_previews
 
         detections = obj.detections.order_by("-tile_set__date").filter(
-            tile_set__in=tile_sets
+            tile_set__id__in=[tpreview["tile_set"].id for tpreview in tile_set_previews]
         )
 
         detections_serialized = DetectionWithTileSerializer(detections, many=True)
@@ -168,47 +163,31 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
     def get_tile_sets(self, obj: DetectionObject):
         user = self.context["request"].user
 
-        if self.context.get("tile_sets"):
-            tile_sets = self.context["tile_sets"]
+        if self.context.get("tile_set_previews"):
+            tile_set_previews = self.context["tile_set_previews"]
         else:
-            tile_sets = TileSetPermission(user=user).list_(
-                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-                order_bys=["-date"],
+            tile_set_previews = TileSetPermission(user=user).get_previews(
                 filter_tile_set_intersects_geometry=obj.detections.all()[0].geometry,
             )
-            tile_sets = list(tile_sets)
-            self.context["tile_sets"] = tile_sets
+            self.context["tile_set_previews"] = tile_set_previews
 
-        if not tile_sets:
+        if not tile_set_previews:
             return []
 
-        tile_sets_map = {}
-        tile_set_six_years = (
-            get_tile_set_years_ago(tile_sets=tile_sets, relative_years=6)
-            or tile_sets[len(tile_sets) - 1]
-        )
-        tile_sets_map[tile_set_six_years.id] = tile_set_six_years
+        previews_serialized = []
 
-        # append most recent
-        tile_sets_map[tile_sets[0].id] = tile_sets[0]
-
-        for tile_set in tile_sets:
-            if not tile_sets_map.get(tile_set.id):
-                tile_sets_map[tile_set.id] = tile_set
-                break
-
-        tile_set_previews = []
-
-        for tile_set in sorted(tile_sets, key=lambda t: t.date):
-            preview = DetectionObjectTileSetPreview(
+        for tile_set_preview in tile_set_previews:
+            preview = DetectionObjectTileSetPreviewSerializer(
                 data={
-                    "tile_set": TileSetMinimalSerializer(tile_set).data,
-                    "preview": True if tile_sets_map.get(tile_set.id) else False,
+                    "tile_set": TileSetMinimalSerializer(
+                        tile_set_preview["tile_set"]
+                    ).data,
+                    "preview": tile_set_preview["preview"],
                 }
             )
-            tile_set_previews.append(preview.initial_data)
+            previews_serialized.append(preview.initial_data)
 
-        return tile_set_previews
+        return previews_serialized
 
     def get_user_group_rights(self, obj: DetectionObject):
         user = self.context["request"].user
@@ -268,21 +247,6 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
 
 
 # utils
-
-
-def get_tile_set_years_ago(
-    tile_sets: List[TileSet], relative_years: int
-) -> Optional[TileSet]:
-    tile_set_years_ago = None
-    date_years_ago = timezone.now()
-    date_years_ago = date_years_ago.replace(year=date_years_ago.year - relative_years)
-
-    for tile_set in tile_sets:
-        if tile_set.date <= date_years_ago:
-            tile_set_years_ago = tile_set
-            break
-
-    return tile_set_years_ago
 
 
 def get_most_recent_detection(detection_object: DetectionObject) -> Detection:
