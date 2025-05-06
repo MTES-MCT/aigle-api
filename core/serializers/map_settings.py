@@ -10,7 +10,7 @@ from django.contrib.gis.db import models as models_gis
 
 class MapSettingTileSetSerializer(serializers.Serializer):
     tile_set = TileSetMinimalSerializer()
-    geometry = models_gis.GeometryField()
+    geometry_bbox = models_gis.GeometryField()
 
 
 class MapSettingObjectTypeSerializer(serializers.Serializer):
@@ -28,7 +28,7 @@ class MapSettingsGeoCustomZoneCategorySerializer(serializers.Serializer):
 class MapSettingsSerializer(serializers.Serializer):
     tile_set_settings = MapSettingTileSetSerializer(many=True)
     object_type_settings = MapSettingObjectTypeSerializer(many=True)
-    global_geometry = models_gis.GeometryField(null=True)
+    global_geometry_bbox = models_gis.GeometryField(null=True)
     geo_custom_zones_uncategorized = GeoCustomZoneMinimalSerializer(many=True)
     geo_custom_zone_categories = MapSettingsGeoCustomZoneCategorySerializer(many=True)
     user_last_position = models_gis.PointField(null=True)

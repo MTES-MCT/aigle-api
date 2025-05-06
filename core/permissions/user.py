@@ -10,7 +10,7 @@ from core.repository.user import UserRepository
 from django.contrib.gis.geos.collections import MultiPolygon
 from django.db.models import QuerySet
 from django.contrib.gis.db.models.aggregates import Union
-from django.contrib.gis.db.models.functions import Intersection
+from django.contrib.gis.db.models.functions import Intersection, Envelope
 from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
 
@@ -79,7 +79,9 @@ class UserPermission(
         return collectivity_filter
 
     def get_accessible_geometry(
-        self, intersects_geometry: Optional[MultiPolygon] = None
+        self,
+        intersects_geometry: Optional[MultiPolygon] = None,
+        bbox: Optional[bool] = False,
     ) -> Optional[MultiPolygon]:
         # super admins have access to all zones
         if self.user.user_role == UserRole.SUPER_ADMIN:
@@ -96,8 +98,14 @@ class UserPermission(
         geo_zones_accessibles = geo_zones_accessibles.annotate(
             geometry_union=geometry_union
         )
+
+        total_geometry = Union("geometry_union")
+
+        if bbox:
+            total_geometry = Envelope(total_geometry)
+
         accessible_geometry = geo_zones_accessibles.aggregate(
-            total_geo_union=Union("geometry_union")
+            total_geo_union=total_geometry
         ).get("total_geo_union")
 
         return None if accessible_geometry.empty else accessible_geometry

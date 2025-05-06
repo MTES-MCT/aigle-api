@@ -5,12 +5,15 @@ from rest_framework import serializers
 from django.contrib.gis.geos import Point
 from core.contants.geo import SRID
 from core.models.detection_object import DetectionObject
+from core.models.tile_set import TileSetType
+from core.permissions.tile_set import TileSetPermission
 from core.serializers.detection_object import (
     DetectionObjectDetailSerializer,
     DetectionObjectHistorySerializer,
     DetectionObjectInputSerializer,
     DetectionObjectSerializer,
 )
+from django.core.exceptions import PermissionDenied
 from rest_framework_gis.fields import GeometryField
 from rest_framework.decorators import action
 from django.db.models import F
@@ -23,7 +26,6 @@ from django_filters import FilterSet
 class GetFromCoordinatesParamsSerializer(serializers.Serializer):
     lat = serializers.FloatField(required=True, allow_null=False)
     lng = serializers.FloatField(required=True, allow_null=False)
-    tileSetUuid = serializers.UUIDField(required=True, allow_null=False)
 
 
 class GetFromCoordinatesOutputSerializer(serializers.Serializer):
@@ -115,9 +117,24 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             x=params_serializer.data["lng"], y=params_serializer.data["lat"], srid=SRID
         )
 
+        tile_set = (
+            TileSetPermission(user=request.user)
+            .filter_(
+                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+                order_bys=["-date"],
+                filter_tile_set_intersects_geometry=point_requested,
+            )
+            .first()
+        )
+
+        if not tile_set:
+            raise PermissionDenied(
+                "Vous n'avez pas les droits pour chercher une détection ici"
+            )
+
         queryset = DetectionObject.objects.filter(
             detections__geometry__intersects=point_requested,
-            detections__tile_set__uuid=params_serializer.data["tileSetUuid"],
+            detections__tile_set__uuid=tile_set.uuid,
         )
         queryset = queryset.order_by("-detections__score")
         queryset = queryset.annotate(
