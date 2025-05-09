@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - develop
+      - main
 
 jobs:
   deploy:
@@ -26,7 +27,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
             cd /home/ubuntu/aigle-api
-            git pull origin develop
+            git pull origin ${{ github.ref_name }}
             source venv/bin/activate
             pip install -r requirements.txt
             python manage.py migrate
