@@ -17,7 +17,7 @@ from core.repository.base import (
 from django.db.models import Q, Subquery
 from django.contrib.gis.geos import Polygon, Point, MultiPolygon
 from django.contrib.postgres.aggregates import ArrayAgg
-from django.contrib.gis.db.models.functions import Intersection
+from django.contrib.gis.db.models.functions import Intersection, Envelope
 from django.db.models import F
 from django.contrib.gis.db.models import Union
 from django.db.models import Count
@@ -41,7 +41,9 @@ class TileSetRepository(
 ):
     def __init__(self, initial_queryset: Optional[QuerySet[TileSet]] = None):
         self.model = TileSet
-        self.initial_queryset = initial_queryset or self.model.objects
+        self.initial_queryset = (
+            initial_queryset if initial_queryset is not None else self.model.objects
+        )
 
     def filter_(
         self,
@@ -59,6 +61,7 @@ class TileSetRepository(
         filter_detection_object_id_in: Optional[List[int]] = None,
         filter_detection_id_in: Optional[List[int]] = None,
         with_intersection: bool = False,
+        with_bbox: bool = False,
         with_geozone_ids: bool = False,
         order_bys: Optional[List[str]] = None,
         *args,
@@ -91,6 +94,10 @@ class TileSetRepository(
             queryset=queryset,
             with_intersection=with_intersection,
             filter_tile_set_intersects_geometry=filter_tile_set_intersects_geometry,
+        )
+        queryset = self._annotate_bbox(
+            queryset=queryset,
+            with_bbox=with_bbox,
         )
         queryset = self._annotate_geozone_ids(
             queryset=queryset,
@@ -159,6 +166,15 @@ class TileSetRepository(
             )
 
         queryset = queryset.annotate(intersection=intersection)
+
+        return queryset
+
+    @staticmethod
+    def _annotate_bbox(queryset: QuerySet[TileSet], with_bbox: bool = False):
+        if not with_bbox:
+            return queryset
+
+        queryset = queryset.annotate(bbox=Envelope(Union(F("geo_zones__geometry"))))
 
         return queryset
 

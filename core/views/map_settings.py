@@ -20,6 +20,7 @@ from core.serializers.tile_set import TileSetMinimalSerializer
 from django.contrib.gis.geos import GEOSGeometry
 
 from django.contrib.gis.db.models.aggregates import Union
+from django.contrib.gis.db.models.functions import Envelope
 
 from core.utils.data_permissions import (
     get_user_object_types_with_status,
@@ -29,7 +30,7 @@ from core.utils.data_permissions import (
 class MapSettingsView(APIView):
     def get(self, request, format=None):
         setting_tile_sets = []
-        global_geometry = None
+        global_geometry_bbox = None
 
         # super admin has access to all tile sets and all object types
         if request.user.user_role == UserRole.SUPER_ADMIN:
@@ -38,16 +39,16 @@ class MapSettingsView(APIView):
             ).order_by(*TILE_SETS_ORDER_BYS)
 
             tile_sets = tile_sets.annotate(
-                intersection=Union("geo_zones__geometry")
+                bbox=Envelope(Union("geo_zones__geometry"))
             ).all()
 
             for tile_set in tile_sets:
                 setting_tile_set = MapSettingTileSetSerializer(
                     data={
                         "tile_set": TileSetMinimalSerializer(tile_set).data,
-                        "geometry": (
-                            json.loads(GEOSGeometry(tile_set.intersection).geojson)
-                            if tile_set.intersection
+                        "geometry_bbox": (
+                            json.loads(GEOSGeometry(tile_set.bbox).geojson)
+                            if tile_set.bbox
                             else None
                         ),
                     }
@@ -55,20 +56,18 @@ class MapSettingsView(APIView):
                 setting_tile_sets.append(setting_tile_set.initial_data)
 
         if request.user.user_role != UserRole.SUPER_ADMIN:
-            tile_sets = TileSetPermission(user=request.user).list_(
-                with_intersection=True
-            )
-            global_geometry = UserPermission(
+            tile_sets = TileSetPermission(user=request.user).list_(with_bbox=True)
+            global_geometry_bbox = UserPermission(
                 user=request.user
-            ).get_accessible_geometry()
+            ).get_accessible_geometry(bbox=True)
 
             for tile_set in tile_sets:
                 setting_tile_set = MapSettingTileSetSerializer(
                     data={
                         "tile_set": TileSetMinimalSerializer(tile_set).data,
-                        "geometry": (
-                            json.loads(GEOSGeometry(tile_set.intersection).geojson)
-                            if tile_set.intersection
+                        "geometry_bbox": (
+                            json.loads(GEOSGeometry(tile_set.bbox).geojson)
+                            if tile_set.bbox
                             else None
                         ),
                     }
@@ -136,8 +135,10 @@ class MapSettingsView(APIView):
             data={
                 "tile_set_settings": setting_tile_sets,
                 "object_type_settings": setting_object_types,
-                "global_geometry": json.loads(GEOSGeometry(global_geometry).geojson)
-                if global_geometry
+                "global_geometry_bbox": json.loads(
+                    GEOSGeometry(global_geometry_bbox).geojson
+                )
+                if global_geometry_bbox
                 else None,
                 "geo_custom_zones_uncategorized": geo_custom_zones_uncategorized,
                 "geo_custom_zone_categories": [

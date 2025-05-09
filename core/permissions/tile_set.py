@@ -1,5 +1,6 @@
 from collections import defaultdict
-from typing import List, Optional
+from django.utils import timezone
+from typing import List, Optional, TypedDict
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.tile_set import TileSet, TileSetType
 from core.models.user import User
@@ -10,9 +11,15 @@ from operator import or_
 from django.db.models import Q, F
 from django.db.models.expressions import Window
 from django.db.models.functions import RowNumber
+from django.contrib.gis.geos.collections import MultiPolygon
 
 from core.repository.base import CollectivityRepoFilter
 from core.repository.tile_set import TileSetRepository
+
+
+class TileSetPreview(TypedDict):
+    tile_set: TileSet
+    preview: bool
 
 
 class TileSetPermission(
@@ -30,6 +37,51 @@ class TileSetPermission(
             *args,
             **kwargs,
         )
+
+    def get_previews(
+        self,
+        filter_tile_set_intersects_geometry: Optional[MultiPolygon] = None,
+        *args,
+        **kwargs,
+    ) -> List[TileSetPreview]:
+        queryset = self.filter_(
+            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            filter_tile_set_intersects_geometry=filter_tile_set_intersects_geometry,
+            order_bys=["-date"],
+            *args,
+            **kwargs,
+        )
+        tile_sets = list(queryset.all())
+
+        tile_sets_most_recent_map = {}
+        tile_set_six_years = (
+            get_tile_set_years_ago(tile_sets=tile_sets, relative_years=6)
+            or tile_sets[len(tile_sets) - 1]
+        )
+        tile_sets_most_recent_map[tile_set_six_years.id] = tile_set_six_years
+
+        # append most recent
+        tile_sets_most_recent_map[tile_sets[0].id] = tile_sets[0]
+
+        # fill with most recent that are not already included
+        for tile_set in tile_sets:
+            if not tile_sets_most_recent_map.get(tile_set.id):
+                tile_sets_most_recent_map[tile_set.id] = tile_set
+                break
+
+        tile_set_previews = []
+
+        for tile_set in sorted(tile_sets, key=lambda t: t.date):
+            tile_set_previews.append(
+                {
+                    "tile_set": tile_set,
+                    "preview": True
+                    if tile_sets_most_recent_map.get(tile_set.id)
+                    else False,
+                }
+            )
+
+        return sorted(tile_set_previews, key=lambda tpreview: tpreview["tile_set"].date)
 
     def filter_(self, *args, **kwargs):
         geo_zones_accessibles = GeoZone.objects.filter(
@@ -59,6 +111,8 @@ class TileSetPermission(
         return self.repository.initial_queryset
 
     def get_last_detections_filters(self, *args, **kwargs) -> Optional[Q]:
+        intersects_geometry = kwargs.pop("filter_tile_set_intersects_geometry", None)
+
         queryset = self.filter_(
             *args,
             **kwargs,
@@ -76,8 +130,6 @@ class TileSetPermission(
         queryset = queryset.only(
             "id", "tile_set_type", "geo_zones__id", "geo_zones__geo_zone_type"
         )
-
-        intersects_geometry = kwargs.get("filter_tile_set_intersects_geometry")
 
         if intersects_geometry:
             queryset = queryset.filter(
@@ -145,3 +197,18 @@ class TileSetPermission(
             return wheres[0]
 
         return reduce(or_, wheres)
+
+
+def get_tile_set_years_ago(
+    tile_sets: List[TileSet], relative_years: int
+) -> Optional[TileSet]:
+    tile_set_years_ago = None
+    date_years_ago = timezone.now()
+    date_years_ago = date_years_ago.replace(year=date_years_ago.year - relative_years)
+
+    for tile_set in tile_sets:
+        if tile_set.date <= date_years_ago:
+            tile_set_years_ago = tile_set
+            break
+
+    return tile_set_years_ago

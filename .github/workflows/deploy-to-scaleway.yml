@@ -1,0 +1,35 @@
+name: Deploy to Scaleway
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.SCW_SSH_KEY }}
+
+      - name: Deploy to Scaleway
+        env:
+          SCW_HOST: ${{ secrets.SCW_HOST }}
+          SCW_USER: ${{ secrets.SCW_USER }}
+        run: |
+          ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
+            cd /home/ubuntu/aigle-api
+            git pull origin ${{ github.ref_name }}
+            source venv/bin/activate
+            pip install -r requirements.txt
+            python manage.py migrate
+            sudo systemctl restart gunicorn_aigle
+          EOF

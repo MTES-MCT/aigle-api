@@ -1,15 +1,25 @@
 from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet, CharFilter
+from django.db.models import Prefetch
 
 from core.models.analytic_log import AnalyticLogType
+from core.models.detection import Detection, DetectionSource
+from core.models.detection_data import (
+    DetectionPrescriptionStatus,
+    DetectionValidationStatus,
+)
+from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
+from core.repository.tile_set import DEFAULT_VALUES
 from core.serializers.parcel import ParcelDetailSerializer, ParcelSerializer
 from core.utils.analytic_log import create_log
 from core.utils.filters import UuidInFilter
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.db.models import Case, When, Value, IntegerField
+
+from django.db.models import Q
 
 
 class ParcelFilter(FilterSet):
@@ -52,22 +62,88 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
         return ParcelSerializer
 
-    def get_serializer_context(self):
-        context = {"request": self.request}
-
-        if self.request.GET.get("tileSetUuid"):
-            context["tile_set_uuid"] = self.request.GET.get("tileSetUuid")
-
-        return context
-
     def get_queryset(self):
         queryset = Parcel.objects.order_by("id")
         queryset = queryset.prefetch_related("commune")
 
-        if self.action == "retrieve":
+        if self.action in ["retrieve", "get_download_infos"]:
             queryset = queryset.prefetch_related(
-                "detection_objects",
-                "detection_objects__detections",
+                Prefetch(
+                    "detection_objects",
+                    queryset=DetectionObject.objects.select_related(
+                        "object_type",
+                    )
+                    .prefetch_related(
+                        "geo_custom_zones", "geo_custom_zones__geo_custom_zone_category"
+                    )
+                    .filter(
+                        ~Q(
+                            detections__detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
+                        )
+                        & Q(
+                            Q(
+                                detections__detection_source__in=[
+                                    DetectionSource.INTERFACE_DRAWN,
+                                    DetectionSource.INTERFACE_FORCED_VISIBLE,
+                                ]
+                            )
+                            | Q(
+                                Q(
+                                    detections__detection_data__detection_validation_status__in=[
+                                        DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+                                        DetectionValidationStatus.SUSPECT,
+                                    ]
+                                )
+                                & Q(detections__score__gte=0.3)
+                            )
+                            | Q(
+                                Q(
+                                    detections__detection_data__detection_validation_status__in=[
+                                        DetectionValidationStatus.SUSPECT,
+                                    ]
+                                )
+                                & Q(detections__score__lt=0.3)
+                            )
+                        )
+                        & Q(
+                            detections__tile_set__tile_set_status__in=DEFAULT_VALUES[
+                                "filter_tile_set_status_in"
+                            ]
+                        )
+                    ),
+                ),
+                Prefetch(
+                    "detection_objects__detections",
+                    queryset=Detection.objects.select_related(
+                        "tile",
+                        "tile_set",
+                        "detection_data",
+                        "detection_data__user_last_update",
+                    ).filter(
+                        ~Q(
+                            detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
+                        )
+                        & Q(
+                            Q(
+                                detection_source__in=[
+                                    DetectionSource.INTERFACE_DRAWN,
+                                    DetectionSource.INTERFACE_FORCED_VISIBLE,
+                                ]
+                            )
+                            | Q(
+                                detection_data__detection_validation_status__in=[
+                                    DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+                                    DetectionValidationStatus.SUSPECT,
+                                ]
+                            )
+                        )
+                        & Q(
+                            tile_set__tile_set_status__in=DEFAULT_VALUES[
+                                "filter_tile_set_status_in"
+                            ]
+                        )
+                    ),
+                ),
             )
 
         return queryset

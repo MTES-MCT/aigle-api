@@ -1,8 +1,6 @@
 import json
-from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
-from core.models.detection_object import DetectionObject
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.parcel import Parcel
+from core.permissions.tile_set import TileSetPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.detection import DetectionWithTileSerializer
 from core.serializers.geo_commune import GeoCommuneSerializer
@@ -12,6 +10,7 @@ from django.contrib.gis.geos import GEOSGeometry
 from rest_framework import serializers
 
 from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
+from core.serializers.tile_set import TileSetMinimalSerializer
 
 
 class ParcelMinimalSerializer(UuidTimestampedModelSerializerMixin):
@@ -44,24 +43,10 @@ class ParcelSerializer(ParcelWithCommuneSerializer):
 class ParcelDetectionObjectSerializer(DetectionObjectMinimalSerializer):
     class Meta(DetectionObjectMinimalSerializer.Meta):
         fields = DetectionObjectMinimalSerializer.Meta.fields + [
-            "detection",
+            "detections",
         ]
 
-    detection = serializers.SerializerMethodField()
-
-    def get_detection(self, obj: DetectionObject):
-        if self.context.get("tile_set_uuid"):
-            detection = obj.detections.filter(
-                tile_set__uuid=self.context["tile_set_uuid"]
-            ).first()
-        else:
-            detection = obj.detections.order_by("-tile_set__date").first()
-
-        if not detection:
-            return None
-
-        detection_serialized = DetectionWithTileSerializer(detection)
-        return detection_serialized.data
+    detections = DetectionWithTileSerializer(many=True, read_only=True)
 
 
 class ParcelDetailSerializer(ParcelSerializer):
@@ -71,21 +56,60 @@ class ParcelDetailSerializer(ParcelSerializer):
             "custom_geo_zones",
             "commune",
             "commune_envelope",
+            "detections_updated_at",
+            "tile_set_previews",
         ]
 
     commune = GeoCommuneSerializer(read_only=True)
     detection_objects = ParcelDetectionObjectSerializer(many=True)
     custom_geo_zones = serializers.SerializerMethodField()
     commune_envelope = serializers.SerializerMethodField()
+    detections_updated_at = serializers.SerializerMethodField()
+    tile_set_previews = serializers.SerializerMethodField()
 
     def get_commune_envelope(self, obj: Parcel):
         return json.loads(GEOSGeometry(obj.commune.geometry.envelope).geojson)
 
     def get_custom_geo_zones(self, obj: Parcel):
-        geo_custom_zones = GeoCustomZone.objects.order_by(
-            *GEO_CUSTOM_ZONES_ORDER_BYS
-        ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
-        geo_custom_zones = geo_custom_zones.filter(geometry__intersects=obj.geometry)
-        geo_custom_zones = geo_custom_zones.all()
+        # we get the geozones associated to the parcel's detections
+        geo_custom_zones = set()
 
-        return GeoCustomZoneSerializer(geo_custom_zones, many=True).data
+        for detection_obj in obj.detection_objects.all():
+            geo_custom_zones.update(detection_obj.geo_custom_zones.all())
+
+        return GeoCustomZoneSerializer(list(geo_custom_zones), many=True).data
+
+    def get_detections_updated_at(self, obj: Parcel):
+        updated_at_values = []
+
+        for detection_object in obj.detection_objects.all():
+            for detection in detection_object.detections.all():
+                if detection.detection_data.updated_at:
+                    updated_at_values.append(detection.detection_data.updated_at)
+
+        return min(updated_at_values) if updated_at_values else None
+
+    def get_tile_set_previews(self, obj: Parcel):
+        user = self.context["request"].user
+        tile_set_previews = TileSetPermission(user=user).get_previews(
+            filter_tile_set_intersects_geometry=obj.geometry,
+        )
+
+        from core.serializers.detection_object import (
+            DetectionObjectTileSetPreviewSerializer,
+        )
+
+        previews_serialized = []
+
+        for tile_set_preview in tile_set_previews:
+            preview = DetectionObjectTileSetPreviewSerializer(
+                data={
+                    "tile_set": TileSetMinimalSerializer(
+                        tile_set_preview["tile_set"]
+                    ).data,
+                    "preview": tile_set_preview["preview"],
+                }
+            )
+            previews_serialized.append(preview.initial_data)
+
+        return previews_serialized

@@ -18,7 +18,7 @@ class BaseRepository(
     model: T_MODEL
 
     def __init__(self, initial_queryset: Optional[QuerySet[T_MODEL]] = None):
-        if initial_queryset:
+        if initial_queryset is not None:
             self.initial_queryset = initial_queryset
         else:
             self.initial_queryset = self.model.objects
