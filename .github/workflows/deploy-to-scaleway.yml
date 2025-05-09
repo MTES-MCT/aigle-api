@@ -26,8 +26,11 @@ jobs:
           SCW_USER: ${{ secrets.SCW_USER }}
         run: |
           ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
-            cd /home/ubuntu/aigle-api
+            cd /home/${{ secrets.SCW_USER }}/aigle-api
             git pull origin ${{ github.ref_name }}
+            set -a  # Enable auto-export of variables
+            source .env
+            set +a # Disable auto-export of variables
             source venv/bin/activate
             pip install -r requirements.txt
             python manage.py migrate
