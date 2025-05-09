@@ -25,7 +25,7 @@ jobs:
           SCW_USER: ${{ secrets.SCW_USER }}
         run: |
           ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
-            cd /opt/apps/aigle-api
+            cd /home/ubuntu/aigle-api
             git pull origin develop
             source venv/bin/activate
             pip install -r requirements.txt
