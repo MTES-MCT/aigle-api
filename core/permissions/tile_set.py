@@ -71,7 +71,9 @@ class TileSetPermission(
 
         tile_set_previews = []
 
-        for tile_set in sorted(tile_sets, key=lambda t: t.date):
+        for tile_set in sorted(
+            tile_sets_most_recent_map.values(), key=lambda t: t.date
+        ):
             tile_set_previews.append(
                 {
                     "tile_set": tile_set,
