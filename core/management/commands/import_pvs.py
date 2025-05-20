@@ -8,7 +8,7 @@ from django.db.models import Q
 
 from aigle.settings import PASSWORD_MIN_LENGTH
 from core.models.user import User, UserRole
-from core.utils.string import normalize, slugify
+from core.utils.string import slugify
 
 from core.models.detection_data import DetectionControlStatus
 from core.models.parcel import Parcel
@@ -26,7 +26,7 @@ STATUSES_MAP = {
 
 
 class PvRow(TypedDict):
-    COMMUNE: str
+    COMMUNE: Optional[str]
     CODE_INSEE: str
     REF_CADAST: str
     DATE_PV: Optional[str]
@@ -81,10 +81,7 @@ class Command(BaseCommand):
                 continue
 
             parcel = (
-                Parcel.objects.filter(
-                    Q(commune__iso_code=row["CODE_INSEE"])
-                    | Q(commune__name_normalized=normalize(row["COMMUNE"]))
-                )
+                Parcel.objects.filter(Q(commune__iso_code=row["CODE_INSEE"]))
                 .filter(
                     section=cadastre_letters,
                     num_parcel=cadastre_numbers,
