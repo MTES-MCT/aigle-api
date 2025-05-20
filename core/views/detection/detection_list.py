@@ -69,7 +69,7 @@ class DetectionListOverviewSerializer(serializers.Serializer):
 
 DOWNLOAD_FILE_HEADERS = [
     "Object n°",
-    "Adresse",
+    "Commune",
     "Type",
     "Parcelle (section)",
     "Parcelle (numéro)",
@@ -335,7 +335,7 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
         queryset = get_list_values_list(
             queryset,
             "detection_object__id",
-            "detection_object__address",
+            "detection_object__commune__name",
             "detection_object__object_type__name",
             "detection_object__parcel__section",
             "detection_object__parcel__num_parcel",
