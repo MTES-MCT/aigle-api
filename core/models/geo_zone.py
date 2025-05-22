@@ -15,6 +15,7 @@ class GeoZoneType(models.TextChoices):
     DEPARTMENT = "DEPARTMENT", "DEPARTMENT"
     REGION = "REGION", "REGION"
     CUSTOM = "CUSTOM", "CUSTOM"
+    SUB_CUSTOM = "SUB_CUSTOM", "SUB_CUSTOM"
 
 
 GEO_CLASS_NAMES_GEO_ZONE_TYPES_MAP = {
@@ -22,6 +23,7 @@ GEO_CLASS_NAMES_GEO_ZONE_TYPES_MAP = {
     "GeoDepartment": GeoZoneType.DEPARTMENT,
     "GeoRegion": GeoZoneType.REGION,
     "GeoCustomZone": GeoZoneType.CUSTOM,
+    "GeoSubCustomZone": GeoZoneType.SUB_CUSTOM,
 }
 
 

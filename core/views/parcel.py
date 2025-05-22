@@ -74,7 +74,12 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
                         "object_type",
                     )
                     .prefetch_related(
-                        "geo_custom_zones", "geo_custom_zones__geo_custom_zone_category"
+                        "geo_custom_zones",
+                        "geo_custom_zones__geo_custom_zone_category",
+                        "geo_sub_custom_zones",
+                    )
+                    .defer(
+                        "geo_custom_zones__geometry", "geo_sub_custom_zones__geometry"
                     )
                     .filter(
                         ~Q(

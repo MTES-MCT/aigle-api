@@ -11,6 +11,7 @@ from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from django.core.exceptions import PermissionDenied
 from rest_framework import serializers
 
+from core.serializers.geo_sub_custom_zone import GeoSubCustomZoneMinimalSerializer
 from core.serializers.utils.with_collectivities import (
     WithCollectivitiesInputSerializerMixin,
     WithCollectivitiesSerializerMixin,
@@ -32,7 +33,7 @@ class GeoCustomZoneGeoFeatureSerializer(GeoFeatureModelSerializer):
         ]
 
 
-class GeoCustomZoneMinimalSerializer(serializers.ModelSerializer):
+class GeoCustomZoneMinimalSerializer(UuidTimestampedModelSerializerMixin):
     class Meta(UuidTimestampedModelSerializerMixin.Meta):
         model = GeoCustomZone
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
@@ -61,6 +62,15 @@ class GeoCustomZoneSerializer(GeoCustomZoneMinimalSerializer):
             if obj.geo_custom_zone_category
             else None
         )
+
+
+class GeoCustomZoneWithSubZonesSerializer(GeoCustomZoneSerializer):
+    class Meta(GeoCustomZoneSerializer.Meta):
+        fields = GeoCustomZoneSerializer.Meta.fields + [
+            "sub_custom_zones",
+        ]
+
+    sub_custom_zones = GeoSubCustomZoneMinimalSerializer(many=True, read_only=True)
 
 
 class GeoCustomZoneInputSerializer(

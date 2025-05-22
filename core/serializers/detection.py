@@ -19,7 +19,6 @@ from core.serializers.detection_data import DetectionDataInputSerializer
 from rest_framework_gis.serializers import GeoFeatureModelSerializer
 from rest_framework import serializers
 
-from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.object_type import ObjectTypeSerializer
 from core.serializers.tile import TileMinimalSerializer, TileSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
@@ -356,6 +355,7 @@ class DetectionUpdateSerializer(DetectionSerializer):
 
 class DetectionListItemSerializer(serializers.ModelSerializer):
     from core.serializers.parcel import ParcelMinimalSerializer
+    from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 
     class Meta:
         model = Detection

@@ -9,8 +9,8 @@ from core.serializers.detection_object import DetectionObjectMinimalSerializer
 from django.contrib.gis.geos import GEOSGeometry
 from rest_framework import serializers
 
-from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
+from core.serializers.utils.custom_zones import reconciliate_custom_zones_with_sub
 
 
 class ParcelMinimalSerializer(UuidTimestampedModelSerializerMixin):
@@ -72,12 +72,20 @@ class ParcelDetailSerializer(ParcelSerializer):
 
     def get_custom_geo_zones(self, obj: Parcel):
         # we get the geozones associated to the parcel's detections
-        geo_custom_zones = set()
+        geo_custom_zones_set = set()
 
         for detection_obj in obj.detection_objects.all():
-            geo_custom_zones.update(detection_obj.geo_custom_zones.all())
+            geo_custom_zones_set.update(detection_obj.geo_custom_zones.all())
 
-        return GeoCustomZoneSerializer(list(geo_custom_zones), many=True).data
+        sub_custom_zones_set = set()
+
+        for detection_obj in obj.detection_objects.all():
+            sub_custom_zones_set.update(detection_obj.geo_sub_custom_zones.all())
+
+        return reconciliate_custom_zones_with_sub(
+            custom_zones=list(geo_custom_zones_set),
+            sub_custom_zones=list(sub_custom_zones_set),
+        )
 
     def get_detections_updated_at(self, obj: Parcel):
         updated_at_values = []

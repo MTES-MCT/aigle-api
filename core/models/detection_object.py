@@ -9,6 +9,7 @@ from common.models.timestamped import TimestampedModelMixin
 from common.models.uuid import UuidModelMixin
 from core.models.geo_commune import GeoCommune
 from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_sub_custom_zone import GeoSubCustomZone
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from simple_history.models import HistoricalRecords
@@ -40,6 +41,9 @@ class DetectionObject(
     )
     geo_custom_zones = models.ManyToManyField(
         GeoCustomZone, related_name="detection_objects"
+    )
+    geo_sub_custom_zones = models.ManyToManyField(
+        GeoSubCustomZone, related_name="detection_objects"
     )
     tile_sets = models.ManyToManyField(TileSet, through="Detection")
     history = HistoricalRecords(bases=[HistoriedModelMixin])
