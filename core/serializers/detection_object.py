@@ -13,12 +13,12 @@ from core.serializers.detection import (
     DetectionWithTileMinimalSerializer,
     DetectionWithTileSerializer,
 )
-from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.object_type import ObjectTypeSerializer
 from rest_framework import serializers
 
 from core.serializers.tile_set import TileSetMinimalSerializer
 from core.serializers.user_group import UserGroupSerializer
+from core.serializers.utils.custom_zones import reconciliate_custom_zones_with_sub
 from core.utils.data_permissions import get_user_group_rights
 from core.utils.prescription import compute_prescription
 
@@ -121,8 +121,14 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
     tile_sets = serializers.SerializerMethodField()
     user_group_rights = serializers.SerializerMethodField()
     parcel = ParcelSerializer(read_only=True)
-    geo_custom_zones = GeoCustomZoneSerializer(many=True, read_only=True)
     user_group_last_update = serializers.SerializerMethodField(read_only=True)
+    geo_custom_zones = serializers.SerializerMethodField()
+
+    def get_geo_custom_zones(self, obj: DetectionObject):
+        return reconciliate_custom_zones_with_sub(
+            custom_zones=list(obj.geo_custom_zones.all()),
+            sub_custom_zones=list(obj.geo_sub_custom_zones.all()),
+        )
 
     def get_user_group_last_update(self, obj: DetectionObject):
         most_recent_detection_update = get_most_recent_detection(detection_object=obj)

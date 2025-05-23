@@ -12,16 +12,20 @@ from core.utils.string import normalize
 
 class GeoZoneType(models.TextChoices):
     COMMUNE = "COMMUNE", "COMMUNE"
+    EPCI = "EPCI", "EPCI"
     DEPARTMENT = "DEPARTMENT", "DEPARTMENT"
     REGION = "REGION", "REGION"
     CUSTOM = "CUSTOM", "CUSTOM"
+    SUB_CUSTOM = "SUB_CUSTOM", "SUB_CUSTOM"
 
 
 GEO_CLASS_NAMES_GEO_ZONE_TYPES_MAP = {
     "GeoCommune": GeoZoneType.COMMUNE,
+    "GeoEpci": GeoZoneType.EPCI,
     "GeoDepartment": GeoZoneType.DEPARTMENT,
     "GeoRegion": GeoZoneType.REGION,
     "GeoCustomZone": GeoZoneType.CUSTOM,
+    "GeoSubCustomZone": GeoZoneType.SUB_CUSTOM,
 }
 
 

@@ -91,8 +91,12 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         queryset = queryset.defer("parcel__geometry")
 
         if self.action == "retrieve":
-            queryset = queryset.prefetch_related("geo_custom_zones")
-            queryset = queryset.defer("geo_custom_zones__geometry")
+            queryset = queryset.prefetch_related(
+                "geo_custom_zones", "geo_sub_custom_zones"
+            )
+            queryset = queryset.defer(
+                "geo_custom_zones__geometry", "geo_sub_custom_zones__geometry"
+            )
 
         return queryset
 

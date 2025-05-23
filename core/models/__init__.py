@@ -2,6 +2,7 @@ from .user import User
 
 from .geo_commune import GeoCommune
 from .geo_department import GeoDepartment
+from .geo_epci import GeoEpci
 from .geo_region import GeoRegion
 from .geo_custom_zone import GeoCustomZone
 from .geo_custom_zone_category import GeoCustomZoneCategory

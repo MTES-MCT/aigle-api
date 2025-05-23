@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand
 
 from core.models.detection import Detection
 from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_sub_custom_zone import GeoSubCustomZone
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 
 
@@ -23,7 +24,12 @@ class Command(BaseCommand):
         if zones_uuids:
             custom_zones_queryset = custom_zones_queryset.filter(uuid__in=zones_uuids)
 
-        custom_zones = custom_zones_queryset.filter(geometry__isnull=False).all()
+        custom_zones = (
+            custom_zones_queryset.filter(geometry__isnull=False)
+            .prefetch_related("sub_custom_zones")
+            .defer("geometry", "sub_custom_zones__geometry")
+            .all()
+        )
 
         print(
             f"Starting updating detection data for zones: {", ".join([zone.name for zone in custom_zones])}"
@@ -49,33 +55,75 @@ class Command(BaseCommand):
 
             GeoCustomZone.objects.raw(
                 """
-            insert into core_detectionobject_geo_custom_zones(
-                    detectionobject_id,
-                    geocustomzone_id
-                )
-            select
-                distinct
-                dobj.id as detectionobject_id,
-                %s as geocustomzone_id
-            from
-                core_detectionobject dobj
-            join core_detection detec on
-                detec.detection_object_id = dobj.id
-            WHERE
-                detec.batch_id = ANY(%s) and
-                detec.tile_set_id = ANY(%s) and
-                ST_Intersects(
-                    detec.geometry,
-                    (
+                    insert into core_detectionobject_geo_custom_zones(
+                            detectionobject_id,
+                            geocustomzone_id
+                        )
                     select
-                        geozone.geometry
+                        distinct
+                        dobj.id as detectionobject_id,
+                        %s as geocustomzone_id
                     from
-                        core_geozone geozone
-                    where
-                        id = %s
-                    )
-                )
-            on conflict do nothing;
+                        core_detectionobject dobj
+                    join core_detection detec on
+                        detec.detection_object_id = dobj.id
+                    WHERE
+                        detec.batch_id = ANY(%s) and
+                        detec.tile_set_id = ANY(%s) and
+                        ST_Intersects(
+                            detec.geometry,
+                            (
+                                select
+                                    geozone.geometry
+                                from
+                                    core_geozone geozone
+                                where
+                                    id = %s
+                            )
+                        )
+                    on conflict do nothing;
+            """,
+                [zone.id, batch_uuids, tile_set_uuids, zone.id],
+            )
+
+        sub_custom_zones = [
+            sub_custom_zone
+            for zone in custom_zones
+            for sub_custom_zone in zone.sub_custom_zones
+        ]
+
+        for zone in sub_custom_zones:
+            print(f"Updating detection data for sub-zone: {zone.name}")
+
+            GeoSubCustomZone.objects.raw(
+                """
+                    insert into core_detectionobject_geo_sub_custom_zones(
+                            detectionobject_id,
+                            geosubcustomzone_id
+                        )
+                    select
+                        distinct
+                        dobj.id as detectionobject_id,
+                        %s as geosubcustomzone_id
+                    from
+                        core_detectionobject dobj
+                    join core_detection detec on
+                        detec.detection_object_id = dobj.id
+                    WHERE
+                        detec.batch_id = ANY(%s) and
+                        detec.tile_set_id = ANY(%s) and
+                        ST_Intersects(
+                            detec.geometry,
+                            (
+                                select
+                                    geosubcustomzone.geometry
+                                from
+                                    core_geosubcustomzone geosubcustomzone
+                                where
+                                    id = %s
+                            )
+                        )
+                    on conflict do nothing;
             """,
                 [zone.id, batch_uuids, tile_set_uuids, zone.id],
             )

@@ -125,8 +125,8 @@ class Command(BaseCommand):
         parser.add_argument("--clean-step", type=bool, default=False)
         parser.add_argument("--batch-id", type=str)
         parser.add_argument("--file-path", type=str)
-        parser.add_argument("--table-name", type=str)
-        parser.add_argument("--table-schema", type=str, default="import_detections")
+        parser.add_argument("--table-name", type=str, default="inference")
+        parser.add_argument("--table-schema", type=str, default="detections")
 
     def validate_arguments(self, options):
         if not options.get("file_path") and not options.get("table_name"):
@@ -483,7 +483,7 @@ class Command(BaseCommand):
 
         if self.total:
             print(
-                f"Inserted {self.total_inserted_detections}/{self.total} detections in total ({(self.total_inserted_detections/self.total)*100:.2f})"
+                f"Inserted {self.total_inserted_detections}/{self.total} detections in total ({(self.total_inserted_detections/self.total)*100:.2f}%)"
             )
         else:
             print(f"Inserted {

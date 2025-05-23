@@ -26,13 +26,28 @@ jobs:
           SCW_USER: ${{ secrets.SCW_USER }}
         run: |
           ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
-            cd /home/${{ secrets.SCW_USER }}/aigle-api
-            git pull origin ${{ github.ref_name }}
+            set -e  # This will make the script exit immediately if any command fails
+            
+            cd /home/${{ secrets.SCW_USER }}/aigle-api || exit 1
+            
+            # Fetch and reset to remote branch
+            git fetch origin ${{ github.ref_name }} || exit 1
+            git reset --hard origin/${{ github.ref_name }} || exit 1
+            
             set -a  # Enable auto-export of variables
-            source .env
+            source .env || exit 1
             set +a # Disable auto-export of variables
-            source venv/bin/activate
-            pip install -r requirements.txt
-            python manage.py migrate
-            sudo systemctl restart gunicorn_aigle
+            
+            source venv/bin/activate || exit 1
+            pip install --break-system-packages -r requirements.txt || exit 1
+            python manage.py migrate || exit 1
+            sudo systemctl restart gunicorn_aigle || exit 1
+            
+            echo "Deployment completed successfully!"
           EOF
+
+          # Check the exit status of the SSH command
+          if [ $? -ne 0 ]; then
+            echo "Deployment failed!"
+            exit 1
+          fi
