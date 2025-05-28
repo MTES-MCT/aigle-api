@@ -26,7 +26,10 @@ def endpoint(request, detection_object_uuid):
     )
 
     try:
-        filename = "Courrier préalable.odt"
+        parcel_label = (
+            f"{detection_object.parcel.section} {detection_object.parcel.num_parcel}"
+        )
+        filename = f"Courrier préalable - {parcel_label}.odt"
 
         with tempfile.NamedTemporaryFile(suffix=".odt", delete=False) as temp_file:
             temp_output_path = temp_file.name
@@ -36,7 +39,7 @@ def endpoint(request, detection_object_uuid):
             processor.replace_placeholders(
                 {
                     "date": datetime.now().strftime("%d/%m/%Y"),
-                    "num_parcelle": f"{detection_object.parcel.section} {detection_object.parcel.num_parcel}",
+                    "num_parcelle": parcel_label,
                     "nom_commune": detection_object.commune.name,
                     "num_fiche_signalement": detection_object.id,
                     "addresse_avec_parentheses": f"({detection_object.address})",
@@ -49,7 +52,7 @@ def endpoint(request, detection_object_uuid):
                 response = HttpResponse(
                     f.read(), content_type="application/vnd.oasis.opendocument.text"
                 )
-                response["Content-Disposition"] = f'attachment; filename="{filename}"'
+                response["content-disposition"] = f'attachment; filename="{filename}"'
                 return response
         finally:
             os.unlink(temp_output_path)
