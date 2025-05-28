@@ -22,10 +22,8 @@ from core.models.detection_data import (
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
-from core.models.geo_custom_zone_category import GeoCustomZoneCategory
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
-from core.models.user import UserRole
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
@@ -279,27 +277,9 @@ class DetectionListFilter(FilterSet):
             "detection_object__commune__geometry",
         )
 
-        # TODO: move this in permission file and apply this to geo
-        if self.request.user.user_role == UserRole.SUPER_ADMIN:
-            geo_custom_zones_prefetch = Prefetch("detection_object__geo_custom_zones")
-            geo_custom_zones_category_prefetch = Prefetch(
-                "detection_object__geo_custom_zones__geo_custom_zone_category"
-            )
-        else:
-            geo_custom_zones_prefetch = Prefetch(
-                "detection_object__geo_custom_zones",
-                queryset=GeoCustomZone.objects.filter(
-                    geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
-                    user_groups_custom_geo_zones__user_user_groups__user=self.request.user.id,
-                ),
-            )
-            geo_custom_zones_category_prefetch = Prefetch(
-                "detection_object__geo_custom_zones__geo_custom_zone_category",
-                queryset=GeoCustomZoneCategory.objects.filter(
-                    geo_custom_zones__geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
-                    geo_custom_zones__user_groups_custom_geo_zones__user_user_groups__user=self.request.user.id,
-                ),
-            )
+        geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
+            GeoCustomZonePermission(user=self.request.user).get_detection_prefetch()
+        )
 
         queryset = queryset.prefetch_related(
             "detection_object",
