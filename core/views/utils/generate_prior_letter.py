@@ -27,7 +27,9 @@ def endpoint(request, detection_object_uuid):
 
     try:
         parcel_label = (
-            f"{detection_object.parcel.section} {detection_object.parcel.num_parcel}"
+            (f"{detection_object.parcel.section} {detection_object.parcel.num_parcel}")
+            if detection_object.parcel
+            else "[[Parcelle inconnue]]"
         )
         filename = f"Courrier préalable - {parcel_label}.odt"
 
