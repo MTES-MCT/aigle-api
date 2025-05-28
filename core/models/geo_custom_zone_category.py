@@ -9,6 +9,7 @@ from core.utils.string import normalize
 
 class GeoCustomZoneCategory(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     color = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
+    name_short = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True, null=True)
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
     name_normalized = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
 

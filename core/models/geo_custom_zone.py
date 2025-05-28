@@ -34,6 +34,7 @@ class GeoCustomZone(GeoZone):
         on_delete=models.CASCADE,
         null=True,
     )
+    name_short = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True, null=True)
 
     class Meta:
         indexes = [

@@ -1,32 +1,32 @@
+from datetime import datetime
 import os
 import tempfile
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 
-from rest_framework import serializers
 
-
-from common.constants.models import DEFAULT_MAX_LENGTH
 from rest_framework.status import HTTP_500_INTERNAL_SERVER_ERROR
+from django.core.exceptions import BadRequest
 
+from core.models.detection_object import DetectionObject
+from core.models.user import User
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.utils.odt_processor import ODTTemplateProcessor
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+
+TEMPLATE_PATH = os.path.join(settings.MEDIA_ROOT, "templates", "prior_letter.odt")
 
 
-class EndpointSerializer(serializers.Serializer):
-    firstName = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
-    lastName = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
-    collectivity = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
-    job = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
-    phone = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
-    email = serializers.EmailField()
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def endpoint(request, detection_object_uuid):
+    detection_object = get_detection_object(
+        detection_object_uuid=detection_object_uuid, user=request.user
+    )
 
-
-TEMPLATE_PATH = os.path.join(settings.MEDIA_ROOT, "templates", "test.odt")
-
-
-def endpoint(request):
     try:
-        filename = "test.odt"
+        filename = "Courrier préalable.odt"
 
         with tempfile.NamedTemporaryFile(suffix=".odt", delete=False) as temp_file:
             temp_output_path = temp_file.name
@@ -34,7 +34,15 @@ def endpoint(request):
         try:
             processor = ODTTemplateProcessor(TEMPLATE_PATH)
             processor.replace_placeholders(
-                {"template_value": "hello la team"}, temp_output_path
+                {
+                    "date": datetime.now().strftime("%d/%m/%Y"),
+                    "num_parcelle": f"{detection_object.parcel.section} {detection_object.parcel.num_parcel}",
+                    "nom_commune": detection_object.commune.name,
+                    "num_fiche_signalement": detection_object.id,
+                    "addresse_avec_parentheses": f"({detection_object.address})",
+                    "zones_a_enjeux": get_custom_zones_text(detection_object),
+                },
+                temp_output_path,
             )
 
             with open(temp_output_path, "rb") as f:
@@ -53,4 +61,44 @@ def endpoint(request):
         )
 
 
-URL = "generate-prior-letter/"
+def get_custom_zones_text(detection_object: DetectionObject):
+    if not detection_object.geo_custom_zones:
+        return ""
+
+    zone_names = []
+
+    for geo_custom_zone in detection_object.geo_custom_zones.all():
+        if geo_custom_zone.geo_custom_zone_category:
+            zone_names.append(
+                geo_custom_zone.geo_custom_zone_category.name_short
+                or geo_custom_zone.geo_custom_zone_category.name
+            )
+            continue
+
+        zone_names.append(geo_custom_zone.name_short or geo_custom_zone.name)
+
+    return f" et située en zones {
+        ", ".join(zone_names)
+    }"
+
+
+def get_detection_object(detection_object_uuid: str, user: User):
+    detection_object_qs = DetectionObject.objects.filter(uuid=detection_object_uuid)
+    geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
+        GeoCustomZonePermission(user=user).get_detection_object_prefetch()
+    )
+    detection_object_qs = detection_object_qs.select_related("parcel", "commune")
+    detection_object_qs = detection_object_qs.prefetch_related(
+        geo_custom_zones_prefetch,
+        geo_custom_zones_category_prefetch,
+    )
+
+    detection_object = detection_object_qs.first()
+
+    if not detection_object:
+        raise BadRequest("Detection object not found")
+
+    return detection_object
+
+
+URL = "generate-prior-letter/<uuid:detection_object_uuid>/"
