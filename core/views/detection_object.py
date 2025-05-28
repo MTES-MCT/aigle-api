@@ -6,6 +6,7 @@ from django.contrib.gis.geos import Point
 from core.contants.geo import SRID
 from core.models.detection_object import DetectionObject
 from core.models.tile_set import TileSetType
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.tile_set import TileSetPermission
 from core.serializers.detection_object import (
     DetectionObjectDetailSerializer,
@@ -91,8 +92,15 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         queryset = queryset.defer("parcel__geometry")
 
         if self.action == "retrieve":
+            geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
+                GeoCustomZonePermission(
+                    user=self.request.user
+                ).get_detection_object_prefetch()
+            )
+
             queryset = queryset.prefetch_related(
-                "geo_custom_zones", "geo_sub_custom_zones"
+                geo_custom_zones_prefetch,
+                geo_custom_zones_category_prefetch,
             )
             queryset = queryset.defer(
                 "geo_custom_zones__geometry", "geo_sub_custom_zones__geometry"
