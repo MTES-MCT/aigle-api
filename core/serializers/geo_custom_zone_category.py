@@ -9,6 +9,7 @@ class GeoCustomZoneCategorySerializer(UuidTimestampedModelSerializerMixin):
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
             "color",
             "name",
+            "name_short",
             "name_normalized",
         ]
 

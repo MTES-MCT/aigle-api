@@ -230,6 +230,9 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": True,
 }
 
+CORS_EXPOSE_HEADERS = [
+    "content-disposition",
+]
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.0/topics/i18n/

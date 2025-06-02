@@ -27,6 +27,7 @@ class GeoCustomZoneGeoFeatureSerializer(GeoFeatureModelSerializer):
         fields = [
             "uuid",
             "name",
+            "name_short",
             "color",
             "geo_custom_zone_status",
             "geo_custom_zone_type",
@@ -38,6 +39,7 @@ class GeoCustomZoneMinimalSerializer(UuidTimestampedModelSerializerMixin):
         model = GeoCustomZone
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
             "name",
+            "name_short",
             "color",
             "geo_custom_zone_status",
             "geo_custom_zone_type",
@@ -79,6 +81,7 @@ class GeoCustomZoneInputSerializer(
     class Meta(GeoCustomZoneSerializer.Meta):
         fields = WithCollectivitiesInputSerializerMixin.Meta.fields + [
             "name",
+            "name_short",
             "color",
             "geo_custom_zone_status",
             "geo_custom_zone_type",
@@ -203,6 +206,7 @@ class GeoCustomZoneInputSerializer(
                 )
 
             validated_data["name"] = None
+            validated_data["name_short"] = None
             validated_data["color"] = None
 
             instance.save()
