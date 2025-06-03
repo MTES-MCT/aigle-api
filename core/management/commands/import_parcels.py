@@ -13,6 +13,7 @@ from core.models.geo_department import GeoDepartment
 from django.contrib.gis.geos import GEOSGeometry
 
 from core.models.parcel import Parcel
+from core.utils.logs_helpers import log_command_event
 
 
 class ParcelProperties(TypedDict):
@@ -48,6 +49,10 @@ def get_data_parcels(
     return temp_dir, json.loads(file_content)["features"]
 
 
+def log_event(info: str):
+    log_command_event(command_name="import_parcels", info=info)
+
+
 class Command(BaseCommand):
     help = "Import parcels to database from JSON"
 
@@ -57,20 +62,20 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         departments = options["departments"]
 
-        print("Starting importing parcels...")
+        log_event("Starting importing parcels...")
 
         if not departments:
-            print(
+            log_event(
                 "No departments provided, importing parcels for all departments in database"
             )
             departments_data = GeoDepartment.objects.all()
             departments = [department.insee_code for department in departments_data]
 
-        print(f"Departments: {', '.join(departments)}")
+        log_event(f"Departments: {', '.join(departments)}")
 
         for department in departments:
             if not GeoDepartment.objects.filter(insee_code=department).exists():
-                print(f"Department not found for code: {department}")
+                log_event(f"Department not found for code: {department}")
                 continue
 
             temp_dir, features = get_data_parcels(department=department)
@@ -89,7 +94,7 @@ class Command(BaseCommand):
                 commune = code_commune_commune_map.get(commune_code)
 
                 if not commune:
-                    print(
+                    log_event(
                         f"Commune not found for code: {
                             commune_code}, skipping parcel: {id_parcellaire}"
                     )

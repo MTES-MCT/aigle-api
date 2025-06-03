@@ -11,6 +11,7 @@ from django.contrib.gis.db.models.functions import Area, Intersection
 from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from core.models.geo_epci import GeoEpci
+from core.utils.logs_helpers import log_command_event
 
 PERCENTAGE_COMMUNE_INCLUDED_THRESHOLD = 0.6
 
@@ -23,6 +24,10 @@ class EpciRowSerializer(serializers.Serializer):
 
 
 TABLE_COLUMNS = [col for col in EpciRowSerializer().get_fields().keys()]
+
+
+def log_event(info: str):
+    log_command_event(command_name="import_geoepcis", info=info)
 
 
 class Command(BaseCommand):
@@ -49,7 +54,7 @@ class Command(BaseCommand):
         table_name = options["table_name"]
         table_schema = options["table_schema"]
 
-        print(f"Starting importing epcis from {table_schema}.{table_name}")
+        log_event(f"Starting importing epcis from {table_schema}.{table_name}")
 
         rows_to_insert = self.get_rows_to_insert_from_table(
             table_name=table_name,
@@ -59,7 +64,9 @@ class Command(BaseCommand):
         for index, row in enumerate(rows_to_insert):
             serializer = EpciRowSerializer(data=row)
             if not serializer.is_valid():
-                print(f"Invalid row: {row}, errors: {serializer.errors} skipping...")
+                log_event(
+                    f"Invalid row: {row}, errors: {serializer.errors} skipping..."
+                )
 
             epci_serialized = serializer.validated_data
 
@@ -105,6 +112,6 @@ class Command(BaseCommand):
 
             GeoCommune.objects.bulk_update(communes, ["epci_id"])
 
-            print(f"EPCIs inserted: {index+1}/{self.total}")
+            log_event(f"EPCIs inserted: {index+1}/{self.total}")
 
         self.cursor.close()

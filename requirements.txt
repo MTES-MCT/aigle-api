@@ -3,6 +3,7 @@ certifi==2024.2.2
 cffi==1.16.0
 cfgv==3.4.0
 charset-normalizer==3.3.2
+colorlog==6.9.0
 cryptography==42.0.7
 defusedxml==0.8.0rc2
 distlib==0.3.8
@@ -35,10 +36,12 @@ PyJWT==2.8.0
 pyproj==3.6.1
 pyshp==2.3.1
 python-dateutil==2.9.0.post0
+python-logging-loki==0.3.1
 python3-openid==3.2.0
 PyYAML==6.0.1
 requests==2.32.2
 requests-oauthlib==2.0.0
+rfc3339==6.2
 ruff==0.4.8
 six==1.16.0
 social-auth-app-django==5.4.1

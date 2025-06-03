@@ -1,8 +1,13 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
+from core.utils.logs_helpers import log_command_event
 
 BATCH_SIZE = 10000
+
+
+def log_event(info: str):
+    log_command_event(command_name="create_tile", info=info)
 
 
 class Command(BaseCommand):
@@ -43,7 +48,7 @@ class Command(BaseCommand):
         self.total = (z_max - z_min + 1) * (y_max - y_min + 1) * (x_max - x_min + 1)
         self.inserted = 0
 
-        print(f"Starting insert tiles, total: {self.total}")
+        log_event(f"Starting insert tiles, total: {self.total}")
 
         for z in range(z_min, z_max + 1):
             for y in range(y_min, y_max + 1):
@@ -63,4 +68,4 @@ class Command(BaseCommand):
         Tile.objects.bulk_create(self.tiles, ignore_conflicts=True)
         self.inserted += len(self.tiles)
         self.tiles = []
-        print(f"Inserting tiles: {self.inserted}/{self.total}")
+        log_event(f"Inserting tiles: {self.inserted}/{self.total}")

@@ -8,6 +8,7 @@ from django.db.models import Q
 
 from aigle.settings import PASSWORD_MIN_LENGTH
 from core.models.user import User, UserRole
+from core.utils.logs_helpers import log_command_event
 from core.utils.string import slugify
 
 from core.models.detection_data import DetectionControlStatus
@@ -33,6 +34,10 @@ class PvRow(TypedDict):
     DATE: Optional[str]
     USER_GROUP: Optional[str]
     STATUS: Optional[str]
+
+
+def log_event(info: str):
+    log_command_event(command_name="import_pvs", info=info)
 
 
 class Command(BaseCommand):
@@ -77,7 +82,7 @@ class Command(BaseCommand):
                     cadast_ref=row["REF_CADAST"]
                 )
             except ValueError:
-                print(f"IMPORT PVS: REF_CADAST invalid: {row["REF_CADAST"]}")
+                log_event(f"IMPORT PVS: REF_CADAST invalid: {row["REF_CADAST"]}")
                 continue
 
             parcel = (
@@ -97,7 +102,7 @@ class Command(BaseCommand):
             if not parcel:
                 processed_count["parcels_not_found"] += 1
                 parcels_not_found.append([row["CODE_INSEE"], row["REF_CADAST"]])
-                print(
+                log_event(
                     f"IMPORT PVS: parcel not found: code_insee={row["CODE_INSEE"]},ref_cadast={row["REF_CADAST"]} ; search_parameters: section={cadastre_letters},num_parcel={cadastre_numbers}"
                 )
                 continue
@@ -139,7 +144,7 @@ class Command(BaseCommand):
 
                     detection.detection_data.save()
 
-            print(
+            log_event(
                 f"IMPORT PVS: updating detections for parcel: {parcel.id_parcellaire}"
             )
 
@@ -154,13 +159,15 @@ class Command(BaseCommand):
             for row in parcels_not_found:
                 csv_not_found_writer.writerow(row)
 
-        print("IMPORT PVS: FINISHED")
-        print(f"IMPORT PVS: parcels not found={processed_count['parcels_not_found']}")
-        print(f"IMPORT PVS: parcels found={processed_count['parcels_found']}")
-        print(
+        log_event("IMPORT PVS: FINISHED")
+        log_event(
+            f"IMPORT PVS: parcels not found={processed_count['parcels_not_found']}"
+        )
+        log_event(f"IMPORT PVS: parcels found={processed_count['parcels_found']}")
+        log_event(
             f"IMPORT PVS: objects updated={processed_count['detection_objects_updated']}"
         )
-        print(f"IMPORT PVS: list of not found saved here={csv_not_found_filename}")
+        log_event(f"IMPORT PVS: list of not found saved here={csv_not_found_filename}")
 
 
 # utils
@@ -179,7 +186,7 @@ def get_and_create_users_last_update(user_group_names: Iterable[str]) -> List[Us
     emails_not_found = list(set(emails_user_group_names_map.keys()) - set(emails_found))
 
     for email in emails_not_found:
-        print(f"IMPORT PVS: creating user with email={email}")
+        log_event(f"IMPORT PVS: creating user with email={email}")
         user = User.objects.create_user(
             email=email,
             password=generate_random_string(),

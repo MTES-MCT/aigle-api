@@ -25,6 +25,7 @@ from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
 from core.models.user import User
 from core.utils.detection import get_linked_detections
+from core.utils.logs_helpers import log_command_event
 from core.utils.prescription import compute_prescription
 from core.utils.string import normalize
 from simple_history.utils import bulk_create_with_history
@@ -80,6 +81,10 @@ TABLE_COLUMNS = list(
         if col not in TABLE_COLUMNS_DATE
     ]
 ) + ["geometry"]
+
+
+def log_event(info: str):
+    log_command_event(command_name="import_detections", info=info)
 
 
 class Command(BaseCommand):
@@ -202,14 +207,14 @@ class Command(BaseCommand):
             batch_id=self.batch_id,
         )
 
-        print(f"Starting importing detections for batch: {self.batch_id}")
+        log_event(f"Starting importing detections for batch: {self.batch_id}")
 
         self.tile_set = TileSet.objects.get(id=tile_set_id)
         self.tile_set.last_import_started_at = self.start_time
         self.tile_set.last_import_ended_at = None
         self.tile_set.save()
 
-        print(f"TileSet found: {self.tile_set.name}")
+        log_event(f"TileSet found: {self.tile_set.name}")
 
         if options.get("file_path"):
             detection_rows_to_insert = self.get_detection_rows_to_insert_from_file(
@@ -237,7 +242,7 @@ class Command(BaseCommand):
         self.tile_set.last_import_ended_at = datetime.now()
         self.tile_set.save()
 
-        print(f"Detections import finished for batch: {self.batch_id}")
+        log_event(f"Detections import finished for batch: {self.batch_id}")
 
     def queue_detection(self, detection_row: Dict[str, Any]):
         # validate input data
@@ -261,7 +266,7 @@ class Command(BaseCommand):
 
         serializer = DetectionRowSerializer(data=detection_row)
         if not serializer.is_valid():
-            print(
+            log_event(
                 f"Invalid detection row: {detection_row}, errors: {
                     serializer.errors} skipping..."
             )
@@ -288,7 +293,7 @@ class Command(BaseCommand):
                         or linked_detection.geometry.intersection(geometry).area
                         > geometry.area * PERCENTAGE_SAME_DETECTION_THRESHOLD
                     ):
-                        print(f"Detection already exists in tileset {
+                        log_event(f"Detection already exists in tileset {
                             self.tile_set.name} and is going to be inserted. Skipping...")
                         return
 
@@ -317,7 +322,7 @@ class Command(BaseCommand):
             )
 
             if linked_detection_same_tileset:
-                print(f"Detection already exists in tileset {self.tile_set.name}, id: {
+                log_event(f"Detection already exists in tileset {self.tile_set.name}, id: {
                       linked_detection_same_tileset.id}. Skipping...")
                 return
         else:
@@ -351,7 +356,7 @@ class Command(BaseCommand):
                         z=TILE_DEFAULT_ZOOM,
                     )
             else:
-                print("Tile not found for detection, skipping...")
+                log_event("Tile not found for detection, skipping...")
                 return
 
         # detection data
@@ -466,7 +471,7 @@ class Command(BaseCommand):
         ):
             return
 
-        print(f"Inserting {len(self.detections_to_insert)} detections")
+        log_event(f"Inserting {len(self.detections_to_insert)} detections")
 
         bulk_create_with_history(self.detection_objects_to_insert, DetectionObject)
         bulk_create_with_history(self.detection_datas_to_insert, DetectionData)
@@ -482,14 +487,14 @@ class Command(BaseCommand):
         self.total_inserted_detections += len(self.detections_to_insert)
 
         if self.total:
-            print(
+            log_event(
                 f"Inserted {self.total_inserted_detections}/{self.total} detections in total ({(self.total_inserted_detections/self.total)*100:.2f}%)"
             )
         else:
-            print(f"Inserted {
+            log_event(f"Inserted {
                   self.total_inserted_detections} detections in total")
 
-        print(f"Elapsed time: {datetime.now() - self.start_time}")
+        log_event(f"Elapsed time: {datetime.now() - self.start_time}")
 
         self.detection_objects_to_insert = []
         self.detection_datas_to_insert = []

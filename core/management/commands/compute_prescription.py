@@ -2,9 +2,14 @@ from django.core.management.base import BaseCommand, CommandError
 
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
+from core.utils.logs_helpers import log_command_event
 from core.utils.prescription import compute_prescription
 
 BATCH_SIZE = 10000
+
+
+def log_event(info: str):
+    log_command_event(command_name="compute_prescription", info=info)
 
 
 class Command(BaseCommand):
@@ -20,7 +25,7 @@ class Command(BaseCommand):
         if len(object_type_uuids) != len(object_types):
             raise CommandError("Some object types were not found")
 
-        print(f"Starting compute prescription statuses for object types: {
+        log_event(f"Starting compute prescription statuses for object types: {
               [ot.name for ot in object_types]}")
 
         offset = 0
@@ -43,7 +48,7 @@ class Command(BaseCommand):
 
             offset += len(detection_objects)
 
-            print(f"Computed prescription for detection objects: {
+            log_event(f"Computed prescription for detection objects: {
                   offset}/{total}")
 
-        print("Prescription computation done")
+        log_event("Prescription computation done")

@@ -10,6 +10,7 @@ from core.management.commands._common.file import (
 )
 from core.models import GeoRegion
 from core.models.geo_department import GeoDepartment
+from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
 from django.contrib.gis.geos import GEOSGeometry
 
@@ -37,6 +38,10 @@ class AdditionalInfos(TypedDict):
     region_name: str
 
 
+def log_event(info: str):
+    log_command_event(command_name="import_geodepartment", info=info)
+
+
 class Command(BaseCommand):
     help = "Import departments to database from SHP"
 
@@ -46,12 +51,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         insee_codes = options["insee_codes"]
 
-        print("Starting importing departments...")
+        log_event("Starting importing departments...")
 
         if insee_codes:
-            print(f"Insee codes: {', '.join(insee_codes)}")
+            log_event(f"Insee codes: {', '.join(insee_codes)}")
         else:
-            print("No insee codes provided, importing all departments")
+            log_event("No insee codes provided, importing all departments")
 
         # shape data
         temp_dir, file_path = download_file(

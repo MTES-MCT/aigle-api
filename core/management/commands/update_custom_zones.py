@@ -4,6 +4,11 @@ from core.models.detection import Detection
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_sub_custom_zone import GeoSubCustomZone
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
+from core.utils.logs_helpers import log_command_event
+
+
+def log_event(info: str):
+    log_command_event(command_name="update_custom_zones", info=info)
 
 
 class Command(BaseCommand):
@@ -31,7 +36,7 @@ class Command(BaseCommand):
             .all()
         )
 
-        print(
+        log_event(
             f"Starting updating detection data for zones: {", ".join([zone.name for zone in custom_zones])}"
         )
 
@@ -51,7 +56,7 @@ class Command(BaseCommand):
             tile_set_uuids = list(tile_set_uuids_queryset)
 
         for zone in custom_zones:
-            print(f"Updating detection data for zone: {zone.name}")
+            log_event(f"Updating detection data for zone: {zone.name}")
 
             GeoCustomZone.objects.raw(
                 """
@@ -93,7 +98,7 @@ class Command(BaseCommand):
         ]
 
         for zone in sub_custom_zones:
-            print(f"Updating detection data for sub-zone: {zone.name}")
+            log_event(f"Updating detection data for sub-zone: {zone.name}")
 
             GeoSubCustomZone.objects.raw(
                 """

@@ -42,12 +42,33 @@ if os.environ.get("ENVIRONMENT") == "development":
         "GEOS_LIBRARY_PATH", "/opt/homebrew/opt/geos/lib/libgeos_c.dylib"
     )
 
+BASE_HANDLERS = ["console"]
 SQL_ECHO = strtobool(os.environ.get("SQL_ECHO", "false"))
-
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
 
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+        "colored": {
+            "()": "colorlog.ColoredFormatter",
+            "format": "{log_color}{levelname} {asctime} {name} {message}",
+            "style": "{",
+        }
+        if ENVIRONMENT == "development"
+        else {
+            "format": "{levelname} {asctime} {name} {message}",
+            "style": "{",
+        },
+    },
     "filters": {
         "require_debug_true": {
             "()": "django.utils.log.RequireDebugTrue",
@@ -55,16 +76,56 @@ LOGGING = {
     },
     "handlers": {
         "console": {
-            "level": "DEBUG",
-            "filters": ["require_debug_true"],
             "class": "logging.StreamHandler",
-        }
+            "formatter": "colored" if ENVIRONMENT == "development" else "verbose",
+        },
+    },
+    "root": {
+        "handlers": BASE_HANDLERS,
+        "level": "DEBUG" if ENVIRONMENT == "development" else "INFO",
     },
     "loggers": {
+        "django": {
+            "handlers": BASE_HANDLERS,
+            "level": "INFO",  # Keep at INFO even in development
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": BASE_HANDLERS,
+            "level": "DEBUG" if ENVIRONMENT == "development" else "WARNING",
+            "propagate": False,
+        },
         "django.db.backends": {
-            "level": "DEBUG" if SQL_ECHO else "WARNING",
-            "handlers": ["console"],
-        }
+            "handlers": BASE_HANDLERS,
+            "level": "WARNING",
+            "propagate": False,
+        },
+        # Silence noisy Django loggers in development
+        "django.utils.autoreload": {
+            "handlers": BASE_HANDLERS,
+            "level": "WARNING",  # Only show warnings/errors from autoreload
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": BASE_HANDLERS,
+            "level": "INFO",  # Keep server logs but not debug
+            "propagate": False,
+        },
+        "django.template": {
+            "handlers": BASE_HANDLERS,
+            "level": "WARNING",  # Silence template debug logs
+            "propagate": False,
+        },
+        "django.security": {
+            "handlers": BASE_HANDLERS,
+            "level": "INFO",
+            "propagate": False,
+        },
+        "aigle": {
+            "handlers": BASE_HANDLERS,
+            "level": "DEBUG",
+            "propagate": False,
+        },
     },
 }
 
@@ -126,6 +187,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "simple_history.middleware.HistoryRequestMiddleware",
+    "core.middlewares.logs.RequestLoggingMiddleware",
 ]
 
 # debug toolbar only showed in dev mode
