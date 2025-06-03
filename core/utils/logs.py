@@ -5,18 +5,18 @@ import logging_loki
 
 def setup_scaleway_logger():
     """
-    Setup Scaleway Cockpit logger using Loki (only for production/staging)
+    Setup Scaleway Cockpit logger using Loki (only for production/preprod)
     """
     environment = os.environ.get("ENVIRONMENT", "development")
 
-    # Only use Scaleway logging in production/staging
-    if environment in ["production", "staging"]:
+    # Only use Scaleway logging in production/preprod
+    if environment in ["production", "preprod"]:
         handler = logging_loki.LokiHandler(
-            url="https://ad795441-15db-4609-a53f-30ddf578f82d.logs.cockpit.fr-par.scw.cloud",
+            url=os.environ.get("SCW_COCKPIT_URL"),
             tags={"job": "django_api", "environment": environment},
             auth=(
                 os.environ.get("SCW_SECRET_KEY"),
-                os.environ.get("COCKPIT_TOKEN_SECRET_KEY"),
+                os.environ.get("SCW_COCKPIT_TOKEN_SECRET_KEY"),
             ),
             version="1",
         )

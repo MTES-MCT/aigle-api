@@ -1,8 +1,7 @@
-import logging
 import time
 import uuid
 
-logger = logging.getLogger("aigle")  # Replace 'myapp' with your app name
+from core.utils.logs_helpers import log_api_call
 
 
 class RequestLoggingMiddleware:
@@ -14,29 +13,20 @@ class RequestLoggingMiddleware:
         request.id = str(uuid.uuid4())
         start_time = time.time()
 
-        # Log incoming request
-        logger.info(
-            f"Request {request.method} {request.path}",
-            extra={
-                "request_id": request.id,
-                "method": request.method,
-                "path": request.path,
-                "user": str(request.user) if hasattr(request, "user") else "Anonymous",
-                "ip": self.get_client_ip(request),
-            },
-        )
-
         response = self.get_response(request)
 
         # Log response
         duration = time.time() - start_time
-        logger.info(
-            f"Response {response.status_code}",
-            extra={
-                "request_id": request.id,
-                "status_code": response.status_code,
-                "duration_ms": round(duration * 1000, 2),
-            },
+
+        # Log incoming request
+        log_api_call(
+            endpoint=request.path,
+            method=request.method,
+            user=str(request.user) if hasattr(request, "user") else "Anonymous",
+            ip=str(self.get_client_ip(request)),
+            request_id=request.id,
+            duration_ms=round(duration * 1000, 2),
+            status_code=response.status_code,
         )
 
         return response

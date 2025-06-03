@@ -16,6 +16,10 @@ from pathlib import Path
 
 from core.utils.parsing import strtobool
 
+import logging  # noqa: F401
+import logging_loki  # noqa: F401
+from core.utils.logs import scaleway_logger  # noqa: F401
+
 DEPLOYMENT_DATETIME = datetime.now()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -128,6 +132,22 @@ LOGGING = {
         },
     },
 }
+
+if ENVIRONMENT in ["production", "preprod"]:
+    LOGGING["handlers"]["scaleway_loki"] = {
+        "class": "logging_loki.LokiHandler",
+        "url": os.environ.get("SCW_COCKPIT_URL"),
+        "tags": {
+            "job": "django_api",
+            "environment": ENVIRONMENT,
+        },
+        "auth": (
+            os.environ.get("SCW_SECRET_KEY"),
+            os.environ.get("SCW_COCKPIT_TOKEN_SECRET_KEY"),
+        ),
+        "version": "1",
+    }
+
 
 ALLOWED_HOSTS = []
 
