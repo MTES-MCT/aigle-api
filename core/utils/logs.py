@@ -12,7 +12,7 @@ def setup_scaleway_logger():
     # Only use Scaleway logging in production/staging
     if environment in ["production", "staging"]:
         handler = logging_loki.LokiHandler(
-            url="https://logs.cockpit.fr-par.scw.cloud/loki/api/v1/push",
+            url="https://ad795441-15db-4609-a53f-30ddf578f82d.logs.cockpit.fr-par.scw.cloud",
             tags={"job": "django_api", "environment": environment},
             auth=(
                 os.environ.get("SCW_SECRET_KEY"),
