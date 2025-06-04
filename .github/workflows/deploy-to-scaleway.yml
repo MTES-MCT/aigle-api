@@ -39,7 +39,7 @@ jobs:
             set +a # Disable auto-export of variables
             
             source venv/bin/activate || exit 1
-            pip install --break-system-packages -r requirements.txt || exit 1
+            python -m pip install -r requirements.txt || exit 1
             python manage.py migrate || exit 1
             sudo systemctl restart gunicorn_aigle || exit 1
             
