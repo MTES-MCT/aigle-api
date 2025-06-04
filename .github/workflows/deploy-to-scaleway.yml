@@ -26,34 +26,46 @@ jobs:
           SCW_USER: ${{ secrets.SCW_USER }}
         run: |
           ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
-            set -e  # This will make the script exit immediately if any command fails
-            
-            cd /home/${{ secrets.SCW_USER }}/aigle-api || exit 1
-            
-            # Fetch and reset to remote branch
+            set -e
+
+            cd /home/ubuntu/aigle-api || exit 1
+
+            # Fetch latest code
             git fetch origin ${{ github.ref_name }} || exit 1
             git reset --hard origin/${{ github.ref_name }} || exit 1
-            
-            set -a  # Enable auto-export of variables
+
+            # Export env vars
+            set -a
             source .env || exit 1
-            set +a # Disable auto-export of variables
-            
+            set +a
+
+            # Install packages
             xargs -a Aptfile sudo apt install -y || exit 1
-            
+
+            # Start Redis
             sudo systemctl start redis-server || exit 1
             sudo systemctl enable redis-server || exit 1
 
+            # Set up services
+            sudo cp services/celery.service /etc/systemd/system/ || exit 1
+            sudo cp services/gunicorn_aigle.service /etc/systemd/system/ || exit 1
+            sudo systemctl daemon-reload || exit 1
+            sudo systemctl enable celery || exit 1
+            sudo systemctl enable gunicorn_aigle || exit 1
+
+            # Activate Python env and apply migrations
             source venv/bin/activate || exit 1
             python -m pip install -r requirements.txt || exit 1
             python manage.py migrate || exit 1
 
-            python -m celery -A aigle worker --loglevel=info || exit 1
+            # Restart services
+            sudo systemctl restart celery || exit 1
             sudo systemctl restart gunicorn_aigle || exit 1
-            
+
             echo "Deployment completed successfully!"
           EOF
 
-          # Check the exit status of the SSH command
+          # Check SSH command result
           if [ $? -ne 0 ]; then
             echo "Deployment failed!"
             exit 1
