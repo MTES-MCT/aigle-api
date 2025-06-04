@@ -11,6 +11,7 @@ from core.views.map_settings import MapSettingsView
 from core.views.object_type import ObjectTypeViewSet
 from core.views.object_type_category import ObjectTypeCategoryViewSet
 from core.views.parcel import ParcelViewSet
+from core.views.run_command import CommandAsyncViewSet
 from core.views.statistics.validation_status_evolution import (
     StatisticsValidationStatusEvolutionView,
 )
@@ -62,6 +63,7 @@ router.register(
     "detection-object", DetectionObjectViewSet, basename="DetectionObjectViewSet"
 )
 router.register("detection-data", DetectionDataViewSet, basename="DetectionDataViewSet")
+router.register("run-command", CommandAsyncViewSet, basename="CommandAsyncViewSet")
 
 urlpatterns = router.urls
 

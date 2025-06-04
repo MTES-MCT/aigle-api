@@ -14,6 +14,8 @@ from django.contrib.gis.db.models.functions import Intersection
 from django.contrib.gis.db.models.aggregates import Union
 from django.contrib.gis.geos import GEOSGeometry
 from django.db.models.functions import Coalesce
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 
 
 class GeometrySerializer(serializers.Serializer):
@@ -26,6 +28,8 @@ class GeometrySerializer(serializers.Serializer):
     uuidsNegative = serializers.CharField(required=False, allow_null=True)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def endpoint(request):
     geometry_serializer = GeometrySerializer(data=request.GET)
     geometry_serializer.is_valid(raise_exception=True)

@@ -38,9 +38,16 @@ jobs:
             source .env || exit 1
             set +a # Disable auto-export of variables
             
+            xargs -a Aptfile sudo apt install -y || exit 1
+            
+            sudo systemctl start redis-server || exit 1
+            sudo systemctl enable redis-server || exit 1
+
             source venv/bin/activate || exit 1
             python -m pip install -r requirements.txt || exit 1
             python manage.py migrate || exit 1
+
+            python -m celery -A aigle worker --loglevel=info || exit 1
             sudo systemctl restart gunicorn_aigle || exit 1
             
             echo "Deployment completed successfully!"
