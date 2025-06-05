@@ -30,7 +30,7 @@ def format_list(list_: List[List[str]], format_fn=None) -> List[str]:
     return [item[0] if not format_fn else format_fn(item[0]) for item in list_]
 
 
-@api_view(["POST"])
+@api_view(["GET"])
 @permission_classes([AdminRolePermission])
 def endpoint(request):
     object_types_names = ObjectType.objects.values_list("name").all()
