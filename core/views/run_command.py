@@ -1,6 +1,6 @@
 # aigle/views.py
 
-from typing import Dict, Any, List, TypedDict
+from typing import Dict, Any, List, Optional, TypedDict
 from rest_framework.viewsets import ViewSet
 from rest_framework.decorators import action
 from rest_framework.request import Request
@@ -33,10 +33,13 @@ class CommandParameters(TypedDict):
     name: str
     type: str
     default: str
+    multiple: bool
+    required: bool
 
 
 class CommandWithParameters(TypedDict):
     name: str
+    help: Optional[str]
     parameters: List[CommandParameters]
 
 
@@ -48,8 +51,10 @@ def list_commands_with_parameters() -> List[CommandWithParameters]:
             continue
 
         try:
-            command = CommandWithParameters(name=command_name, parameters=[])
             command_obj = load_command_class(app_name, command_name)
+            command = CommandWithParameters(
+                name=command_name, parameters=[], help=command_obj.help
+            )
             if isinstance(command_obj, BaseCommand):
                 parser = command_obj.create_parser("manage.py", command_name)
 
@@ -66,6 +71,8 @@ def list_commands_with_parameters() -> List[CommandWithParameters]:
                         name=opts,
                         type=action.type.__name__ if action.type else "str",
                         default=action.default,
+                        required=action.required,
+                        multiple=type(action).__name__ == "_AppendAction",
                     )
                     command["parameters"].append(command_parameters)
 
@@ -92,12 +99,9 @@ class CommandAsyncViewSet(ViewSet):
 
         validated_data: Dict[str, Any] = serializer.validated_data
         command_name: str = validated_data["command"]
-        args: List[Any] = validated_data.get("args", [])
-        kwargs: Dict[str, Any] = validated_data.get("kwargs", {})
+        args: List[Any] = validated_data.get("args", {})
 
-        task_id: str = AsyncCommandService.run_command_async(
-            command_name, *args, **kwargs
-        )
+        task_id: str = AsyncCommandService.run_command_async(command_name, **args)
         return Response(
             {"task_id": task_id, "status": "started"}, status=status.HTTP_201_CREATED
         )

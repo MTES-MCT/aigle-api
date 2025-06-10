@@ -41,7 +41,7 @@ def log_event(info: str):
 
 
 class Command(BaseCommand):
-    help = "Convert a shape to postgis geometry and insert it in database"
+    help = "Import PVs from a local csv file"
 
     def add_arguments(self, parser):
         parser.add_argument("--pv-csv-path", type=str, required=True)
@@ -108,9 +108,9 @@ class Command(BaseCommand):
                 continue
 
             processed_count["parcels_found"] += 1
-            processed_count["detection_objects_updated"] += (
-                parcel.detection_objects.count()
-            )
+            processed_count[
+                "detection_objects_updated"
+            ] += parcel.detection_objects.count()
 
             for detection_object in parcel.detection_objects.all():
                 detection_control_status = None
@@ -150,7 +150,7 @@ class Command(BaseCommand):
 
         csv_file.close()
 
-        csv_not_found_filename = f'import_pvs_parcels_not_found-{datetime.today().strftime('%Y-%m-%d-%H:%M:%S')}.csv'
+        csv_not_found_filename = f"import_pvs_parcels_not_found-{datetime.today().strftime('%Y-%m-%d-%H:%M:%S')}.csv"
 
         with open(csv_not_found_filename, "w", newline="") as csvfile:
             csv_not_found_writer = csv.writer(csvfile)
