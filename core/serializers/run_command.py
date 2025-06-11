@@ -25,3 +25,13 @@ class CancelTaskSerializer(serializers.Serializer):
         if not value.strip():
             raise serializers.ValidationError("Task ID cannot be empty")
         return value.strip()
+
+
+class TaskSerializer(serializers.Serializer):
+    task_id = serializers.CharField(read_only=True)
+    name = serializers.CharField(read_only=True)
+    args = serializers.ListField(read_only=True)
+    kwargs = serializers.DictField(read_only=True)
+    worker = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    eta = serializers.CharField(read_only=True, required=False, allow_null=True)

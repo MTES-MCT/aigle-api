@@ -77,16 +77,20 @@ COMMANDS_AND_PARAMETERS_MAP = {
     for command in COMMANDS_AND_PARAMETERS
 }
 
+CommandParameters = Dict[str, Union[bool, str, int]]
 
-def validate_parameters(
-    command_name: str, parameters: Dict[str, Union[bool, str, int]]
-):
+
+def parse_parameters(
+    command_name: str, parameters: CommandParameters
+) -> CommandParameters:
     command_parameters_map = COMMANDS_AND_PARAMETERS_MAP.get(command_name)
     if not command_parameters_map:
         raise BadRequest(f"Command with name '{command_name}' not found")
 
+    parsed_parameters = parameters.copy()
+
     for parameter_name, param_config in command_parameters_map.items():
-        parameter_value = parameters.get(parameter_name)
+        parameter_value = parsed_parameters.get(parameter_name)
         if not param_config:
             raise BadRequest(
                 f"Command with name '{command_name}' does not have parameter '{parameter_name}'"
@@ -96,3 +100,10 @@ def validate_parameters(
             raise BadRequest(
                 f"Parameter with name '{command_name}.{parameter_name}' is required"
             )
+
+        if param_config["multiple"] and parameter_value:
+            parsed_parameters[parameter_name] = parsed_parameters[parameter_name].split(
+                ","
+            )
+
+    return parsed_parameters

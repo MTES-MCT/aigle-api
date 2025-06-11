@@ -53,6 +53,9 @@ jobs:
             sudo systemctl enable celery || exit 1
             sudo systemctl enable gunicorn_aigle || exit 1
 
+            # Set up emails
+            sudo ufw allow $EMAIL_PORT || exit 1
+
             # Activate Python env and apply migrations
             source venv/bin/activate || exit 1
             python -m pip install -r requirements.txt || exit 1

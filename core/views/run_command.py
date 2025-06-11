@@ -1,6 +1,5 @@
 # aigle/views.py
 
-from typing import Dict, Any, Union
 from rest_framework.viewsets import ViewSet
 from rest_framework.decorators import action
 from rest_framework.request import Request
@@ -8,11 +7,16 @@ from rest_framework.response import Response
 from rest_framework import status
 from core.serializers.run_command import (
     RunCommandSerializer,
+    TaskSerializer,
     TaskStatusSerializer,
     CancelTaskSerializer,
 )
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
-from core.utils.run_command import COMMANDS_AND_PARAMETERS, validate_parameters
+from core.utils.run_command import (
+    COMMANDS_AND_PARAMETERS,
+    CommandParameters,
+    parse_parameters,
+)
 from core.utils.tasks import AsyncCommandService
 
 
@@ -27,12 +31,16 @@ class CommandAsyncViewSet(ViewSet):
         serializer = RunCommandSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        validated_data: Dict[str, Any] = serializer.validated_data
-        command_name: str = validated_data["command"]
-        parameters: Dict[str, Union[bool, str, int]] = validated_data.get("args", {})
-        validate_parameters(command_name=command_name, parameters=parameters)
+        validated_data = serializer.validated_data
+        command_name = validated_data["command"]
+        parameters: CommandParameters = validated_data.get("args", {})
+        parsed_parameters = parse_parameters(
+            command_name=command_name, parameters=parameters
+        )
 
-        task_id: str = AsyncCommandService.run_command_async(command_name, **parameters)
+        task_id: str = AsyncCommandService.run_command_async(
+            command_name, **parsed_parameters
+        )
         return Response(
             {"task_id": task_id, "status": "started"}, status=status.HTTP_201_CREATED
         )
@@ -63,4 +71,13 @@ class CommandAsyncViewSet(ViewSet):
         success = AsyncCommandService.cancel_task(task_id)
         return Response(
             {"cancelled": success, "task_id": task_id}, status=status.HTTP_200_OK
+        )
+
+    @action(detail=False, methods=["get"], url_path="tasks")
+    def list_tasks(self, request: Request) -> Response:
+        tasks = AsyncCommandService.get_all_tasks()
+        serializer = TaskSerializer(data=tasks, many=True)
+        serializer.is_valid()
+        return Response(
+            {"count": len(tasks), "results": serializer.data}, status=status.HTTP_200_OK
         )

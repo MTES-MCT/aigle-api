@@ -1,9 +1,9 @@
 from io import StringIO
-from celery import shared_task
+from celery import shared_task, current_app
 from celery.result import AsyncResult
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, List, Optional, Union
 
 
 @shared_task(bind=True)
@@ -67,3 +67,64 @@ class AsyncCommandService:
         result = AsyncResult(task_id)
         result.revoke(terminate=True)
         return True
+
+    @staticmethod
+    def get_all_tasks() -> List[Dict[str, Any]]:
+        inspect = current_app.control.inspect()
+
+        # Get active tasks
+        active_tasks = inspect.active()
+        active_list = []
+
+        if active_tasks:
+            for worker, tasks in active_tasks.items():
+                for task in tasks:
+                    active_list.append(
+                        {
+                            "task_id": task["id"],
+                            "name": task["name"],
+                            "args": task["args"],
+                            "kwargs": task["kwargs"],
+                            "worker": worker,
+                            "status": "RUNNING",
+                        }
+                    )
+
+        # Get scheduled tasks
+        scheduled_tasks = inspect.scheduled()
+        scheduled_list = []
+
+        if scheduled_tasks:
+            for worker, tasks in scheduled_tasks.items():
+                for task in tasks:
+                    scheduled_list.append(
+                        {
+                            "task_id": task["request"]["id"],
+                            "name": task["request"]["task"],
+                            "args": task["request"]["args"],
+                            "kwargs": task["request"]["kwargs"],
+                            "worker": worker,
+                            "status": "SCHEDULED",
+                            "eta": task["eta"],
+                        }
+                    )
+
+        # Get reserved tasks
+        reserved_tasks = inspect.reserved()
+        reserved_list = []
+
+        if reserved_tasks:
+            for worker, tasks in reserved_tasks.items():
+                for task in tasks:
+                    reserved_list.append(
+                        {
+                            "task_id": task["id"],
+                            "name": task["name"],
+                            "args": task["args"],
+                            "kwargs": task["kwargs"],
+                            "worker": worker,
+                            "status": "RESERVED",
+                        }
+                    )
+
+        return active_list + scheduled_list + reserved_list
