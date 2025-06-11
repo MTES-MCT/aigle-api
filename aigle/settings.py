@@ -48,9 +48,13 @@ if os.environ.get("ENVIRONMENT") == "development":
         "GEOS_LIBRARY_PATH", "/opt/homebrew/opt/geos/lib/libgeos_c.dylib"
     )
 
-BASE_HANDLERS = ["console"]
 SQL_ECHO = strtobool(os.environ.get("SQL_ECHO", "false"))
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
+
+BASE_HANDLERS = ["console"]
+
+if ENVIRONMENT in ["production", "preprod"]:
+    BASE_HANDLERS = ["console", "scaleway_loki"]
 
 LOGGING = {
     "version": 1,
@@ -149,6 +153,13 @@ if ENVIRONMENT in ["production", "preprod"]:
         ),
         "version": "1",
     }
+
+    LOGGING["handlers"]["mail_admins"] = {
+        "level": "ERROR",
+        "class": "django.utils.log.AdminEmailHandler",
+        "include_html": True,
+    }
+    LOGGING["loggers"]["django.request"]["handlers"] = BASE_HANDLERS + ["mail_admins"]
 
 
 ALLOWED_HOSTS = []

@@ -1,6 +1,6 @@
 # aigle/views.py
 
-from typing import Dict, Any, List, Optional, TypedDict
+from typing import Dict, Any, Union
 from rest_framework.viewsets import ViewSet
 from rest_framework.decorators import action
 from rest_framework.request import Request
@@ -12,78 +12,8 @@ from core.serializers.run_command import (
     CancelTaskSerializer,
 )
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.run_command import COMMANDS_AND_PARAMETERS, validate_parameters
 from core.utils.tasks import AsyncCommandService
-from django.core.management import get_commands, load_command_class
-from django.core.management.base import BaseCommand
-
-DEFAULT_OPTIONS = {
-    "--version",
-    "--verbosity",
-    "--settings",
-    "--pythonpath",
-    "--traceback",
-    "--no-color",
-    "--force-color",
-    "--skip-checks",
-    "--help",
-}
-
-
-class CommandParameters(TypedDict):
-    name: str
-    type: str
-    default: str
-    multiple: bool
-    required: bool
-
-
-class CommandWithParameters(TypedDict):
-    name: str
-    help: Optional[str]
-    parameters: List[CommandParameters]
-
-
-def list_commands_with_parameters() -> List[CommandWithParameters]:
-    commands = []
-
-    for command_name, app_name in sorted(get_commands().items()):
-        if app_name != "core":
-            continue
-
-        try:
-            command_obj = load_command_class(app_name, command_name)
-            command = CommandWithParameters(
-                name=command_name, parameters=[], help=command_obj.help
-            )
-            if isinstance(command_obj, BaseCommand):
-                parser = command_obj.create_parser("manage.py", command_name)
-
-                for action in parser._actions:
-                    if any(opt in DEFAULT_OPTIONS for opt in action.option_strings):
-                        continue
-
-                    opts = (
-                        ", ".join(action.option_strings)
-                        if action.option_strings
-                        else action.dest
-                    )
-                    command_parameters = CommandParameters(
-                        name=opts,
-                        type=action.type.__name__ if action.type else "str",
-                        default=action.default,
-                        required=action.required,
-                        multiple=type(action).__name__ == "_AppendAction",
-                    )
-                    command["parameters"].append(command_parameters)
-
-            commands.append(command)
-        except Exception as e:
-            print(f"Error loading {command_name}: {e}")
-
-    return commands
-
-
-COMMANDS_AND_PARAMETERS = list_commands_with_parameters()
 
 
 class CommandAsyncViewSet(ViewSet):
@@ -99,9 +29,10 @@ class CommandAsyncViewSet(ViewSet):
 
         validated_data: Dict[str, Any] = serializer.validated_data
         command_name: str = validated_data["command"]
-        args: List[Any] = validated_data.get("args", {})
+        parameters: Dict[str, Union[bool, str, int]] = validated_data.get("args", {})
+        validate_parameters(command_name=command_name, parameters=parameters)
 
-        task_id: str = AsyncCommandService.run_command_async(command_name, **args)
+        task_id: str = AsyncCommandService.run_command_async(command_name, **parameters)
         return Response(
             {"task_id": task_id, "status": "started"}, status=status.HTTP_201_CREATED
         )
