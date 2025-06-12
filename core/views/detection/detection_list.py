@@ -3,7 +3,7 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet, NumberFilter, ChoiceFilter, OrderingFilter
 from django.db.models import QuerySet, OuterRef, Subquery
 
-from core.contants.labels import (
+from core.constants.labels import (
     DETECTION_CONTROL_STATUSES_NAMES_MAP,
     DETECTION_PRESCRIPTION_STATUSES_NAMES_MAP,
     DETECTION_SOURCE_NAMES_MAP,

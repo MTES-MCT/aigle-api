@@ -1,5 +1,5 @@
 from typing import List, Optional, Tuple
-from core.contants.order_by import TILE_SETS_ORDER_BYS
+from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.object_type import ObjectType
 from core.models.object_type_category import ObjectTypeCategoryObjectTypeStatus
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType

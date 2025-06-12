@@ -2,7 +2,7 @@ from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 from core.models.detection import Detection, DetectionSource
 from django.core.exceptions import BadRequest
 

@@ -5,7 +5,7 @@ from django.core.management.base import BaseCommand, CommandError
 from rest_framework import serializers
 from django.db import connection
 
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 from core.models.detection import Detection, DetectionSource
 from core.models.detection_data import (
     DetectionControlStatus,

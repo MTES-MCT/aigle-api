@@ -2,7 +2,7 @@ import json
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from core.contants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS, TILE_SETS_ORDER_BYS
+from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS, TILE_SETS_ORDER_BYS
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.tile_set import TileSet, TileSetStatus
 from core.models.user import UserRole

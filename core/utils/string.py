@@ -9,7 +9,7 @@ def snake_to_camel_case(name: str) -> str:
     return next(parts) + "".join(i.title() for i in parts)
 
 
-def strip_accents(text):
+def strip_accents(text: str) -> str:
     """
     Strip accents from input String.
 
@@ -40,7 +40,9 @@ def slugify(string: str) -> str:
     return "-".join(spliteds)
 
 
-def to_array(string: str, sep: str = ",", default_value=None):
+def to_array(
+    string: str, sep: str = ",", default_value: Optional[List[str]] = None
+) -> Optional[List[str]]:
     if not string:
         return default_value
 

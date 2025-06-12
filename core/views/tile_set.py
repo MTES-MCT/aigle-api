@@ -7,8 +7,8 @@ from rest_framework import serializers
 from django.contrib.gis.geos import Point
 from rest_framework.response import Response
 
-from core.contants.geo import SRID
-from core.contants.order_by import TILE_SETS_ORDER_BYS
+from core.constants.geo import SRID
+from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.tile_set import TileSet, TileSetScheme, TileSetStatus, TileSetType
 from core.permissions.tile_set import TileSetPermission
 from core.serializers.tile_set import (

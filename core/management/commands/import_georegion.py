@@ -3,7 +3,7 @@ from typing import TypedDict
 from django.core.management.base import BaseCommand
 import shapefile
 
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 from core.management.commands._common.file import download_file, extract_zip
 from core.models import GeoRegion
 from django.contrib.gis.geos import GEOSGeometry

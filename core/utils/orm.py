@@ -1,3 +1,4 @@
+from typing import Any
 from django.db import models
 
 
@@ -7,7 +8,9 @@ class ListValuesListIterable(models.query.ValuesListIterable):
             yield list(row)
 
 
-def get_list_values_list(queryset, *fields, **kwargs):
+def get_list_values_list(
+    queryset: models.QuerySet, *fields: str, **kwargs: Any
+) -> models.QuerySet:
     clone = queryset.values_list(*fields, **kwargs)
     clone._iterable_class = ListValuesListIterable
     return clone
