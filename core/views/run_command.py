@@ -38,8 +38,14 @@ class CommandAsyncViewSet(ViewSet):
             command_name=command_name, parameters=parameters
         )
 
+        # Convert CLI parameter names to Django format for call_command
+        django_parameters = {
+            key.lstrip("-").replace("-", "_"): value
+            for key, value in parsed_parameters.items()
+        }
+
         task_id: str = AsyncCommandService.run_command_async(
-            command_name, **parsed_parameters
+            command_name, **django_parameters
         )
         return Response(
             {"task_id": task_id, "status": "started"}, status=status.HTTP_201_CREATED
