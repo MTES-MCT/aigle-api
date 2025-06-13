@@ -41,10 +41,18 @@ class Command(BaseCommand):
         with connection.cursor() as cursor:
             test_table = "test_cmd"
             cursor.execute(
-                f"CREATE TABLE IF NOT EXISTS public.{test_table} (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW(), args JSONB);"
+                f"CREATE TABLE IF NOT EXISTS temp.{test_table} (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW(), args JSONB);"
             )
             cursor.execute(
-                f"INSERT INTO public.{test_table} (data) VALUES ('{json.dumps(options)}');"
+                f"INSERT INTO temp.{test_table} (args) VALUES ('{json.dumps({
+                    "test_str_required": test_str_required,
+                    "test_str_not_required": test_str_not_required,
+                    "test_bool_required": test_bool_required,
+                    "test_bool_not_required": test_bool_not_required,
+                    "test_int_required": test_int_required,
+                    "test_int_not_required": test_int_not_required,
+                    "test_array": test_array,
+                })}');"
             )
 
         waiting_sec = 120

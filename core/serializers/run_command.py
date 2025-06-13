@@ -35,3 +35,5 @@ class TaskSerializer(serializers.Serializer):
     worker = serializers.CharField(read_only=True)
     status = serializers.CharField(read_only=True)
     eta = serializers.CharField(read_only=True, required=False, allow_null=True)
+    time_start = serializers.CharField(read_only=True, required=False, allow_null=True)
+    priority = serializers.IntegerField(read_only=True, required=False, allow_null=True)

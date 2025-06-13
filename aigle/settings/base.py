@@ -205,6 +205,12 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 
+# Task execution and monitoring settings
+CELERY_TASK_TRACK_STARTED = True  # Track when task starts executing
+CELERY_TASK_SEND_SENT_EVENT = True  # Send task-sent events
+CELERY_WORKER_SEND_TASK_EVENTS = True  # Enable task events for monitoring
+CELERY_TASK_RESULT_EXPIRES = 3600  # Keep task results for 1 hour
+
 # Optional: Task routing
 CELERY_ROUTES = {
     "myapp.tasks.run_management_command": {"queue": "management_commands"},
