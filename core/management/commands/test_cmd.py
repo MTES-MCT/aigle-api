@@ -1,6 +1,10 @@
+import json
+from time import sleep
 from django.core.management.base import BaseCommand
 
 from core.utils.logs_helpers import log_command_event
+
+from django.db import connection
 
 
 def log_event(info: str):
@@ -31,6 +35,22 @@ class Command(BaseCommand):
         test_int_required = options["test_int_required"]
         test_int_not_required = options["test_int_not_required"]
         test_array = options["test_array"]
+
+        log_event("writing args in temp schema")
+
+        with connection.cursor() as cursor:
+            test_table = "test_cmd"
+            cursor.execute(
+                f"CREATE TABLE IF NOT EXISTS public.{test_table} (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW(), args JSONB);"
+            )
+            cursor.execute(
+                f"INSERT INTO public.{test_table} (data) VALUES ('{json.dumps(options)}');"
+            )
+
+        waiting_sec = 120
+        log_event(f"waiting for {waiting_sec} seconds")
+        sleep(waiting_sec)
+        log_event(f"waited for {waiting_sec} seconds")
 
         log_event("args retrieved")
 
