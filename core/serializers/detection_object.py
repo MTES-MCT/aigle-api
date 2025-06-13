@@ -1,9 +1,8 @@
 from common.constants.models import DEFAULT_MAX_LENGTH
-from core.models.detection import Detection
 from core.models.detection_data import DetectionValidationStatus
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
-from core.models.tile_set import TileSetStatus, TileSetType
+from core.models.tile_set import TileSetType
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
@@ -20,6 +19,7 @@ from core.serializers.tile_set import TileSetMinimalSerializer
 from core.serializers.user_group import UserGroupSerializer
 from core.serializers.utils.custom_zones import reconciliate_custom_zones_with_sub
 from core.utils.data_permissions import get_user_group_rights
+from core.utils.detection import get_most_recent_detection
 from core.utils.prescription import compute_prescription
 
 
@@ -250,20 +250,3 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
                 latest_detection.detection_data.save()
 
         return instance
-
-
-# utils
-
-
-def get_most_recent_detection(detection_object: DetectionObject) -> Detection:
-    return (
-        detection_object.detections.exclude(
-            tile_set__tile_set_status=TileSetStatus.DEACTIVATED
-        )
-        .filter(
-            tile_set__tile_set_type__in=[TileSetType.BACKGROUND, TileSetType.PARTIAL]
-        )
-        .select_related("detection_data")
-        .order_by("-tile_set__date")
-        .first()
-    )
