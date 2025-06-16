@@ -9,6 +9,7 @@ from core.models.user import User
 
 class AnalyticLogType(models.TextChoices):
     REPORT_DOWNLOAD = "REPORT_DOWNLOAD", "REPORT_DOWNLOAD"
+    PRIOR_LETTER_DOWNLOAD = "PRIOR_LETTER_DOWNLOAD", "PRIOR_LETTER_DOWNLOAD"
     USER_ACCESS = "USER_ACCESS", "USER_ACCESS"
 
 

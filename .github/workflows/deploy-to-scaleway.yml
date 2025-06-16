@@ -61,8 +61,8 @@ jobs:
             python -m pip install -r requirements.txt || exit 1
             python manage.py migrate || exit 1
 
-            # Restart services
-            sudo systemctl restart celery || exit 1
+            # Gracefully reload services
+            sudo systemctl reload celery || exit 1
             sudo systemctl restart gunicorn_aigle || exit 1
 
             echo "Deployment completed successfully!"

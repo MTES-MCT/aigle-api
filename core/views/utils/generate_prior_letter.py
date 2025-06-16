@@ -8,11 +8,13 @@ from django.http import HttpResponse, JsonResponse
 from rest_framework.status import HTTP_500_INTERNAL_SERVER_ERROR
 from django.core.exceptions import BadRequest
 
+from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus
 from core.models.detection_object import DetectionObject
 from core.models.user import User
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
+from core.utils.analytic_log import create_log
 from core.utils.detection import get_most_recent_detection
 from core.utils.odt_processor import ODTTemplateProcessor
 from rest_framework.decorators import api_view, permission_classes
@@ -28,6 +30,17 @@ def endpoint(request, detection_object_uuid):
         detection_object_uuid=detection_object_uuid, user=request.user
     )
     update_control_status(detection_object=detection_object, user=request.user)
+
+    create_log(
+        request.user,
+        AnalyticLogType.PRIOR_LETTER_DOWNLOAD,
+        {
+            "parcelUuid": str(detection_object.parcel.uuid)
+            if detection_object.parcel
+            else None,
+            "detectionObjectUuid": str(detection_object_uuid),
+        },
+    )
 
     try:
         parcel_label = (
