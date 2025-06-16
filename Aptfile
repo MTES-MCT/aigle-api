@@ -1,3 +1,5 @@
 gdal-bin
 libgdal-dev
 python3-gdal
+redis-server
+mailutils

@@ -4,6 +4,12 @@ import tempfile
 import zipfile
 from django.core.management.base import CommandError
 
+from core.utils.logs_helpers import log_command_event
+
+
+def log_event(info: str):
+    log_command_event(command_name="utils: file", info=info)
+
 
 def download_file(
     url: str, file_name: str
@@ -16,7 +22,7 @@ def download_file(
 
         with open(file_path, "wb") as file:
             file.write(file_res.content)
-            print(f"FILE DOWNLOADED: {file_path}")
+            log_event(f"FILE DOWNLOADED: {file_path}")
     else:
         raise CommandError(f"FAILED TO DOWNLOAD FILE FROM URL: {url}")
 
@@ -35,4 +41,4 @@ def download_json(url: str) -> Dict:
 def extract_zip(file_path: str, output_dir: str):
     with zipfile.ZipFile(file_path, "r") as zip_ref:
         zip_ref.extractall(output_dir)
-        print(f"ZIP EXTRACTED: {output_dir}")
+        log_event(f"ZIP EXTRACTED: {output_dir}")

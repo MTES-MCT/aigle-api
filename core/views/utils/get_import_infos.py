@@ -10,8 +10,11 @@ from core.models.detection_data import (
 )
 from core.models.object_type import ObjectType
 from core.models.tile_set import TileSet
+from rest_framework.decorators import api_view, permission_classes
 
 from core.utils.string import normalize
+
+from core.utils.permissions import AdminRolePermission
 
 
 class InfoImportsSerializer(serializers.Serializer):
@@ -27,6 +30,8 @@ def format_list(list_: List[List[str]], format_fn=None) -> List[str]:
     return [item[0] if not format_fn else format_fn(item[0]) for item in list_]
 
 
+@api_view(["GET"])
+@permission_classes([AdminRolePermission])
 def endpoint(request):
     object_types_names = ObjectType.objects.values_list("name").all()
     tile_sets_names = TileSet.objects.values_list("name").all()

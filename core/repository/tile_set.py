@@ -1,7 +1,7 @@
 from typing import List, Optional
 from django.db.models import QuerySet
 
-from core.contants.order_by import TILE_SETS_ORDER_BYS
+from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from core.models.geo_region import GeoRegion

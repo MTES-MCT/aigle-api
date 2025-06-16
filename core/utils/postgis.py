@@ -3,7 +3,7 @@ from django.db.models import Func, CharField, TextChoices
 
 from django.contrib.gis.db import models as models_gis
 
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 
 
 def ST_TileEnvelope(z: int, x: int, y: int):

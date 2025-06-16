@@ -10,6 +10,8 @@ from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from django.contrib.gis.geos import GEOSGeometry
 
+from core.utils.logs_helpers import log_command_event
+
 FILE_JSON_URL = (
     "https://www.data.gouv.fr/fr/datasets/r/857364e9-d288-47b6-be12-6cf1ad05fc8d"
 )
@@ -20,6 +22,10 @@ class CommuneProperties(TypedDict):
     com_code: List[str]
     com_name: List[str]
     geo_shape: Dict
+
+
+def log_event(info: str):
+    log_command_event(command_name="import_geocommune", info=info)
 
 
 class Command(BaseCommand):
@@ -42,7 +48,7 @@ class Command(BaseCommand):
         department_code_department_map = {
             department.insee_code: department for department in departments
         }
-        print(f"Starting communes import for departments: {
+        log_event(f"Starting communes import for departments: {
               ", ".join([dpt.name for dpt in departments])}")
 
         for data_commune in data_communes:

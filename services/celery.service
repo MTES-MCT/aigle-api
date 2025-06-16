@@ -1,0 +1,15 @@
+[Unit]
+Description=Celery Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/aigle-api
+EnvironmentFile=/home/ubuntu/aigle-api/.env
+ExecStart=/home/ubuntu/aigle-api/venv/bin/celery -A aigle worker --loglevel=info
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

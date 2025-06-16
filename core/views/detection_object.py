@@ -3,7 +3,7 @@ from common.views.base import BaseViewSetMixin
 from rest_framework.response import Response
 from rest_framework import serializers
 from django.contrib.gis.geos import Point
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 from core.models.detection_object import DetectionObject
 from core.models.tile_set import TileSetType
 from core.permissions.geo_custom_zone import GeoCustomZonePermission

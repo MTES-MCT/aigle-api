@@ -11,7 +11,7 @@ from . import generate_prior_letter
 URL_PREFIX = "utils/"
 
 urls = [
-    path(f"{URL_PREFIX}{view.URL}", view.endpoint, name=view.URL)
+    path(f"{URL_PREFIX}{view.URL}", view.endpoint, name=view.URL.replace(":", ""))
     for view in [
         deploy_infos,
         get_tile_view,

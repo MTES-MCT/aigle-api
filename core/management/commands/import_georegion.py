@@ -3,10 +3,12 @@ from typing import TypedDict
 from django.core.management.base import BaseCommand
 import shapefile
 
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 from core.management.commands._common.file import download_file, extract_zip
 from core.models import GeoRegion
 from django.contrib.gis.geos import GEOSGeometry
+
+from core.utils.logs_helpers import log_command_event
 
 SHP_ZIP_URL = (
     "https://osm13.openstreetmap.fr/~cquest/openfla/export/regions-20180101-shp.zip"
@@ -22,6 +24,10 @@ class RegionProperties(TypedDict):
     wikipedia: str
 
 
+def log_event(info: str):
+    log_command_event(command_name="import_georegion", info=info)
+
+
 class Command(BaseCommand):
     help = "Import regions to database from SHP"
 
@@ -31,12 +37,12 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         insee_codes = options["insee_codes"]
 
-        print("Starting importing regions...")
+        log_event("Starting importing regions...")
 
         if insee_codes:
-            print(f"Insee codes: {', '.join(insee_codes)}")
+            log_event(f"Insee codes: {', '.join(insee_codes)}")
         else:
-            print("No insee codes provided, importing all regions")
+            log_event("No insee codes provided, importing all regions")
 
         temp_dir, file_path = download_file(url=SHP_ZIP_URL, file_name="regions.zip")
 
@@ -51,10 +57,10 @@ class Command(BaseCommand):
             insee_code = properties["code_insee"]
 
             if insee_codes and insee_code not in insee_codes:
-                print(f"Skiping region: {insee_code}")
+                log_event(f"Skiping region: {insee_code}")
                 continue
 
-            print(f"Inserting region: {insee_codes}")
+            log_event(f"Inserting region: {insee_codes}")
             geometry = GEOSGeometry(json.dumps(feature.__geo_interface__["geometry"]))
             geometry.transform(2154, SRID)
 

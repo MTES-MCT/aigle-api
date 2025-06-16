@@ -7,7 +7,7 @@ import uuid
 import json
 import shapefile
 
-from core.contants.geo import SRID
+from core.constants.geo import SRID
 
 BATCH_SIZE = 10000
 

@@ -7,6 +7,9 @@ from django.contrib.gis.db.models.functions import Intersection, Area
 from django.db.models import Value
 from django.db.models import Q
 
+from core.models.detection_object import DetectionObject
+from core.models.tile_set import TileSetStatus, TileSetType
+
 
 PERCENTAGE_SAME_DETECTION_THRESHOLD = 0.5
 
@@ -46,4 +49,18 @@ def get_linked_detections(
             or detection.intersection_area.sq_m
             >= detection.geometry.area * PERCENTAGE_SAME_DETECTION_THRESHOLD
         ]
+    )
+
+
+def get_most_recent_detection(detection_object: DetectionObject) -> Detection:
+    return (
+        detection_object.detections.exclude(
+            tile_set__tile_set_status=TileSetStatus.DEACTIVATED
+        )
+        .filter(
+            tile_set__tile_set_type__in=[TileSetType.BACKGROUND, TileSetType.PARTIAL]
+        )
+        .select_related("detection_data")
+        .order_by("-tile_set__date")
+        .first()
     )

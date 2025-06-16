@@ -8,9 +8,12 @@ from django.http import HttpResponse, JsonResponse
 from rest_framework.status import HTTP_500_INTERNAL_SERVER_ERROR
 from django.core.exceptions import BadRequest
 
+from core.models.detection_data import DetectionControlStatus
 from core.models.detection_object import DetectionObject
 from core.models.user import User
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
+from core.permissions.user import UserPermission
+from core.utils.detection import get_most_recent_detection
 from core.utils.odt_processor import ODTTemplateProcessor
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -24,6 +27,7 @@ def endpoint(request, detection_object_uuid):
     detection_object = get_detection_object(
         detection_object_uuid=detection_object_uuid, user=request.user
     )
+    update_control_status(detection_object=detection_object, user=request.user)
 
     try:
         parcel_label = (
@@ -96,6 +100,8 @@ def get_detection_object(detection_object_uuid: str, user: User):
     detection_object_qs = detection_object_qs.prefetch_related(
         geo_custom_zones_prefetch,
         geo_custom_zones_category_prefetch,
+        "detections",
+        "detections__tile_set",
     )
 
     detection_object = detection_object_qs.first()
@@ -104,6 +110,28 @@ def get_detection_object(detection_object_uuid: str, user: User):
         raise BadRequest("Detection object not found")
 
     return detection_object
+
+
+def update_control_status(detection_object: DetectionObject, user: User):
+    if not UserPermission(user=user).can_edit(
+        geometry=detection_object.detections.first().geometry, raise_exception=True
+    ):
+        return
+
+    detection = get_most_recent_detection(detection_object)
+
+    if detection.detection_data.detection_control_status in [
+        DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+        DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
+        DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+        DetectionControlStatus.REHABILITATED,
+    ]:
+        return
+
+    detection.detection_data.detection_control_status = (
+        DetectionControlStatus.PRIOR_LETTER_SENT
+    )
+    detection.detection_data.save()
 
 
 URL = "generate-prior-letter/<uuid:detection_object_uuid>/"
