@@ -4,49 +4,135 @@ from celery.result import AsyncResult
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from typing import Dict, Any, List, Optional, Union
+from core.models.command_run import CommandRun, CommandRunStatus
 
 
 @shared_task(bind=True)
 def run_management_command(
     self, command_name: str, *args: Any, **kwargs: Any
 ) -> Dict[str, Union[str, Any]]:
+    task_id = self.request.id
+    command_run = CommandRun.objects.filter(task_id=task_id).first()
+
+    if command_run:
+        command_run.status = CommandRunStatus.RUNNING
+        command_run.save()
+
     try:
         output = StringIO()
         call_command(command_name, *args, stdout=output, stderr=output, **kwargs)
+
+        if command_run:
+            command_run.status = CommandRunStatus.SUCCESS
+            command_run.output = output.getvalue()
+            command_run.save()
+
         return {
             "status": "success",
             "output": output.getvalue(),
-            "task_id": self.request.id,
+            "task_id": task_id,
         }
     except CommandError as e:
-        return {"status": "error", "error": str(e), "task_id": self.request.id}
+        if command_run:
+            command_run.status = CommandRunStatus.ERROR
+            command_run.error = str(e)
+            command_run.save()
+
+        return {"status": "error", "error": str(e), "task_id": task_id}
     except Exception as e:
+        if command_run:
+            command_run.status = CommandRunStatus.ERROR
+            command_run.error = f"Unexpected error: {str(e)}"
+            command_run.save()
+
         self.retry(countdown=60, max_retries=3)
         return {
             "status": "error",
             "error": f"Unexpected error: {str(e)}",
-            "task_id": self.request.id,
+            "task_id": task_id,
         }
 
 
-@shared_task
-def run_custom_command(command_name: str, **options: Any) -> str:
+@shared_task(bind=True)
+def run_custom_command(self, command_name: str, **options: Any) -> str:
+    task_id = self.request.id
+    command_run = CommandRun.objects.filter(task_id=task_id).first()
+
+    if command_run:
+        command_run.status = CommandRunStatus.RUNNING
+        command_run.save()
+
     output = StringIO()
     try:
         call_command(command_name, stdout=output, stderr=output, **options)
+
+        if command_run:
+            command_run.status = CommandRunStatus.SUCCESS
+            command_run.output = output.getvalue()
+            command_run.save()
+
         return output.getvalue()
     except Exception as e:
-        return f"Error: {str(e)}"
+        error_msg = f"Error: {str(e)}"
+
+        if command_run:
+            command_run.status = CommandRunStatus.ERROR
+            command_run.error = error_msg
+            command_run.save()
+
+        return error_msg
 
 
 class AsyncCommandService:
     @staticmethod
     def run_command_async(command_name: str, *args: Any, **kwargs: Any) -> str:
         task = run_management_command.delay(command_name, *args, **kwargs)
+
+        # Create CommandRun record
+        CommandRun.objects.create(
+            command_name=command_name,
+            task_id=task.id,
+            arguments={"args": args, "kwargs": kwargs},
+            status=CommandRunStatus.PENDING,
+        )
+
+        return task.id
+
+    @staticmethod
+    def run_custom_command_async(command_name: str, **options: Any) -> str:
+        task = run_custom_command.delay(command_name, **options)
+
+        # Create CommandRun record
+        CommandRun.objects.create(
+            command_name=command_name,
+            task_id=task.id,
+            arguments={"kwargs": options},
+            status=CommandRunStatus.PENDING,
+        )
+
         return task.id
 
     @staticmethod
     def get_task_status(task_id: str) -> Dict[str, Union[str, Any, None]]:
+        command_run = CommandRun.objects.filter(task_id=task_id).first()
+
+        if command_run:
+            return {
+                "task_id": task_id,
+                "status": command_run.status,
+                "result": {"output": command_run.output, "error": command_run.error}
+                if command_run.is_finished()
+                else None,
+                "traceback": command_run.error
+                if command_run.status == CommandRunStatus.ERROR
+                else None,
+                "command_name": command_run.command_name,
+                "arguments": command_run.arguments,
+                "created_at": command_run.created_at.isoformat(),
+                "updated_at": command_run.updated_at.isoformat(),
+            }
+
+        # Fallback to Celery result if CommandRun not found
         result = AsyncResult(task_id)
         return {
             "task_id": task_id,
@@ -57,6 +143,15 @@ class AsyncCommandService:
 
     @staticmethod
     def get_task_result(task_id: str) -> Optional[Any]:
+        command_run = CommandRun.objects.filter(task_id=task_id).first()
+
+        if command_run and command_run.is_finished():
+            if command_run.status == CommandRunStatus.SUCCESS:
+                return command_run.output
+            else:
+                return command_run.error
+
+        # Fallback to Celery result if CommandRun not found
         result = AsyncResult(task_id)
         if result.ready():
             return result.result
@@ -64,12 +159,32 @@ class AsyncCommandService:
 
     @staticmethod
     def cancel_task(task_id: str) -> bool:
+        # Update CommandRun status if exists
+        command_run = CommandRun.objects.filter(task_id=task_id).first()
+        if command_run and not command_run.is_finished():
+            command_run.status = CommandRunStatus.CANCELED
+            command_run.error = "Task cancelled by user"
+            command_run.save()
+
+        # Cancel the Celery task
         result = AsyncResult(task_id)
         result.revoke(terminate=True)
         return True
 
     @staticmethod
+    def get_command_runs(limit: int = None, offset: int = None) -> List[CommandRun]:
+        """Get CommandRun instances, ordered by most recent first"""
+        queryset = CommandRun.objects.all().order_by("-created_at")
+        if limit:
+            queryset = queryset[offset : offset + limit]
+        return list(queryset)
+
+    @staticmethod
     def get_all_tasks() -> List[Dict[str, Any]]:
+        """
+        DEPRECATED: Use get_command_runs() instead for CommandRun-based tasks.
+        This method is kept for backward compatibility with Celery inspection.
+        """
         inspect = current_app.control.inspect()
         all_tasks = []
 

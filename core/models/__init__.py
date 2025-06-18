@@ -22,3 +22,5 @@ from .user_group import UserGroup, UserUserGroup
 from .parcel import Parcel
 
 from .analytic_log import AnalyticLog
+
+from .command_run import CommandRun

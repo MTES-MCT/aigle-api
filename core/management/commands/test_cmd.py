@@ -62,14 +62,4 @@ class Command(BaseCommand):
 
         log_event("args retrieved")
 
-        with open("test_cmd.txt", "w") as f:
-            f.write("Hello this is the test_cmd file")
-            f.write(f"test_str_required: {test_str_required}")
-            f.write(f"test_str_not_required: {test_str_not_required}")
-            f.write(f"test_bool_required: {test_bool_required}")
-            f.write(f"test_bool_not_required: {test_bool_not_required}")
-            f.write(f"test_int_required: {test_int_required}")
-            f.write(f"test_int_not_required: {test_int_not_required}")
-            f.write(f"test_array: {test_array.join(', ')}")
-
         log_event("test_cmd.txt file created and cmd finished")

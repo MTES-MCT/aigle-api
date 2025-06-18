@@ -5,12 +5,13 @@ from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.pagination import LimitOffsetPagination
 from core.serializers.run_command import (
     RunCommandSerializer,
-    TaskSerializer,
     TaskStatusSerializer,
     CancelTaskSerializer,
 )
+from core.serializers.command_run import CommandRunSerializer
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
 from core.utils.run_command import (
     COMMANDS_AND_PARAMETERS,
@@ -64,7 +65,7 @@ class CommandAsyncViewSet(ViewSet):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request: Request, task_id: str = None) -> Response:
         if not task_id:
             return Response(
@@ -81,9 +82,15 @@ class CommandAsyncViewSet(ViewSet):
 
     @action(detail=False, methods=["get"], url_path="tasks")
     def list_tasks(self, request: Request) -> Response:
-        tasks = AsyncCommandService.get_all_tasks()
-        serializer = TaskSerializer(data=tasks, many=True)
-        serializer.is_valid()
+        paginator = LimitOffsetPagination()
+        paginator.default_limit = 50
+
+        limit = paginator.get_limit(request)
+        offset = paginator.get_offset(request)
+
+        command_runs = AsyncCommandService.get_command_runs(limit=limit, offset=offset)
+        serializer = CommandRunSerializer(command_runs, many=True)
         return Response(
-            {"count": len(tasks), "results": serializer.data}, status=status.HTTP_200_OK
+            {"count": len(command_runs), "results": serializer.data},
+            status=status.HTTP_200_OK,
         )
