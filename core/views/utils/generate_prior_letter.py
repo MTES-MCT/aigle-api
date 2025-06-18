@@ -99,9 +99,7 @@ def get_custom_zones_text(detection_object: DetectionObject):
 
         zone_names.append(geo_custom_zone.name_short or geo_custom_zone.name)
 
-    return f" et située en zones {
-        ", ".join(zone_names)
-    }"
+    return ", ".join(zone_names)
 
 
 def get_detection_object(detection_object_uuid: str, user: User):
