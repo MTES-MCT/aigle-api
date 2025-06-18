@@ -128,7 +128,7 @@ class Command(BaseCommand):
         parser.add_argument("--tile-set-id", type=int, required=True)
         parser.add_argument("--with-dates", type=bool, default=False)
         parser.add_argument("--clean-step", type=bool, default=False)
-        parser.add_argument("--batch-id", type=str)
+        parser.add_argument("--batch-id", type=str, required=True)
         parser.add_argument("--file-path", type=str)
         parser.add_argument("--table-name", type=str, default="inference")
         parser.add_argument("--table-schema", type=str, default="detections")
