@@ -15,10 +15,35 @@ class ContactReason(models.TextChoices):
     BASIC = "BASIC", "BASIC"
 
 
+class Criticity(models.TextChoices):
+    CRITICAL = "CRITICAL", "Un problème critique"
+    NORMAL = "NORMAL", "Un simple problème parmi d'autres"
+    NON_EXISTENT = "NON_EXISTENT", "Pas un problème"
+
+
+class Interest(models.TextChoices):
+    RESOLVE_AN_ISSUE = (
+        "RESOLVE_AN_ISSUE",
+        "Aigle répond précisément à un problème que je rencontre",
+    )
+    UNKNOWN = (
+        "UNKNOWN",
+        "Je ne sais pas si Aigle m'intéresse, je cherche à comprendre à quoi ça sert",
+    )
+
+
 class EndpointSerializer(serializers.Serializer):
-    firstName = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
-    lastName = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
+    criticity = serializers.ChoiceField(
+        choices=Criticity.choices,
+        default=Criticity.CRITICAL,
+    )
     collectivity = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
+    interest = serializers.ChoiceField(
+        choices=Interest.choices,
+        default=Interest.RESOLVE_AN_ISSUE,
+    )
+    issue = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
+    name = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
     job = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
     phone = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
     email = serializers.EmailField()
@@ -35,10 +60,12 @@ def endpoint(request):
     send_mail(
         subject=f"[{params_serializer.data["contactReason"]}] Demande de contact",
         message=f"""Une demande de contact vient d'être envoyée:
-- Nom : {params_serializer.data["lastName"]}
-- Prénom : {params_serializer.data["firstName"]}
 - Collectivité : {params_serializer.data["collectivity"]}
-- Poste : {params_serializer.data["job"]}
+- Criticité : {Criticity[params_serializer.data["criticity"]].label}
+- Intérêt : {Interest[params_serializer.data["interest"]].label}
+- Problème : {params_serializer.data["issue"]}
+- Nom et prénom : {params_serializer.data["name"]}
+- Fonction : {params_serializer.data["job"]}
 - Téléphone : {params_serializer.data["phone"]}
 - Adresse e-mail : {params_serializer.data["email"]}
         """,
