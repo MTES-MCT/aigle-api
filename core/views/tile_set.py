@@ -2,10 +2,10 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet, CharFilter
 
 from django.db.models import Q
-from django.db.models import Count
 from rest_framework import serializers
 from django.contrib.gis.geos import Point
 from rest_framework.response import Response
+from django.db.models import Value
 
 from core.constants.geo import SRID
 from core.constants.order_by import TILE_SETS_ORDER_BYS
@@ -60,7 +60,7 @@ class TileSetViewSet(BaseViewSetMixin[TileSet]):
 
     def get_queryset(self):
         queryset = TileSet.objects.order_by(*TILE_SETS_ORDER_BYS)
-        queryset = queryset.annotate(detections_count=Count("detections"))
+        queryset = queryset.annotate(detections_count=Value(0))
 
         return queryset
 
