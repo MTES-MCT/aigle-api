@@ -88,9 +88,11 @@ class CommandAsyncViewSet(ViewSet):
         limit = paginator.get_limit(request)
         offset = paginator.get_offset(request)
 
-        command_runs = AsyncCommandService.get_command_runs(limit=limit, offset=offset)
+        command_runs, count = AsyncCommandService.get_command_runs(
+            limit=limit, offset=offset
+        )
         serializer = CommandRunSerializer(command_runs, many=True)
         return Response(
-            {"count": len(command_runs), "results": serializer.data},
+            {"count": count, "results": serializer.data},
             status=status.HTTP_200_OK,
         )

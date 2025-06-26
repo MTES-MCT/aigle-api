@@ -3,7 +3,7 @@ from celery import shared_task, current_app
 from celery.result import AsyncResult
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Tuple, Union
 from core.models.command_run import CommandRun, CommandRunStatus
 
 
@@ -172,12 +172,14 @@ class AsyncCommandService:
         return True
 
     @staticmethod
-    def get_command_runs(limit: int = None, offset: int = None) -> List[CommandRun]:
+    def get_command_runs(
+        limit: int = None, offset: int = None
+    ) -> Tuple[List[CommandRun], int]:
         """Get CommandRun instances, ordered by most recent first"""
         queryset = CommandRun.objects.all().order_by("-created_at")
         if limit:
             queryset = queryset[offset : offset + limit]
-        return list(queryset)
+        return list(queryset), queryset.count()
 
     @staticmethod
     def get_all_tasks() -> List[Dict[str, Any]]:
