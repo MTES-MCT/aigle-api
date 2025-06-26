@@ -38,6 +38,7 @@ class GeoCustomZoneMinimalSerializer(UuidTimestampedModelSerializerMixin):
     class Meta(UuidTimestampedModelSerializerMixin.Meta):
         model = GeoCustomZone
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
+            "id",
             "name",
             "name_short",
             "color",

@@ -108,9 +108,9 @@ class Command(BaseCommand):
                 continue
 
             processed_count["parcels_found"] += 1
-            processed_count[
-                "detection_objects_updated"
-            ] += parcel.detection_objects.count()
+            processed_count["detection_objects_updated"] += (
+                parcel.detection_objects.count()
+            )
 
             for detection_object in parcel.detection_objects.all():
                 detection_control_status = None
