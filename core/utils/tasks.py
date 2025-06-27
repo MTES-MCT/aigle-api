@@ -9,14 +9,23 @@ from core.models.command_run import CommandRun, CommandRunStatus
 
 @shared_task(bind=True)
 def run_management_command(
-    self, command_name: str, *args: Any, **kwargs: Any
+    self, command_name: str, command_run_uuid: str = None, *args: Any, **kwargs: Any
 ) -> Dict[str, Union[str, Any]]:
     task_id = self.request.id
-    command_run = CommandRun.objects.filter(task_id=task_id).first()
 
-    if command_run:
-        command_run.status = CommandRunStatus.RUNNING
-        command_run.save()
+    # Find CommandRun by UUID if provided, otherwise fallback to task_id
+    if command_run_uuid:
+        command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
+        if command_run:
+            # Update with the actual Celery task_id
+            command_run.task_id = task_id
+            command_run.status = CommandRunStatus.RUNNING
+            command_run.save()
+    else:
+        command_run = CommandRun.objects.filter(task_id=task_id).first()
+        if command_run:
+            command_run.status = CommandRunStatus.RUNNING
+            command_run.save()
 
     try:
         output = StringIO()
@@ -54,13 +63,24 @@ def run_management_command(
 
 
 @shared_task(bind=True)
-def run_custom_command(self, command_name: str, **options: Any) -> str:
+def run_custom_command(
+    self, command_name: str, command_run_uuid: str = None, **options: Any
+) -> str:
     task_id = self.request.id
-    command_run = CommandRun.objects.filter(task_id=task_id).first()
 
-    if command_run:
-        command_run.status = CommandRunStatus.RUNNING
-        command_run.save()
+    # Find CommandRun by UUID if provided, otherwise fallback to task_id
+    if command_run_uuid:
+        command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
+        if command_run:
+            # Update with the actual Celery task_id
+            command_run.task_id = task_id
+            command_run.status = CommandRunStatus.RUNNING
+            command_run.save()
+    else:
+        command_run = CommandRun.objects.filter(task_id=task_id).first()
+        if command_run:
+            command_run.status = CommandRunStatus.RUNNING
+            command_run.save()
 
     output = StringIO()
     try:
@@ -86,29 +106,33 @@ def run_custom_command(self, command_name: str, **options: Any) -> str:
 class AsyncCommandService:
     @staticmethod
     def run_command_async(command_name: str, *args: Any, **kwargs: Any) -> str:
-        task = run_management_command.delay(command_name, *args, **kwargs)
-
-        # Create CommandRun record
-        CommandRun.objects.create(
+        # Create CommandRun record first
+        command_run = CommandRun.objects.create(
             command_name=command_name,
-            task_id=task.id,
+            task_id="",  # Will be updated by the task
             arguments={"args": args, "kwargs": kwargs},
             status=CommandRunStatus.PENDING,
+        )
+
+        # Pass the UUID to the task so it can find and update the record
+        task = run_management_command.delay(
+            command_name, str(command_run.uuid), *args, **kwargs
         )
 
         return task.id
 
     @staticmethod
     def run_custom_command_async(command_name: str, **options: Any) -> str:
-        task = run_custom_command.delay(command_name, **options)
-
-        # Create CommandRun record
-        CommandRun.objects.create(
+        # Create CommandRun record first
+        command_run = CommandRun.objects.create(
             command_name=command_name,
-            task_id=task.id,
+            task_id="",  # Will be updated by the task
             arguments={"kwargs": options},
             status=CommandRunStatus.PENDING,
         )
+
+        # Pass the UUID to the task so it can find and update the record
+        task = run_custom_command.delay(command_name, str(command_run.uuid), **options)
 
         return task.id
 
