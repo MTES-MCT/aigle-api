@@ -173,13 +173,18 @@ class AsyncCommandService:
 
     @staticmethod
     def get_command_runs(
-        limit: int = None, offset: int = None
+        limit: int = None, offset: int = None, statuses: List[str] = None
     ) -> Tuple[List[CommandRun], int]:
         """Get CommandRun instances, ordered by most recent first"""
         queryset = CommandRun.objects.all().order_by("-created_at")
+
+        if statuses:
+            queryset = queryset.filter(status__in=statuses)
+
+        count = queryset.count()
         if limit:
             queryset = queryset[offset : offset + limit]
-        return list(queryset), queryset.count()
+        return list(queryset), count
 
     @staticmethod
     def get_all_tasks() -> List[Dict[str, Any]]:

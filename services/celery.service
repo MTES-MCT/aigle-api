@@ -8,7 +8,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/aigle-api
 EnvironmentFile=/home/ubuntu/aigle-api/.env
-ExecStart=/home/ubuntu/aigle-api/venv/bin/celery -A aigle worker --loglevel=info
+ExecStart=/home/ubuntu/aigle-api/venv/bin/celery -A aigle worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -Q sequential_commands
 Restart=always
 
 [Install]

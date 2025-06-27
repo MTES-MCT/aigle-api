@@ -11,7 +11,10 @@ from core.serializers.run_command import (
     TaskStatusSerializer,
     CancelTaskSerializer,
 )
-from core.serializers.command_run import CommandRunSerializer
+from core.serializers.command_run import (
+    CommandRunSerializer,
+    ListTasksParametersSerializer,
+)
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
 from core.utils.run_command import (
     COMMANDS_AND_PARAMETERS,
@@ -82,14 +85,21 @@ class CommandAsyncViewSet(ViewSet):
 
     @action(detail=False, methods=["get"], url_path="tasks")
     def list_tasks(self, request: Request) -> Response:
+        # Validate query parameters
+        params_serializer = ListTasksParametersSerializer(data=request.GET)
+        params_serializer.is_valid(raise_exception=True)
+
         paginator = LimitOffsetPagination()
         paginator.default_limit = 50
 
         limit = paginator.get_limit(request)
         offset = paginator.get_offset(request)
 
+        # Get validated statuses from serializer
+        statuses = params_serializer.validated_data.get("statuses")
+
         command_runs, count = AsyncCommandService.get_command_runs(
-            limit=limit, offset=offset
+            limit=limit, offset=offset, statuses=statuses
         )
         serializer = CommandRunSerializer(command_runs, many=True)
         return Response(
