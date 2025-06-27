@@ -5,6 +5,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from typing import Dict, Any, List, Optional, Tuple, Union
 from core.models.command_run import CommandRun, CommandRunStatus
+import uuid
 
 
 @shared_task(bind=True)
@@ -106,10 +107,13 @@ def run_custom_command(
 class AsyncCommandService:
     @staticmethod
     def run_command_async(command_name: str, *args: Any, **kwargs: Any) -> str:
+        # Generate unique temporary task_id to avoid constraint violation
+        temp_task_id = f"pending-{str(uuid.uuid4())[:8]}"
+
         # Create CommandRun record first
         command_run = CommandRun.objects.create(
             command_name=command_name,
-            task_id="",  # Will be updated by the task
+            task_id=temp_task_id,
             arguments={"args": args, "kwargs": kwargs},
             status=CommandRunStatus.PENDING,
         )
@@ -123,10 +127,15 @@ class AsyncCommandService:
 
     @staticmethod
     def run_custom_command_async(command_name: str, **options: Any) -> str:
+        import uuid
+
+        # Generate unique temporary task_id to avoid constraint violation
+        temp_task_id = f"pending-{str(uuid.uuid4())[:8]}"
+
         # Create CommandRun record first
         command_run = CommandRun.objects.create(
             command_name=command_name,
-            task_id="",  # Will be updated by the task
+            task_id=temp_task_id,
             arguments={"kwargs": options},
             status=CommandRunStatus.PENDING,
         )

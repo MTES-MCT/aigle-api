@@ -14,6 +14,16 @@ services:
       - db
     volumes:
       - aigle_data:/var/lib/postgresql/data:delegated
+  
+  redis:
+    container_name: aigle_api_redis_container
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - db
+    volumes:
+      - redis_data:/data
   app:
     container_name: aigle_api_app_container
     image: aigle_api_app_container
@@ -29,4 +39,6 @@ networks:
 
 volumes:
   aigle_data:
+    external: false
+  redis_data:
     external: false
