@@ -56,31 +56,31 @@ class CommandAsyncViewSet(ViewSet):
         )
 
     @action(detail=True, methods=["get"])
-    def status(self, request: Request, task_id: str = None) -> Response:
-        if not task_id:
+    def status(self, request: Request, pk: str = None) -> Response:
+        if not pk:
             return Response(
                 {"error": "Task ID is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        task_status = AsyncCommandService.get_task_status(task_id)
+        task_status = AsyncCommandService.get_task_status(pk)
         serializer = TaskStatusSerializer(data=task_status)
         serializer.is_valid(raise_exception=True)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="cancel")
-    def cancel(self, request: Request, task_id: str = None) -> Response:
-        if not task_id:
+    def cancel(self, request: Request, pk: str = None) -> Response:
+        if not pk:
             return Response(
                 {"error": "Task ID is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        serializer = CancelTaskSerializer(data={"task_id": task_id})
+        serializer = CancelTaskSerializer(data={"task_id": pk})
         serializer.is_valid(raise_exception=True)
 
-        success = AsyncCommandService.cancel_task(task_id)
+        success = AsyncCommandService.cancel_task(pk)
         return Response(
-            {"cancelled": success, "task_id": task_id}, status=status.HTTP_200_OK
+            {"cancelled": success, "task_id": pk}, status=status.HTTP_200_OK
         )
 
     @action(detail=False, methods=["get"], url_path="tasks")
