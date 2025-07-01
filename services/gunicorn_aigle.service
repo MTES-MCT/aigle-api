@@ -7,7 +7,7 @@ EnvironmentFile=/home/ubuntu/aigle-api/.env
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/aigle-api
-ExecStart=/home/ubuntu/aigle-api/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 aigle.wsgi:application
+ExecStart=/home/ubuntu/aigle-api/venv/bin/gunicorn --workers 3 --limit-request-line 16376 --bind 127.0.0.1:8000 aigle.wsgi:application
 Restart=on-failure
 
 [Install]
