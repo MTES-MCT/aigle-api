@@ -14,7 +14,7 @@ from core.repository.base import (
     TimestampedBaseRepositoryMixin,
     UuidBaseRepositoryMixin,
 )
-from django.db.models import Q, Subquery
+from django.db.models import Q, Subquery, OuterRef
 from django.contrib.gis.geos import Polygon, Point, MultiPolygon
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.contrib.gis.db.models.functions import Intersection, Envelope
@@ -174,7 +174,14 @@ class TileSetRepository(
         if not with_bbox:
             return queryset
 
-        queryset = queryset.annotate(bbox=Envelope(Union(F("geo_zones__geometry"))))
+        # Use a subquery to avoid duplicates from the many-to-many relationship
+        bbox_subquery = (
+            TileSet.objects.filter(id=OuterRef("id"))
+            .annotate(bbox_calc=Envelope(Union(F("geo_zones__geometry"))))
+            .values("bbox_calc")[:1]
+        )
+
+        queryset = queryset.annotate(bbox=Subquery(bbox_subquery))
 
         return queryset
 
