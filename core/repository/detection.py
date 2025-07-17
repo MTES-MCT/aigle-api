@@ -273,13 +273,16 @@ class DetectionRepository(
         queryset: QuerySet[Detection],
         filter_prescribed: Optional[bool] = None,
     ) -> QuerySet[Detection]:
+        if filter_prescribed is None:
+            return queryset
+
         if filter_prescribed:
             q = Q(
                 detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
             )
             queryset = queryset.filter(q)
 
-        if filter_prescribed == False:  # noqa: E712
+        if not filter_prescribed:
             q = Q(
                 detection_data__detection_prescription_status=DetectionPrescriptionStatus.NOT_PRESCRIBED
             ) | Q(detection_data__detection_prescription_status=None)

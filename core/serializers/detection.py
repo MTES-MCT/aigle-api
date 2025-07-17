@@ -7,6 +7,7 @@ from core.models.detection_data import (
 )
 from core.models.detection_object import DetectionObject
 from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_sub_custom_zone import GeoSubCustomZone
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
@@ -254,6 +255,12 @@ class DetectionInputSerializer(DetectionSerializer):
                 ).all()
 
                 detection_object.geo_custom_zones.add(*geo_custom_zones)
+
+                geo_sub_custom_zones = GeoSubCustomZone.objects.filter(
+                    geometry__contains=validated_data["geometry"]
+                ).all()
+
+                detection_object.geo_sub_custom_zones.add(*geo_sub_custom_zones)
 
                 detection_object.save()
 

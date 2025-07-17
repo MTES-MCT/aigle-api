@@ -147,7 +147,7 @@ class DetectionGeoFilter(FilterSet):
 
         detection_tilesets_filter = TileSetPermission(
             user=self.request.user,
-        ).get_last_detections_filters(
+        ).get_last_detections_filters_detections(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
             filter_tile_set_intersects_geometry=geometry_accessible,
@@ -156,7 +156,7 @@ class DetectionGeoFilter(FilterSet):
         )
 
         if not detection_tilesets_filter:
-            return []
+            return queryset.none()
 
         queryset = queryset.filter(detection_tilesets_filter)
 

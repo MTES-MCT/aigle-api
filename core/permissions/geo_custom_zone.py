@@ -55,3 +55,6 @@ class GeoCustomZonePermission(
 
     def get_detection_prefetch(self):
         return self._get_prefetch("detection_object__")
+
+    def get_parcel_prefetch(self):
+        return self._get_prefetch()

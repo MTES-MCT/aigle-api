@@ -49,7 +49,43 @@ class ParcelDetectionObjectSerializer(DetectionObjectMinimalSerializer):
     detections = DetectionWithTileSerializer(many=True, read_only=True)
 
 
-class ParcelDetailSerializer(ParcelSerializer):
+class ParcelCustomGeoZoneMixin(serializers.ModelSerializer):
+    class Meta:
+        fields = [
+            "custom_geo_zones",
+        ]
+
+    custom_geo_zones = serializers.SerializerMethodField()
+
+    def get_custom_geo_zones(self, obj: Parcel):
+        # we get the geozones associated to the parcel's detections
+        geo_custom_zones_set = set()
+
+        for detection_obj in obj.detection_objects.all():
+            geo_custom_zones_set.update(
+                detection_obj.geo_custom_zones.defer("geometry").all()
+            )
+
+        sub_custom_zones_set = set()
+
+        for detection_obj in obj.detection_objects.all():
+            sub_custom_zones_set.update(
+                detection_obj.geo_sub_custom_zones.defer("geometry").all()
+            )
+
+        return reconciliate_custom_zones_with_sub(
+            custom_zones=list(geo_custom_zones_set),
+            sub_custom_zones=list(sub_custom_zones_set),
+        )
+
+
+class ParcelDetectionObjectsMixin(serializers.ModelSerializer):
+    detection_objects = ParcelDetectionObjectSerializer(many=True)
+
+
+class ParcelDetailSerializer(
+    ParcelSerializer, ParcelCustomGeoZoneMixin, ParcelDetectionObjectsMixin
+):
     class Meta(ParcelSerializer.Meta):
         fields = ParcelSerializer.Meta.fields + [
             "detection_objects",
@@ -61,31 +97,12 @@ class ParcelDetailSerializer(ParcelSerializer):
         ]
 
     commune = GeoCommuneSerializer(read_only=True)
-    detection_objects = ParcelDetectionObjectSerializer(many=True)
-    custom_geo_zones = serializers.SerializerMethodField()
     commune_envelope = serializers.SerializerMethodField()
     detections_updated_at = serializers.SerializerMethodField()
     tile_set_previews = serializers.SerializerMethodField()
 
     def get_commune_envelope(self, obj: Parcel):
         return json.loads(GEOSGeometry(obj.commune.geometry.envelope).geojson)
-
-    def get_custom_geo_zones(self, obj: Parcel):
-        # we get the geozones associated to the parcel's detections
-        geo_custom_zones_set = set()
-
-        for detection_obj in obj.detection_objects.all():
-            geo_custom_zones_set.update(detection_obj.geo_custom_zones.all())
-
-        sub_custom_zones_set = set()
-
-        for detection_obj in obj.detection_objects.all():
-            sub_custom_zones_set.update(detection_obj.geo_sub_custom_zones.all())
-
-        return reconciliate_custom_zones_with_sub(
-            custom_zones=list(geo_custom_zones_set),
-            sub_custom_zones=list(sub_custom_zones_set),
-        )
 
     def get_detections_updated_at(self, obj: Parcel):
         updated_at_values = []
@@ -121,3 +138,32 @@ class ParcelDetailSerializer(ParcelSerializer):
             previews_serialized.append(preview.initial_data)
 
         return previews_serialized
+
+
+class ParcelListItemSerializer(ParcelWithCommuneSerializer):
+    class Meta(ParcelWithCommuneSerializer.Meta):
+        fields = ParcelWithCommuneSerializer.Meta.fields + [
+            "zone_names",
+            "detections_count",
+        ]
+
+    zone_names = serializers.SerializerMethodField()
+    detections_count = serializers.SerializerMethodField()
+
+    def get_zone_names(self, obj: Parcel):
+        return obj.zone_names or []
+
+    def get_detections_count(self, obj: Parcel):
+        return obj.detections_count
+
+
+class ParcelOverviewSerializer(serializers.Serializer):
+    not_verified = serializers.IntegerField(
+        help_text="Number of parcels that have more than 50% of their detections in DETECTED_NOT_VERIFIED status"
+    )
+    verified = serializers.IntegerField(
+        help_text="Number of parcels that have 50% or more of their detections in SUSPECT, LEGITIMATE, or INVALIDATED status"
+    )
+    total = serializers.IntegerField(
+        help_text="Total number of parcels in the filtered queryset"
+    )

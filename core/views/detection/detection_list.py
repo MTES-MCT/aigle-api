@@ -228,7 +228,7 @@ class DetectionListFilter(FilterSet):
 
         detection_tilesets_filter = TileSetPermission(
             user=self.request.user,
-        ).get_last_detections_filters(
+        ).get_last_detections_filters_detections(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
             filter_collectivities=collectivity_filter,
@@ -236,7 +236,7 @@ class DetectionListFilter(FilterSet):
         )
 
         if not detection_tilesets_filter:
-            return []
+            return queryset.none()
 
         repo = DetectionRepository()
 

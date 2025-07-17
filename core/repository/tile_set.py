@@ -90,6 +90,7 @@ class TileSetRepository(
         )
 
         # annotations
+
         queryset = self._annotate_intersection(
             queryset=queryset,
             with_intersection=with_intersection,
@@ -146,6 +147,9 @@ class TileSetRepository(
         )
 
         queryset = self.order_by(queryset=queryset, order_bys=order_bys)
+
+        # Add distinct to avoid duplicates from many-to-many relationships
+        queryset = queryset.distinct()
 
         return queryset
 

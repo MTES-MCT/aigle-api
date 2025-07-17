@@ -53,6 +53,9 @@ class TileSetPermission(
         )
         tile_sets = list(queryset.all())
 
+        if not tile_sets:
+            return []
+
         tile_sets_most_recent_map = {}
         tile_set_six_years = (
             get_tile_set_years_ago(tile_sets=tile_sets, relative_years=6)
@@ -112,7 +115,25 @@ class TileSetPermission(
 
         return self.repository.initial_queryset
 
-    def get_last_detections_filters(self, *args, **kwargs) -> Optional[Q]:
+    def get_last_detections_filters_parcels(self, *args, **kwargs):
+        return self._get_last_detections_filters(
+            detection_object_prefix="detection_objects__",
+            detection_prefix="detection_objects__detections__",
+            *args,
+            **kwargs,
+        )
+
+    def get_last_detections_filters_detections(self, *args, **kwargs):
+        return self._get_last_detections_filters(
+            detection_object_prefix="detection_object__",
+            detection_prefix="",
+            *args,
+            **kwargs,
+        )
+
+    def _get_last_detections_filters(
+        self, detection_object_prefix: str, detection_prefix: str, *args, **kwargs
+    ) -> Optional[Q]:
         intersects_geometry = kwargs.pop("filter_tile_set_intersects_geometry", None)
 
         queryset = self.filter_(
@@ -146,10 +167,12 @@ class TileSetPermission(
         for i in range(len(tile_sets)):
             tile_set = tile_sets[i]
             previous_tile_sets = tile_sets[:i]
-            where = Q(tile_set__id=tile_set.id)
+            where = Q(**{f"{detection_prefix}tile_set__id": tile_set.id})
 
             if intersects_geometry:
-                where &= Q(geometry__intersects=intersects_geometry)
+                where &= Q(
+                    **{f"{detection_prefix}geometry__intersects": intersects_geometry}
+                )
 
             geo_zones_map = defaultdict(list)
             for geo_zone in tile_set.geo_zones.all():
@@ -158,21 +181,27 @@ class TileSetPermission(
             where_zones = Q()
             if geo_zones_map.get(GeoZoneType.COMMUNE):
                 where_zones &= Q(
-                    detection_object__commune__id__in=geo_zones_map.get(
-                        GeoZoneType.COMMUNE
-                    )
+                    **{
+                        f"{detection_object_prefix}commune__id__in": geo_zones_map.get(
+                            GeoZoneType.COMMUNE
+                        )
+                    }
                 )
             if geo_zones_map.get(GeoZoneType.DEPARTMENT):
                 where_zones &= Q(
-                    detection_object__commune__department__id__in=geo_zones_map.get(
-                        GeoZoneType.DEPARTMENT
-                    )
+                    **{
+                        f"{detection_object_prefix}commune__department__id__in": geo_zones_map.get(
+                            GeoZoneType.DEPARTMENT
+                        )
+                    }
                 )
             if geo_zones_map.get(GeoZoneType.REGION):
                 where_zones &= Q(
-                    detection_object__commune__department__region__id__in=geo_zones_map.get(
-                        GeoZoneType.REGION
-                    )
+                    **{
+                        f"{detection_object_prefix}commune__department__region__id__in": geo_zones_map.get(
+                            GeoZoneType.REGION
+                        )
+                    }
                 )
             wheres_zones.append(where_zones)
             where &= where_zones
