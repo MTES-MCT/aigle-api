@@ -7,6 +7,7 @@ class GeoZoneSerializer(UuidTimestampedModelSerializerMixin):
         model = GeoZone
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
             "name",
+            "geo_zone_type",
         ]
 
 
