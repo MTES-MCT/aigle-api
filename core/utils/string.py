@@ -4,11 +4,6 @@ from typing import List, Optional, Type, TypeVar
 import unicodedata
 
 
-def snake_to_camel_case(name: str) -> str:
-    parts = iter(name.split("_"))
-    return next(parts) + "".join(i.title() for i in parts)
-
-
 def strip_accents(text: str) -> str:
     """
     Strip accents from input String.

@@ -24,13 +24,13 @@ from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.models.tile_set import TileSet
 from core.models.user import User
-from core.utils.detection import get_linked_detections
+from core.constants.detection import PERCENTAGE_SAME_DETECTION_THRESHOLD
+from core.services.detection import DetectionService
+from core.services.prescription import PrescriptionService
 from core.utils.logs_helpers import log_command_event
-from core.utils.prescription import compute_prescription
 from core.utils.string import normalize
 from simple_history.utils import bulk_create_with_history
 
-PERCENTAGE_SAME_DETECTION_THRESHOLD = 0.5
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
 INSERT_BATCH_SIZE = 10000
 
@@ -302,7 +302,7 @@ class Command(BaseCommand):
         # we filter out detections that have too small intersection area with the detection
 
         if self.clean_step:
-            linked_detections = get_linked_detections(
+            linked_detections = DetectionService.get_linked_detections(
                 detection_geometry=geometry,
                 object_type_id=object_type.id,
                 exclude_tile_set_ids=[],
@@ -326,7 +326,7 @@ class Command(BaseCommand):
                       linked_detection_same_tileset.id}. Skipping...")
                 return
         else:
-            linked_detections = get_linked_detections(
+            linked_detections = DetectionService.get_linked_detections(
                 detection_geometry=geometry,
                 object_type_id=object_type.id,
                 exclude_tile_set_ids=[self.tile_set.id],
@@ -482,7 +482,7 @@ class Command(BaseCommand):
         ]
 
         for detection_object in detection_objects:
-            compute_prescription(detection_object)
+            PrescriptionService.compute_prescription(detection_object=detection_object)
 
         self.total_inserted_detections += len(self.detections_to_insert)
 

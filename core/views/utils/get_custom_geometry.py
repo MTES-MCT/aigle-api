@@ -87,7 +87,8 @@ def get_queryset_geocustomzone(uuids: List[str], polygon_requested: Polygon):
 
     try:
         queryset = queryset.filter(uuid__in=uuids)
-    except Exception:
+    except (ValueError, TypeError):
+        # Invalid UUID format
         pass
 
     queryset = queryset.filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)

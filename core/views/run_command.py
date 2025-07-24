@@ -16,12 +16,8 @@ from core.serializers.command_run import (
     ListTasksParametersSerializer,
 )
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
-from core.utils.run_command import (
-    COMMANDS_AND_PARAMETERS,
-    CommandParameters,
-    parse_parameters,
-)
-from core.utils.tasks import AsyncCommandService
+from core.utils.run_command import COMMANDS_AND_PARAMETERS, CommandParameters
+from core.services.command_async import CommandAsyncService
 
 
 class CommandAsyncViewSet(ViewSet):
@@ -38,17 +34,13 @@ class CommandAsyncViewSet(ViewSet):
         validated_data = serializer.validated_data
         command_name = validated_data["command"]
         parameters: CommandParameters = validated_data.get("args", {})
-        parsed_parameters = parse_parameters(
+
+        # Use service to parse parameters and run command
+        django_parameters = CommandAsyncService.parse_command_parameters(
             command_name=command_name, parameters=parameters
         )
 
-        # Convert CLI parameter names to Django format for call_command
-        django_parameters = {
-            key.lstrip("-").replace("-", "_"): value
-            for key, value in parsed_parameters.items()
-        }
-
-        task_id: str = AsyncCommandService.run_command_async(
+        task_id: str = CommandAsyncService.run_command_async(
             command_name, **django_parameters
         )
         return Response(
@@ -62,7 +54,7 @@ class CommandAsyncViewSet(ViewSet):
                 {"error": "Task ID is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        task_status = AsyncCommandService.get_task_status(pk)
+        task_status = CommandAsyncService.get_task_status(pk)
         serializer = TaskStatusSerializer(data=task_status)
         serializer.is_valid(raise_exception=True)
 
@@ -78,7 +70,7 @@ class CommandAsyncViewSet(ViewSet):
         serializer = CancelTaskSerializer(data={"task_id": pk})
         serializer.is_valid(raise_exception=True)
 
-        success = AsyncCommandService.cancel_task(pk)
+        success = CommandAsyncService.cancel_task(pk)
         return Response(
             {"cancelled": success, "task_id": pk}, status=status.HTTP_200_OK
         )
@@ -98,7 +90,7 @@ class CommandAsyncViewSet(ViewSet):
         # Get validated statuses from serializer
         statuses = params_serializer.validated_data.get("statuses")
 
-        command_runs, count = AsyncCommandService.get_command_runs(
+        command_runs, count = CommandAsyncService.get_command_runs(
             limit=limit, offset=offset, statuses=statuses
         )
         serializer = CommandRunSerializer(command_runs, many=True)

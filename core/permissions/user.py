@@ -1,18 +1,25 @@
 from collections import defaultdict
-from typing import List, Optional
+from typing import List, Optional, Tuple, TYPE_CHECKING
 from core.models.geo_zone import GeoZone, GeoZoneType
+from core.models.object_type import ObjectType
+from core.models.object_type_category import ObjectTypeCategoryObjectTypeStatus
 from core.models.user import User, UserRole
-from core.models.user_group import UserGroupRight
+from core.models.user_group import UserGroupRight, UserGroup
 from core.permissions.base import BasePermission
 from core.repository.base import CollectivityRepoFilter
 from core.repository.user import UserRepository
 
+from django.contrib.gis.geos import Point
 from django.contrib.gis.geos.collections import MultiPolygon
-from django.db.models import QuerySet
+from django.db.models import QuerySet, Count, Case, When, F
 from django.contrib.gis.db.models.aggregates import Union
+from django.contrib.gis.db.models.fields import GeometryField
 from django.contrib.gis.db.models.functions import Intersection, Envelope
 from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
+
+if TYPE_CHECKING:
+    from django.contrib.gis.geos import GEOSGeometry
 
 
 class UserPermission(
@@ -90,23 +97,46 @@ class UserPermission(
         geo_zones_accessibles = GeoZone.objects.filter(
             user_groups__user_user_groups__user=self.user
         )
-        geometry_union = Union("geometry")
-
-        if intersects_geometry:
-            geometry_union = Intersection(geometry_union, intersects_geometry)
 
         geo_zones_accessibles = geo_zones_accessibles.annotate(
-            geometry_union=geometry_union
+            geo_zone_count=Count("id"),
+            geometry_union=Case(
+                When(geo_zone_count=1, then=F("geometry")),
+                default=Union("geometry"),
+                output_field=GeometryField(),
+            ),
         )
 
-        total_geometry = Union("geometry_union")
+        if intersects_geometry:
+            geo_zones_accessibles = geo_zones_accessibles.annotate(
+                geometry_union_filtered=Intersection(
+                    "geometry_union", intersects_geometry
+                )
+            )
+            union_field = "geometry_union_filtered"
+        else:
+            union_field = "geometry_union"
 
-        if bbox:
-            total_geometry = Envelope(total_geometry)
+        # Handle the case where there might be only one zone
+        zones = geo_zones_accessibles.values_list(union_field, flat=True)
+        zones_list = list(zones)
 
-        accessible_geometry = geo_zones_accessibles.aggregate(
-            total_geo_union=total_geometry
-        ).get("total_geo_union")
+        if not zones_list:
+            accessible_geometry = None
+        elif len(zones_list) == 1:
+            accessible_geometry = zones_list[0]
+            if bbox:
+                accessible_geometry = (
+                    accessible_geometry.envelope if accessible_geometry else None
+                )
+        else:
+            total_geometry = Union(union_field)
+            if bbox:
+                total_geometry = Envelope(total_geometry)
+
+            accessible_geometry = geo_zones_accessibles.aggregate(
+                total_geo_union=total_geometry
+            ).get("total_geo_union")
 
         return None if accessible_geometry.empty else accessible_geometry
 
@@ -125,9 +155,13 @@ class UserPermission(
                 user_group_right
             ],
         )
-        geometry_union = Union("geometry")
         geo_zones_editables = geo_zones_editables.annotate(
-            geometry_union=geometry_union
+            geo_zone_count=Count("id"),
+            geometry_union=Case(
+                When(geo_zone_count=1, then=F("geometry")),
+                default=Union("geometry"),
+                output_field=GeometryField(),
+            ),
         )
         geo_zones_editables.filter(geometry_union__contains=geometry)
 
@@ -139,6 +173,115 @@ class UserPermission(
             )
 
         return can_edit
+
+    def get_user_object_types_with_status(
+        self,
+    ) -> List[Tuple[ObjectType, ObjectTypeCategoryObjectTypeStatus]]:
+        """Get object types accessible by user with their status."""
+        if self.user.user_role == UserRole.SUPER_ADMIN:
+            object_types = ObjectType.objects.order_by("name").all()
+            return [
+                (object_type, ObjectTypeCategoryObjectTypeStatus.VISIBLE)
+                for object_type in object_types
+            ]
+
+        user_user_groups = self.user.user_user_groups.prefetch_related(
+            "user_group",
+            "user_group__object_type_categories",
+            "user_group__object_type_categories__object_type_category_object_types",
+            "user_group__object_type_categories__object_type_category_object_types__object_type",
+        ).all()
+
+        object_type_categories = []
+        for user_user_group in user_user_groups:
+            object_type_categories.extend(
+                user_user_group.user_group.object_type_categories.all()
+            )
+
+        object_type_uuids_statuses_map = {}
+        object_type_category_object_type_status_priorities = {
+            ObjectTypeCategoryObjectTypeStatus.VISIBLE: 3,
+            ObjectTypeCategoryObjectTypeStatus.OTHER_CATEGORY: 2,
+            ObjectTypeCategoryObjectTypeStatus.HIDDEN: 1,
+        }
+
+        for object_type_category in object_type_categories:
+            for (
+                object_type_category_object_type
+            ) in object_type_category.object_type_category_object_types.all():
+                object_type = object_type_category_object_type.object_type
+                status = object_type_category_object_type.object_type_category_object_type_status
+
+                if (
+                    object_type_uuids_statuses_map.get(object_type.uuid)
+                    and object_type_category_object_type_status_priorities[
+                        object_type_uuids_statuses_map.get(object_type.uuid)[1]
+                    ]
+                    >= object_type_category_object_type_status_priorities[status]
+                ):
+                    continue
+
+                object_type_uuids_statuses_map[object_type.uuid] = (object_type, status)
+
+        object_types_with_status = []
+        for object_type, status in object_type_uuids_statuses_map.values():
+            object_types_with_status.append((object_type, status))
+
+        return sorted(object_types_with_status, key=lambda x: x[0].name)
+
+    def get_user_group_rights(
+        self,
+        points: List[Point],
+        raise_if_has_no_right: Optional[UserGroupRight] = None,
+    ) -> List[UserGroupRight]:
+        """Get user group rights for given points."""
+        if self.user.user_role == UserRole.SUPER_ADMIN:
+            return [
+                UserGroupRight.WRITE,
+                UserGroupRight.ANNOTATE,
+                UserGroupRight.READ,
+            ]
+
+        # First, get user groups with geo zones
+        user_user_groups = self.user.user_user_groups.annotate(
+            geo_zone_count=Count("user_group__geo_zones")
+        ).filter(geo_zone_count__gt=0)
+
+        # Handle union differently based on count per user group
+        user_user_groups_with_geometry = []
+        for user_user_group in user_user_groups:
+            geo_zones = user_user_group.user_group.geo_zones.all()
+            if len(geo_zones) == 1:
+                union_geometry = geo_zones[0].geometry
+            elif len(geo_zones) > 1:
+                # Use Union aggregate on the related geo zones
+                union_result = user_user_group.user_group.geo_zones.aggregate(
+                    union_geom=Union("geometry")
+                )
+                union_geometry = union_result["union_geom"]
+            else:
+                continue  # Skip if no geo zones
+
+            # Check if any point is contained in the union geometry
+            contains_point = False
+            for point in points:
+                if union_geometry and union_geometry.contains(point):
+                    contains_point = True
+                    break
+
+            if contains_point:
+                user_user_groups_with_geometry.append(user_user_group)
+
+        user_group_rights = set()
+        for user_user_group in user_user_groups_with_geometry:
+            user_group_rights.update(user_user_group.user_group_rights)
+
+        res = list(user_group_rights)
+
+        if raise_if_has_no_right and raise_if_has_no_right not in res:
+            raise PermissionDenied("Vous n'avez pas les droits pour éditer cette zone")
+
+        return res
 
     def can_edit(
         self,
@@ -161,3 +304,32 @@ class UserPermission(
             user_group_right=UserGroupRight.READ,
             raise_exception=raise_exception,
         )
+
+    def validate_geometry_edit_permission(self, geometry: "GEOSGeometry") -> None:
+        """Validate user can edit at given geometry location."""
+        self.can_edit(geometry=geometry, raise_exception=True)
+
+    def validate_user_group_access(self, user_group_ids: List[str]) -> None:
+        """Validate user has access to specified user groups."""
+        if not user_group_ids:
+            return
+
+        user_accessible_groups = UserGroup.objects.filter(users=self.user).values_list(
+            "id", flat=True
+        )
+
+        invalid_groups = set(user_group_ids) - set(
+            str(gid) for gid in user_accessible_groups
+        )
+        if invalid_groups:
+            raise PermissionError(
+                f"User does not have access to user groups: {invalid_groups}"
+            )
+
+    def validate_user_group_access_for_detection_object(self, detection_object) -> None:
+        """Validate user has access to modify a detection object based on its user groups."""
+        existing_user_group_ids = [
+            str(ug.id) for ug in detection_object.user_groups.all()
+        ]
+        if existing_user_group_ids:
+            self.validate_user_group_access(user_group_ids=existing_user_group_ids)

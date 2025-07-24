@@ -22,7 +22,9 @@ cp .env.template .env
 cp .env.compose.template .env.compose
 
 # Start development server (includes database)
-source .env && source venv/bin/activate && make start
+source venv/bin/activate
+source .env
+make start
 ```
 
 ### Database Operations
@@ -53,7 +55,12 @@ python manage.py create_tile --x-min 265750 --x-max 268364 --y-min 190647 --y-ma
 
 ### Development Server
 ```bash
-# Start local development server
+# Start local development server with environment
+source venv/bin/activate
+source .env
+make start
+
+# Alternative: Start server only (without database)
 make server
 # or: python3 manage.py runserver
 
