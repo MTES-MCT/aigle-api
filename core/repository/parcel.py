@@ -11,7 +11,8 @@ from core.models.detection_data import (
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
-from django.db.models import Count
+from django.db.models import Count, Prefetch
+from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
 from core.repository.base import (
     BaseRepository,
@@ -83,6 +84,7 @@ class ParcelRepository(
         with_commune: bool = False,
         with_zone_names: bool = False,
         with_detections_count: bool = False,
+        with_detections_objects_types: bool = False,
         *args,
         **kwargs,
     ) -> QuerySet[Parcel]:
@@ -146,6 +148,12 @@ class ParcelRepository(
             queryset=queryset,
             with_detections_count=with_detections_count,
             filter_detections_count_gt=filter_detections_count_gt,
+            filter_detection=filter_detection,
+        )
+        queryset = self._annotate_detections_objects_types(
+            queryset=queryset,
+            with_detections_objects_types=with_detections_objects_types,
+            filter_detection=filter_detection,
         )
 
         # custom filters
@@ -193,19 +201,375 @@ class ParcelRepository(
         return queryset
 
     @staticmethod
+    def _build_detection_filter_q(
+        filter_detection: Optional[DetectionFilter] = None, prefix: str = ""
+    ) -> Q:
+        if filter_detection is None or filter_detection.is_empty():
+            return Q()
+
+        q = Q()
+
+        # Score filter
+        if filter_detection.filter_score is not None:
+            score_q = Q(
+                Q(
+                    **{
+                        f"{prefix}detections__score__{filter_detection.filter_score.lookup.value}": filter_detection.filter_score.number
+                    }
+                )
+                | Q(
+                    **{
+                        f"{prefix}detections__detection_source__in": [
+                            DetectionSource.INTERFACE_DRAWN,
+                            DetectionSource.INTERFACE_FORCED_VISIBLE,
+                        ]
+                    }
+                )
+            )
+            q &= score_q
+
+        # Object type filter
+        if filter_detection.filter_object_type_uuid_in is not None:
+            q &= Q(
+                **{
+                    f"{prefix}object_type__uuid__in": filter_detection.filter_object_type_uuid_in
+                }
+            )
+
+        # Custom zone filter
+        if filter_detection.filter_custom_zone is not None:
+            if filter_detection.filter_custom_zone.custom_zone_uuids:
+                if (
+                    filter_detection.filter_custom_zone.interface_drawn
+                    == RepoFilterInterfaceDrawn.ALL
+                ):
+                    custom_zone_q = Q(
+                        **{
+                            f"{prefix}geo_custom_zones__uuid__in": filter_detection.filter_custom_zone.custom_zone_uuids
+                        }
+                    ) | Q(
+                        **{
+                            f"{prefix}detections__detection_source__in": [
+                                DetectionSource.INTERFACE_DRAWN,
+                            ]
+                        }
+                    )
+                    q &= custom_zone_q
+
+                if filter_detection.filter_custom_zone.interface_drawn in [
+                    RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES,
+                    RepoFilterInterfaceDrawn.NONE,
+                ]:
+                    q &= Q(
+                        **{
+                            f"{prefix}geo_custom_zones__uuid__in": filter_detection.filter_custom_zone.custom_zone_uuids
+                        }
+                    )
+
+            if (
+                filter_detection.filter_custom_zone.interface_drawn
+                == RepoFilterInterfaceDrawn.NONE
+            ):
+                q &= ~Q(
+                    **{
+                        f"{prefix}detections__detection_source": DetectionSource.INTERFACE_DRAWN
+                    }
+                )
+
+        # Tile set filter
+        if filter_detection.filter_tile_set_uuid_in is not None:
+            q &= Q(
+                **{
+                    f"{prefix}detections__tile_set__uuid__in": filter_detection.filter_tile_set_uuid_in
+                }
+            )
+
+        # Parcel filter
+        if filter_detection.filter_parcel_uuid_in is not None:
+            q &= Q(
+                **{f"{prefix}parcel__uuid__in": filter_detection.filter_parcel_uuid_in}
+            )
+
+        # Detection validation status filter
+        if filter_detection.filter_detection_validation_status_in is not None:
+            q &= Q(
+                **{
+                    f"{prefix}detections__detection_data__detection_validation_status__in": filter_detection.filter_detection_validation_status_in
+                }
+            )
+
+        # Detection control status filter
+        if filter_detection.filter_detection_control_status_in is not None:
+            q &= Q(
+                **{
+                    f"{prefix}detections__detection_data__detection_control_status__in": filter_detection.filter_detection_control_status_in
+                }
+            )
+
+        # Prescription filter
+        if filter_detection.filter_prescribed is not None:
+            if filter_detection.filter_prescribed:
+                q &= Q(
+                    **{
+                        f"{prefix}detections__detection_data__detection_prescription_status": DetectionPrescriptionStatus.PRESCRIBED
+                    }
+                )
+            else:
+                q &= Q(
+                    Q(
+                        **{
+                            f"{prefix}detections__detection_data__detection_prescription_status": DetectionPrescriptionStatus.NOT_PRESCRIBED
+                        }
+                    )
+                    | Q(
+                        **{
+                            f"{prefix}detections__detection_data__detection_prescription_status": None
+                        }
+                    )
+                )
+
+        if filter_detection.additional_filter is not None:
+            q &= filter_detection.additional_filter
+
+        return q
+
+    @staticmethod
     def _annotate_detections_count(
         queryset: QuerySet[Parcel],
         with_detections_count: bool = False,
         filter_detections_count_gt: Optional[int] = None,
+        filter_detection: Optional[DetectionFilter] = None,
     ) -> QuerySet[Parcel]:
         if not with_detections_count and filter_detections_count_gt is None:
             return queryset
 
+        # Apply detection filter to the count annotation using Parcel context (with detection_objects__ prefix)
+        detection_filter_q = ParcelRepository._build_detection_filter_q(
+            filter_detection, prefix="detection_objects__"
+        )
+
         queryset = queryset.annotate(
-            detections_count=Count("detection_objects__id", distinct=True)
+            detections_count=Count(
+                "detection_objects__id", filter=detection_filter_q, distinct=True
+            )
         )
 
         return queryset
+
+    @staticmethod
+    def _annotate_detections_objects_types(
+        queryset: QuerySet[Parcel],
+        with_detections_objects_types: bool = False,
+        filter_detection: Optional[DetectionFilter] = None,
+    ) -> QuerySet[Parcel]:
+        if not with_detections_objects_types:
+            return queryset
+
+        # Build detection filter for DetectionObject context and apply to prefetch
+        detection_filter_q = ParcelRepository._build_detection_object_filter_q(
+            filter_detection
+        )
+
+        queryset = queryset.prefetch_related(
+            Prefetch(
+                "detection_objects",
+                queryset=DetectionObject.objects.filter(detection_filter_q)
+                .select_related("object_type")
+                .distinct(),
+            )
+        )
+
+        return queryset
+
+    @staticmethod
+    def _build_detection_object_filter_q(
+        filter_detection: Optional[DetectionFilter] = None,
+    ) -> Q:
+        """
+        Build a Q object for filtering DetectionObject querysets.
+
+        This method converts detection filters from Parcel context to DetectionObject context
+        by using the correct field relationships:
+        - DetectionObject -> Detection (via 'detections' related name)
+        - DetectionObject -> ObjectType (direct foreign key)
+        - DetectionObject -> GeoCustomZone (many-to-many)
+
+        Args:
+            filter_detection: Detection filter with various criteria
+
+        Returns:
+            Q object for filtering DetectionObject querysets
+        """
+        if filter_detection is None or filter_detection.is_empty():
+            return Q()
+
+        q = Q()
+
+        # Score filter: Match detections with score >= threshold OR interface-drawn sources
+        if filter_detection.filter_score is not None:
+            score_q = Q(
+                Q(
+                    **{
+                        f"detections__score__{filter_detection.filter_score.lookup.value}": filter_detection.filter_score.number
+                    }
+                )
+                | Q(
+                    detections__detection_source__in=[
+                        DetectionSource.INTERFACE_DRAWN,
+                        DetectionSource.INTERFACE_FORCED_VISIBLE,
+                    ]
+                )
+            )
+            q &= score_q
+
+        # Object type filter: Filter by specific object types
+        if filter_detection.filter_object_type_uuid_in is not None:
+            q &= Q(object_type__uuid__in=filter_detection.filter_object_type_uuid_in)
+
+        # Custom zone filter: Filter by custom geographic zones
+        if filter_detection.filter_custom_zone is not None:
+            if filter_detection.filter_custom_zone.custom_zone_uuids:
+                # Apply zone filter based on interface drawn preference
+                if (
+                    filter_detection.filter_custom_zone.interface_drawn
+                    == RepoFilterInterfaceDrawn.ALL
+                ):
+                    q &= Q(
+                        geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids
+                    )
+
+                elif (
+                    filter_detection.filter_custom_zone.interface_drawn
+                    == RepoFilterInterfaceDrawn.ONLY_INTERFACE_DRAWN
+                ):
+                    q &= Q(
+                        geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids,
+                        detections__detection_source__in=[
+                            DetectionSource.INTERFACE_DRAWN,
+                            DetectionSource.INTERFACE_FORCED_VISIBLE,
+                        ],
+                    )
+
+                elif (
+                    filter_detection.filter_custom_zone.interface_drawn
+                    == RepoFilterInterfaceDrawn.ONLY_NON_INTERFACE_DRAWN
+                ):
+                    q &= Q(
+                        geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids,
+                        detections__detection_source=DetectionSource.ANALYSIS,
+                    )
+
+                elif filter_detection.filter_custom_zone.interface_drawn in [
+                    RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES,
+                    RepoFilterInterfaceDrawn.NONE,
+                ]:
+                    q &= Q(
+                        geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids
+                    )
+
+            # Apply interface drawn exclusion filter if specified
+            if (
+                filter_detection.filter_custom_zone.interface_drawn
+                == RepoFilterInterfaceDrawn.NONE
+            ):
+                q &= ~Q(detections__detection_source=DetectionSource.INTERFACE_DRAWN)
+
+        # Parcel filter: Filter by specific parcels
+        if filter_detection.filter_parcel_uuid_in is not None:
+            q &= Q(parcel__uuid__in=filter_detection.filter_parcel_uuid_in)
+
+        # Detection validation status filter: Filter by validation status
+        if filter_detection.filter_detection_validation_status_in is not None:
+            q &= Q(
+                detections__detection_data__detection_validation_status__in=filter_detection.filter_detection_validation_status_in
+            )
+
+        # Detection control status filter: Filter by control status
+        if filter_detection.filter_detection_control_status_in is not None:
+            q &= Q(
+                detections__detection_data__detection_control_status__in=filter_detection.filter_detection_control_status_in
+            )
+
+        # Prescription filter: Filter by prescription status
+        if filter_detection.filter_prescribed is not None:
+            if filter_detection.filter_prescribed:
+                q &= Q(
+                    detections__detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
+                )
+            else:
+                q &= Q(
+                    Q(
+                        detections__detection_data__detection_prescription_status=DetectionPrescriptionStatus.NOT_PRESCRIBED
+                    )
+                    | Q(
+                        detections__detection_data__detection_prescription_status__isnull=True
+                    )
+                )
+
+        # Additional filter: Apply tile permissions and other complex filters
+        if filter_detection.additional_filter is not None:
+            # Transform the additional_filter from Parcel context to DetectionObject context
+            # by removing the "detection_objects__" prefix from field paths
+            transformed_q = ParcelRepository._transform_q_for_detection_object(
+                filter_detection.additional_filter
+            )
+            q &= transformed_q
+
+        return q
+
+    @staticmethod
+    def _transform_q_for_detection_object(q_obj: Q) -> Q:
+        """
+        Transform a Q object from Parcel context to DetectionObject context.
+
+        This method recursively transforms field lookups by removing the 'detection_objects__'
+        prefix, allowing filters designed for Parcel querysets to be used with DetectionObject querysets.
+
+        Example transformation:
+        - 'detection_objects__detections__score__gte' → 'detections__score__gte'
+        - 'detection_objects__object_type__uuid__in' → 'object_type__uuid__in'
+
+        Args:
+            q_obj: Q object with field paths in Parcel context
+
+        Returns:
+            Q object with field paths adapted for DetectionObject context
+        """
+        if not q_obj:
+            return Q()
+
+        new_q = Q()
+
+        for child in q_obj.children:
+            if isinstance(child, Q):
+                # Recursively transform nested Q objects
+                transformed_child = ParcelRepository._transform_q_for_detection_object(
+                    child
+                )
+                if q_obj.connector == Q.AND:
+                    new_q &= transformed_child
+                else:
+                    new_q |= transformed_child
+            elif isinstance(child, tuple) and len(child) == 2:
+                # Transform field lookups by removing detection_objects__ prefix
+                field_lookup, value = child
+                if field_lookup.startswith("detection_objects__"):
+                    new_field_lookup = field_lookup[len("detection_objects__") :]
+                    new_child = (new_field_lookup, value)
+                else:
+                    new_child = child
+
+                child_q = Q(new_child)
+                if q_obj.connector == Q.AND:
+                    new_q &= child_q
+                else:
+                    new_q |= child_q
+
+        # Preserve negation
+        if q_obj.negated:
+            new_q.negate()
+
+        return new_q
 
     @staticmethod
     def _filter_collectivities(

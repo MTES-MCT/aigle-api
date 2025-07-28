@@ -1,3 +1,4 @@
+from collections import defaultdict
 import json
 
 from django.contrib.gis.geos import GEOSGeometry
@@ -116,21 +117,65 @@ class ParcelDetailSerializer(
         return previews_serialized
 
 
+class ParcelListItemDetectionCountByObjectTypeSerializer(serializers.Serializer):
+    object_type_name = serializers.CharField(required=True)
+    object_type_uuid = serializers.CharField(required=True)
+    object_type_color = serializers.CharField(required=True)
+    count = serializers.IntegerField(required=True)
+
+
 class ParcelListItemSerializer(ParcelWithCommuneSerializer):
     class Meta(ParcelWithCommuneSerializer.Meta):
         fields = ParcelWithCommuneSerializer.Meta.fields + [
             "zone_names",
             "detections_count",
+            "detections_count_by_object_type",
         ]
 
     zone_names = serializers.SerializerMethodField()
     detections_count = serializers.SerializerMethodField()
+    detections_count_by_object_type = serializers.SerializerMethodField()
 
     def get_zone_names(self, obj: Parcel):
         return obj.zone_names or []
 
     def get_detections_count(self, obj: Parcel):
         return obj.detections_count
+
+    def get_detections_count_by_object_type(self, obj: Parcel):
+        detections_count_by_object_type_map = defaultdict(int)
+        object_types_map = dict()
+
+        # Check if detection_objects has been prefetched with filters
+        # If it has, use the prefetched data directly
+        if (
+            hasattr(obj, "_prefetched_objects_cache")
+            and "detection_objects" in obj._prefetched_objects_cache
+        ):
+            detection_objects = obj._prefetched_objects_cache["detection_objects"]
+        else:
+            detection_objects = obj.detection_objects.all()
+
+        for detection_object in detection_objects:
+            object_type_uuid = detection_object.object_type.uuid
+
+            if object_type_uuid not in object_types_map:
+                object_types_map[object_type_uuid] = detection_object.object_type
+
+            detections_count_by_object_type_map[object_type_uuid] += 1
+
+        return ParcelListItemDetectionCountByObjectTypeSerializer(
+            [
+                {
+                    "object_type_name": object_types_map[object_type_uuid].name,
+                    "object_type_uuid": object_types_map[object_type_uuid].uuid,
+                    "object_type_color": object_types_map[object_type_uuid].color,
+                    "count": object_type_count,
+                }
+                for object_type_uuid, object_type_count in detections_count_by_object_type_map.items()
+            ],
+            many=True,
+        ).data
 
 
 class ParcelOverviewSerializer(serializers.Serializer):

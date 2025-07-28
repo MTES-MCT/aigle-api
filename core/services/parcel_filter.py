@@ -52,6 +52,7 @@ class ParcelFilterService:
             with_commune=True,
             with_zone_names=True,
             with_detections_count=True,
+            with_detections_objects_types=True,
         )
 
         # Apply ordering
