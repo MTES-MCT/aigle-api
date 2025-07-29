@@ -69,13 +69,13 @@ class UserService:
                 "Un administrateur peut seulement créer des utilisateurs de rôle normal"
             )
 
-        with transaction.atomic():
-            user = User.objects.create_user(
-                email=email,
-                password=password,
-                user_role=user_role,
-            )
+        user = User.objects.create_user(
+            email=email,
+            password=password,
+            user_role=user_role,
+        )
 
+        with transaction.atomic():
             if user_user_groups:
                 UserService._update_user_groups(
                     user=user,
