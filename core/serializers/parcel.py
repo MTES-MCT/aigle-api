@@ -188,3 +188,9 @@ class ParcelOverviewSerializer(serializers.Serializer):
     total = serializers.IntegerField(
         help_text="Total number of parcels in the filtered queryset"
     )
+    not_controlled = serializers.IntegerField(
+        help_text="Number of parcels that have more than 50% of their detections in NOT_CONTROLLED status"
+    )
+    controlled = serializers.IntegerField(
+        help_text="Number of parcels that have 50% or more of their detections in CONTROLLED_FIELD, PRIOR_LETTER_SENT, OFFICIAL_REPORT_DRAWN_UP, OBSERVARTION_REPORT_REDACTED, ADMINISTRATIVE_CONSTRAINT or REHABILITATED status"
+    )

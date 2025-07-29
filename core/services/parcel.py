@@ -3,7 +3,7 @@ from django.db.models import Count, Q, F, Sum, Case, When, Value, IntegerField
 from django.db.models.query import QuerySet
 
 from core.models.analytic_log import AnalyticLogType
-from core.models.detection_data import DetectionValidationStatus
+from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
 from core.models.parcel import Parcel
 from core.permissions.user import UserPermission
 from core.repository.parcel import ParcelRepository
@@ -102,6 +102,25 @@ class ParcelService:
                     ]
                 ),
             ),
+            not_controlled_count=Count(
+                "detection_objects__detections__detection_data",
+                filter=Q(
+                    detection_objects__detections__detection_data__detection_control_status=DetectionControlStatus.NOT_CONTROLLED
+                ),
+            ),
+            controlled_count=Count(
+                "detection_objects__detections__detection_data",
+                filter=Q(
+                    detection_objects__detections__detection_data__detection_control_status__in=[
+                        DetectionControlStatus.CONTROLLED_FIELD,
+                        DetectionControlStatus.PRIOR_LETTER_SENT,
+                        DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+                        DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
+                        DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+                        DetectionControlStatus.REHABILITATED,
+                    ]
+                ),
+            ),
         )
 
         # Use conditional aggregation to count both categories in a single query
@@ -120,12 +139,28 @@ class ParcelService:
                     output_field=IntegerField(),
                 )
             ),
+            not_controlled=Sum(
+                Case(
+                    When(not_controlled_count__gt=0.5 * F("total_detections"), then=1),
+                    default=0,
+                    output_field=IntegerField(),
+                )
+            ),
+            controlled=Sum(
+                Case(
+                    When(controlled_count__gte=0.5 * F("total_detections"), then=1),
+                    default=0,
+                    output_field=IntegerField(),
+                )
+            ),
             total=Count("id"),
         )
 
         return {
             "not_verified": result["not_verified"] or 0,
             "verified": result["verified"] or 0,
+            "not_controlled": result["not_controlled"] or 0,
+            "controlled": result["controlled"] or 0,
             "total": result["total"] or 0,
         }
 
