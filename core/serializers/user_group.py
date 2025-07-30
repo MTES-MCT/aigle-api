@@ -3,6 +3,7 @@ from core.models.object_type_category import ObjectTypeCategory
 from core.models.user_group import UserGroup, UserUserGroup
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
+from core.serializers.geo_zone import GeoZoneSerializer
 from core.serializers.object_type_category import ObjectTypeCategorySerializer
 
 from rest_framework import serializers
@@ -21,7 +22,10 @@ class UserGroupSerializer(UuidTimestampedModelSerializerMixin):
         fields = UuidTimestampedModelSerializerMixin.Meta.fields + [
             "name",
             "user_group_type",
+            "geo_zones",
         ]
+
+    geo_zones = GeoZoneSerializer(many=True)
 
 
 class UserGroupDetailSerializer(UserGroupSerializer, WithCollectivitiesSerializerMixin):

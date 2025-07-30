@@ -6,6 +6,8 @@ This file contains settings specific to the development environment.
 
 import os
 from .base import *  # noqa: F403, F401
+from .base import SQL_ECHO
+import builtins
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -73,7 +75,7 @@ LOGGING = {
         },
         "django.db.backends": {
             "handlers": BASE_HANDLERS,
-            "level": "WARNING",
+            "level": "DEBUG" if SQL_ECHO else "WARNING",
             "propagate": False,
         },
         # Silence noisy Django loggers in development
@@ -104,3 +106,33 @@ LOGGING = {
         },
     },
 }
+
+# custom dev / debug utils
+
+
+def get_raw_sql(queryset):
+    from django.db import connection
+
+    try:
+        compiler = queryset.query.get_compiler(using=connection.alias)
+        sql, params = compiler.as_sql()
+        cursor = connection.cursor()
+        if hasattr(cursor, "mogrify"):
+            return cursor.mogrify(sql, params).decode("utf-8")
+        else:
+            formatted_sql = sql
+            for param in params:
+                if isinstance(param, str):
+                    formatted_sql = formatted_sql.replace("%s", f"'{param}'", 1)
+                elif param is None:
+                    formatted_sql = formatted_sql.replace("%s", "NULL", 1)
+                else:
+                    formatted_sql = formatted_sql.replace("%s", str(param), 1)
+            return formatted_sql
+    except Exception as e:
+        return f"Error getting SQL: {e}"
+
+
+# make them available globally
+
+builtins.get_raw_sql = get_raw_sql

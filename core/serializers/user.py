@@ -1,15 +1,8 @@
-from typing import List, Optional
 from djoser.serializers import UserSerializer as UserSerializerBase
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
-from django.contrib.gis.geos import Point
-from django.contrib.gis.db.models.functions import Centroid
 
 from rest_framework import serializers
-
-from core.models.user import UserRole
-from core.models.user_group import UserGroup, UserUserGroup
-from core.views.utils.save_user_position import save_user_position
 
 UserModel = get_user_model()
 
@@ -43,136 +36,41 @@ class UserInputSerializer(UserSerializer):
     user_user_groups = UserUserGroupInputSerializer(many=True)
 
     def create(self, validated_data):
-        check_email_exists(email=validated_data["email"])
-
-        if (
-            self.context["request"].user.user_role != UserRole.SUPER_ADMIN
-            and validated_data["user_role"] != UserRole.REGULAR
-        ):
-            raise PermissionDenied(
-                "Un administrateur peut seulement créer des utilisateurs de rôle normal"
-            )
-
-        instance = UserModel.objects.create_user(
-            email=validated_data["email"],
-            password=validated_data["password"],
-            user_role=validated_data["user_role"],
-        )
-
-        return self.update(instance=instance, validated_data=validated_data)
-
-    def update(self, instance, validated_data):
-        if validated_data.get("email") and instance.email != validated_data["email"]:
-            check_email_exists(email=validated_data["email"])
-
-        password_clear = validated_data.pop("password", None)
-
-        if password_clear:
-            instance.set_password(password_clear)
-
-        # if a user not super admin update a user other than him, he cannot
-
-        if (
-            self.context["request"].user.user_role != UserRole.SUPER_ADMIN
-            and instance.id != self.context["request"].user.id
-            and validated_data["user_role"] != UserRole.REGULAR
-        ):
-            raise PermissionDenied(
-                "Un administrateur ne peut pas donner à un autre utilisateur un rôle autre que normal"
-            )
-
-        # if a user is not a super admin, he cannot set himself as super admin
-
-        if (
-            self.context["request"].user.user_role != UserRole.SUPER_ADMIN
-            and validated_data["user_role"] == UserRole.SUPER_ADMIN
-        ):
-            raise PermissionDenied(
-                "Un administrateur ne peut pas donner à un autre utilisateur le rôle de super administrateur"
-            )
-
-        # user_user_groups
+        from core.services.user import UserService
 
         user_user_groups = validated_data.pop("user_user_groups", None)
+        password = validated_data.pop("password")
 
-        if user_user_groups is not None:
-            user_user_groups_map = {
-                user_user_group["user_group_uuid"]: user_user_group
-                for user_user_group in user_user_groups
-            }
+        try:
+            return UserService.create_user(
+                email=validated_data["email"],
+                password=password,
+                user_role=validated_data["user_role"],
+                requesting_user=self.context["request"].user,
+                user_user_groups=user_user_groups,
+            )
+        except serializers.ValidationError:
+            raise
 
-            updated_groups = []
+    def update(self, instance, validated_data):
+        from core.services.user import UserService
 
-            for user_user_group in instance.user_user_groups.all():
-                # update existing relationships
-                if user_user_groups_map.get(user_user_group.user_group.uuid):
-                    user_user_group.user_group_rights = user_user_groups_map[
-                        user_user_group.user_group.uuid
-                    ]["user_group_rights"]
-                    updated_groups.append(user_user_group)
-                    user_user_groups_map.pop(user_user_group.user_group.uuid)
-                # remove deleted relationships
-                else:
-                    user_user_group.delete()
+        user_user_groups = validated_data.pop("user_user_groups", None)
+        password = validated_data.pop("password", None)
 
-            if updated_groups:
-                UserUserGroup.objects.bulk_update(updated_groups, ["user_group_rights"])
-
-            # create newly created relationships
-            new_groups = UserGroup.objects.filter(
-                uuid__in=user_user_groups_map.keys()
-            ).all()
-
-            new_user_user_groups = []
-
-            for new_group in new_groups:
-                new_user_user_groups.append(
-                    UserUserGroup(
-                        user_group_rights=user_user_groups_map[new_group.uuid][
-                            "user_group_rights"
-                        ],
-                        user=instance,
-                        user_group=new_group,
-                    )
-                )
-
-            UserUserGroup.objects.bulk_create(new_user_user_groups)
-
-            if not instance.last_position:
-                user_group_centroid = get_user_group_centroid(user_groups=new_groups)
-
-                if user_group_centroid:
-                    save_user_position(user=instance, last_position=user_group_centroid)
-
-        for key, value in validated_data.items():
-            setattr(instance, key, value)
-
-        instance.save()
-
-        return instance
-
-
-def check_email_exists(email: str, uuid: Optional[str] = None):
-    query = UserModel.objects.filter(
-        email=email,
-    )
-
-    if query.exists():
-        raise serializers.ValidationError(
-            {"email": ["Un utilisateur avec cet email existe déjà"]}
-        )
-
-
-def get_user_group_centroid(user_groups: List[UserGroup]) -> Optional[Point]:
-    if not user_groups:
-        return None
-
-    for new_group in user_groups:
-        if new_group.geo_zones:
-            for geo_zone in (
-                new_group.geo_zones.all()
-                .annotate(centroid=Centroid("geometry"))
-                .defer("geometry")
-            ):
-                if geo_zone.centroid:
-                    return geo_zone.centroid
+        try:
+            return UserService.update_user(
+                user=instance,
+                requesting_user=self.context["request"].user,
+                email=validated_data.get("email"),
+                password=password,
+                user_role=validated_data.get("user_role"),
+                user_user_groups=user_user_groups,
+                **{
+                    k: v
+                    for k, v in validated_data.items()
+                    if k not in ["email", "user_role"]
+                },
+            )
+        except (serializers.ValidationError, PermissionDenied):
+            raise

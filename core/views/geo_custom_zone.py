@@ -1,11 +1,8 @@
 from rest_framework.response import Response
 from common.views.base import BaseViewSetMixin
 
-
 from rest_framework import serializers
-from core.constants.geo import SRID
-from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
+from core.models.geo_custom_zone import GeoCustomZone
 from core.serializers.geo_custom_zone import (
     GeoCustomZoneGeoFeatureSerializer,
     GeoCustomZoneInputSerializer,
@@ -17,8 +14,6 @@ from django_filters import FilterSet, CharFilter
 from rest_framework.decorators import action
 
 from core.utils.permissions import AdminRolePermission
-from django.contrib.gis.geos import Polygon
-from django.contrib.gis.db.models.functions import Intersection
 
 
 class GeometrySerializer(serializers.Serializer):
@@ -59,49 +54,37 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
         return GeoCustomZoneSerializer
 
     def get_queryset(self):
-        queryset = GeoCustomZone.objects.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
-        queryset = queryset.prefetch_related("geo_zones")
-        queryset = queryset.select_related("geo_custom_zone_category")
+        from core.services.geo_custom_zone import GeoCustomZoneService
 
-        return queryset
+        search_query = self.request.GET.get("q")
+        return GeoCustomZoneService.get_filtered_queryset(
+            user=self.request.user, search_query=search_query
+        )
 
     @action(methods=["get"], detail=False)
     def get_geometry(self, request):
+        from core.services.geo_custom_zone import GeoCustomZoneService
+
         geometry_serializer = GeometrySerializer(data=request.GET)
         geometry_serializer.is_valid(raise_exception=True)
 
-        polygon_requested = Polygon.from_bbox(
-            (
-                geometry_serializer.data["swLng"],
-                geometry_serializer.data["swLat"],
-                geometry_serializer.data["neLng"],
-                geometry_serializer.data["neLat"],
-            )
-        )
-        polygon_requested.srid = SRID
-
-        queryset = self.get_queryset()
-
+        # Parse UUIDs if provided
+        zone_uuids = None
         if geometry_serializer.data.get("uuids"):
             try:
-                queryset = queryset.filter(
-                    uuid__in=geometry_serializer.data["uuids"].split(",")
-                )
-            except Exception:
+                zone_uuids = geometry_serializer.data["uuids"].split(",")
+            except AttributeError:
+                # uuids is not a string
                 pass
 
-        queryset = queryset.filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
-        queryset = queryset.filter(geometry__intersects=polygon_requested)
-        queryset = queryset.values(
-            "uuid",
-            "name",
-            "color",
-            "geo_custom_zone_status",
-        )
-        queryset = queryset.annotate(
-            geometry=Intersection("geometry", polygon_requested)
+        # Use service to get zones by geometry
+        zones_data = GeoCustomZoneService.get_zones_by_geometry(
+            ne_lat=geometry_serializer.data["neLat"],
+            ne_lng=geometry_serializer.data["neLng"],
+            sw_lat=geometry_serializer.data["swLat"],
+            sw_lng=geometry_serializer.data["swLng"],
+            zone_uuids=zone_uuids,
         )
 
-        serializer = GeoCustomZoneGeoFeatureSerializer(queryset.all(), many=True)
-
+        serializer = GeoCustomZoneGeoFeatureSerializer(zones_data, many=True)
         return Response(serializer.data)

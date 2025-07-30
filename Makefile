@@ -16,4 +16,12 @@ server:
 db:
 	docker compose up -d db
 
-start: db server
+redis:
+	docker compose up -d redis
+
+services: db redis
+
+celery:
+	celery -A aigle worker --loglevel=info
+
+start: services server

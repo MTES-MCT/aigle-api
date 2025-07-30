@@ -1,211 +1,171 @@
 from common.views.base import BaseViewSetMixin
 
-from django_filters import FilterSet, CharFilter
-from django.db.models import Prefetch
+from django_filters import (
+    FilterSet,
+    CharFilter,
+    NumberFilter,
+    ChoiceFilter,
+    OrderingFilter,
+)
 
-from core.models.analytic_log import AnalyticLogType
-from core.models.detection import Detection, DetectionSource
 from core.models.detection_data import (
-    DetectionPrescriptionStatus,
+    DetectionControlStatus,
     DetectionValidationStatus,
 )
-from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
-from core.repository.tile_set import DEFAULT_VALUES
-from core.serializers.parcel import ParcelDetailSerializer, ParcelSerializer
-from core.utils.analytic_log import create_log
-from core.utils.filters import UuidInFilter
+from core.serializers.parcel import (
+    ParcelDetailSerializer,
+    ParcelListItemSerializer,
+    ParcelSerializer,
+    ParcelOverviewSerializer,
+)
+from core.services.parcel_filter import ParcelFilterService
+from core.utils.filters import ChoiceInFilter, UuidInFilter
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from django.db.models import Case, When, Value, IntegerField
 
-from django.db.models import Q
+from core.services.parcel import ParcelService
+
+from core.utils.pagination import CachedCountLimitOffsetPagination
+from core.views.detection.utils import BOOLEAN_CHOICES, INTERFACE_DRAWN_CHOICES
 
 
 class ParcelFilter(FilterSet):
-    communeUuids = UuidInFilter(method="search_commune_uuids")
-    sectionQ = CharFilter(method="search_section")
-    numParcelQ = CharFilter(method="search_num_parcel")
+    sectionQ = CharFilter(method="pass_")
+    numParcelQ = CharFilter(method="pass_")
 
-    section = CharFilter(field_name="section")
-    numParcel = CharFilter(field_name="num_parcel")
+    section = CharFilter(method="pass_")
+    numParcel = CharFilter(method="pass_")
+
+    objectTypesUuids = UuidInFilter(method="pass_")
+    detectionValidationStatuses = ChoiceInFilter(
+        method="pass_",
+        choices=DetectionValidationStatus.choices,
+    )
+    detectionControlStatuses = ChoiceInFilter(
+        method="pass_",
+        choices=DetectionControlStatus.choices,
+    )
+
+    score = NumberFilter(method="pass_")
+    prescripted = ChoiceFilter(choices=BOOLEAN_CHOICES, method="pass_")
+    interfaceDrawn = ChoiceFilter(choices=INTERFACE_DRAWN_CHOICES, method="pass_")
+    customZonesUuids = UuidInFilter(method="pass_")
+
+    communesUuids = UuidInFilter(method="pass_")
+    departmentsUuids = UuidInFilter(method="pass_")
+    regionsUuids = UuidInFilter(method="pass_")
+
+    ordering = OrderingFilter(fields=["parcel", "detectionsCount"], method="pass_")
 
     class Meta:
         model = Parcel
-        fields = ["communeUuids", "sectionQ", "numParcelQ"]
+        fields = ["communesUuids", "sectionQ", "numParcelQ"]
 
-    def search_commune_uuids(self, queryset, name, value):
-        if not value:
-            return queryset
+    def pass_(self, queryset, name, value):  # noqa: ARG002
+        return queryset
 
-        return queryset.filter(commune__uuid__in=value)
-
-    def search_section(self, queryset, name, value):
-        if not value:
-            return queryset
-
-        return queryset.filter(section__icontains=value)
-
-    def search_num_parcel(self, queryset, name, value):
-        if not value:
-            return queryset
-
-        return queryset.filter(num_parcel__icontains=value)
+    def filter_queryset(self, queryset):
+        filter_service = ParcelFilterService(user=self.request.user)
+        return filter_service.apply_filters(queryset, self.data)
 
 
 class ParcelViewSet(BaseViewSetMixin[Parcel]):
     filterset_class = ParcelFilter
+    queryset = Parcel.objects
+    pagination_class = CachedCountLimitOffsetPagination
 
     def get_serializer_class(self):
-        if self.action == "retrieve" or self.action == "get_download_infos":
+        if self.action in ["retrieve", "get_download_infos"]:
             return ParcelDetailSerializer
+
+        if self.action == "list_items":
+            return ParcelListItemSerializer
 
         return ParcelSerializer
 
-    def get_queryset(self):
-        queryset = Parcel.objects.order_by("id")
-        queryset = queryset.prefetch_related("commune")
-
-        if self.action in ["retrieve", "get_download_infos"]:
-            queryset = queryset.prefetch_related(
-                Prefetch(
-                    "detection_objects",
-                    queryset=DetectionObject.objects.select_related(
-                        "object_type",
-                    )
-                    .prefetch_related(
-                        "geo_custom_zones",
-                        "geo_custom_zones__geo_custom_zone_category",
-                        "geo_sub_custom_zones",
-                    )
-                    .defer(
-                        "geo_custom_zones__geometry", "geo_sub_custom_zones__geometry"
-                    )
-                    .filter(
-                        ~Q(
-                            detections__detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
-                        )
-                        & Q(
-                            Q(
-                                detections__detection_source__in=[
-                                    DetectionSource.INTERFACE_DRAWN,
-                                    DetectionSource.INTERFACE_FORCED_VISIBLE,
-                                ]
-                            )
-                            | Q(
-                                Q(
-                                    detections__detection_data__detection_validation_status__in=[
-                                        DetectionValidationStatus.DETECTED_NOT_VERIFIED,
-                                        DetectionValidationStatus.SUSPECT,
-                                    ]
-                                )
-                                & Q(detections__score__gte=0.3)
-                            )
-                            | Q(
-                                Q(
-                                    detections__detection_data__detection_validation_status__in=[
-                                        DetectionValidationStatus.SUSPECT,
-                                    ]
-                                )
-                                & Q(detections__score__lt=0.3)
-                            )
-                        )
-                        & Q(
-                            detections__tile_set__tile_set_status__in=DEFAULT_VALUES[
-                                "filter_tile_set_status_in"
-                            ]
-                        )
-                    ),
-                ),
-                Prefetch(
-                    "detection_objects__detections",
-                    queryset=Detection.objects.select_related(
-                        "tile",
-                        "tile_set",
-                        "detection_data",
-                        "detection_data__user_last_update",
-                    ).filter(
-                        ~Q(
-                            detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
-                        )
-                        & Q(
-                            Q(
-                                detection_source__in=[
-                                    DetectionSource.INTERFACE_DRAWN,
-                                    DetectionSource.INTERFACE_FORCED_VISIBLE,
-                                ]
-                            )
-                            | Q(
-                                detection_data__detection_validation_status__in=[
-                                    DetectionValidationStatus.DETECTED_NOT_VERIFIED,
-                                    DetectionValidationStatus.SUSPECT,
-                                ]
-                            )
-                        )
-                        & Q(
-                            tile_set__tile_set_status__in=DEFAULT_VALUES[
-                                "filter_tile_set_status_in"
-                            ]
-                        )
-                    ),
-                ),
-            )
-
-        return queryset
+    def retrieve(self, request, uuid):
+        instance = ParcelService.get_parcel_detail(uuid=uuid, user=request.user)
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
 
     @action(methods=["get"], detail=True)
-    def get_download_infos(self, request, uuid, *args, **kwargs):
-        create_log(
-            self.request.user,
-            AnalyticLogType.REPORT_DOWNLOAD,
-            {
-                "parcelUuid": uuid,
-                "detectionObjectUuid": self.request.GET.get("detectionObjectUuid"),
-            },
+    def get_download_infos(self, request, uuid):
+        ParcelService.log_parcel_download(
+            user=request.user,
+            parcel_uuid=uuid,
+            detection_object_uuid=request.GET.get("detectionObjectUuid"),
         )
-
-        return self.retrieve(request, uuid, *args, **kwargs)
+        return self.retrieve(request, uuid)
 
     @action(methods=["get"], detail=False)
     def suggest_section(self, request):
-        q = request.GET.get("q")
-
-        if not q:
+        section_query = request.GET.get("sectionQ")
+        if not section_query:
             return Response([])
 
-        queryset = self.get_queryset()
-        queryset = self.filter_queryset(queryset)
-        queryset = queryset.filter(section__icontains=q)
-        queryset = queryset.annotate(
-            starts_with_q=Case(
-                When(section__istartswith=q, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            )
+        queryset = self.filter_queryset(self.get_queryset())
+        suggestions = ParcelService.get_section_suggestions(
+            queryset=queryset, section_query=section_query
         )
-        queryset = queryset.order_by("-starts_with_q").distinct()
-        queryset = queryset.values_list("section", flat=True)[:10]
-
-        return Response(list(queryset))
+        return Response(suggestions)
 
     @action(methods=["get"], detail=False)
     def suggest_num_parcel(self, request):
-        q = request.GET.get("q")
-
-        if not q:
+        num_parcel_query = request.GET.get("numParcelQ")
+        if not num_parcel_query:
             return Response([])
 
-        queryset = self.get_queryset()
-        queryset = self.filter_queryset(queryset)
-        queryset = queryset.filter(num_parcel__icontains=q)
-        queryset = queryset.annotate(
-            starts_with_q=Case(
-                When(num_parcel__startswith=q, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            )
+        queryset = self.filter_queryset(self.get_queryset())
+        suggestions = ParcelService.get_num_parcel_suggestions(
+            queryset=queryset, num_parcel_query=num_parcel_query
         )
-        queryset = queryset.order_by("-starts_with_q").distinct()
-        queryset = queryset.values_list("num_parcel", flat=True)[:10]
+        return Response(suggestions)
 
-        return Response([str(num_parcel) for num_parcel in list(queryset)])
+    @action(methods=["get"], detail=False)
+    def list_items(self, request):
+        filter_service = ParcelFilterService(user=self.request.user)
+
+        # Create filter instance to get filter parameters
+        filter_instance = self.filterset_class(
+            request.GET, queryset=self.get_queryset(), request=request
+        )
+        filter_params = filter_instance.data
+
+        queryset = filter_service.apply_filters(
+            queryset=self.get_queryset(),
+            filter_params=filter_params,
+            filter_has_detections=True,
+            with_details=True,
+        )
+
+        queryset = queryset.distinct()
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(serializer.data)
+
+    @action(methods=["get"], detail=False, url_path="overview")
+    def get_overview(self, request):
+        filter_service = ParcelFilterService(user=self.request.user)
+
+        # Create filter instance to get filter parameters
+        filter_instance = self.filterset_class(
+            request.GET, queryset=self.get_queryset(), request=request
+        )
+        filter_params = filter_instance.data
+        queryset = filter_service.apply_filters(
+            queryset=self.get_queryset(),
+            filter_params=filter_params,
+            filter_has_detections=True,
+            with_details=True,
+        )
+
+        data = ParcelService.get_parcel_overview_statistics(queryset=queryset)
+        serializer = ParcelOverviewSerializer(data)
+        return Response(serializer.data)

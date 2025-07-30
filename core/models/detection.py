@@ -62,6 +62,7 @@ class Detection(
             models.Index(fields=["detection_source"]),
             models.Index(fields=["detection_data"]),
             models.Index(fields=["detection_object"]),
+            models.Index(fields=["detection_object", "score", "detection_source"]),
             models.Index(fields=["detection_object", "detection_data"]),
             models.Index(fields=["detection_object", "detection_data", "tile_set"]),
             models.Index(

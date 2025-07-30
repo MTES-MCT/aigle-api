@@ -2,12 +2,9 @@ from common.views.base import BaseViewSetMixin
 
 from rest_framework.response import Response
 from rest_framework import serializers
-from django.contrib.gis.geos import Point
-from core.constants.geo import SRID
 from core.models.detection_object import DetectionObject
 from core.models.tile_set import TileSetType
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
-from core.permissions.tile_set import TileSetPermission
 from core.serializers.detection_object import (
     DetectionObjectDetailSerializer,
     DetectionObjectHistorySerializer,
@@ -17,10 +14,10 @@ from core.serializers.detection_object import (
 from django.core.exceptions import PermissionDenied
 from rest_framework_gis.fields import GeometryField
 from rest_framework.decorators import action
-from django.db.models import F
 
 from core.utils.filters import UuidInFilter
-from core.views.utils.save_user_position import save_user_position
+from core.services.detection_object import DetectionObjectService
+from core.services.tile_set import TileSetService
 from django_filters import FilterSet
 
 
@@ -44,13 +41,13 @@ class DetectionObjectFilter(FilterSet):
         model = DetectionObject
         fields = ["uuids"]
 
-    def filter_uuids(self, queryset, name, value):
+    def filter_uuids(self, queryset, value):
         if not value:
             return queryset
 
         return queryset.filter(uuid__in=value)
 
-    def filter_detection_uuids(self, queryset, name, value):
+    def filter_detection_uuids(self, queryset, value):
         if not value:
             return queryset
 
@@ -108,14 +105,19 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
         return queryset
 
-    def retrieve(self, request, *args, **kwargs):
+    def retrieve(self, request, uuid):
+        """Retrieve detection object with position saving logic moved to service."""
         instance = self.get_object()
         serializer = self.get_serializer(instance)
 
+        # Business logic moved to service
         try:
             last_position = instance.detections.all()[0].geometry.centroid
-            save_user_position(user=request.user, last_position=last_position)
-        except Exception:
+            DetectionObjectService.save_user_position(
+                user=request.user, x=last_position.x, y=last_position.y
+            )
+        except (IndexError, AttributeError):
+            # No detections or geometry available
             pass
 
         return Response(serializer.data)
@@ -125,18 +127,15 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         params_serializer = GetFromCoordinatesParamsSerializer(data=request.GET)
         params_serializer.is_valid(raise_exception=True)
 
-        point_requested = Point(
-            x=params_serializer.data["lng"], y=params_serializer.data["lat"], srid=SRID
-        )
+        x = params_serializer.data["lng"]
+        y = params_serializer.data["lat"]
 
-        tile_set = (
-            TileSetPermission(user=request.user)
-            .filter_(
-                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-                order_bys=["-date"],
-                filter_tile_set_intersects_geometry=point_requested,
-            )
-            .first()
+        # Use service to find tile set
+        tile_set = TileSetService.find_tile_set_by_coordinates(
+            x=x,
+            y=y,
+            user=request.user,
+            tile_set_types=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
         )
 
         if not tile_set:
@@ -144,21 +143,32 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
                 "Vous n'avez pas les droits pour chercher une détection ici"
             )
 
-        queryset = DetectionObject.objects.filter(
-            detections__geometry__intersects=point_requested,
-            detections__tile_set__uuid=tile_set.uuid,
+        # Use service to find detection objects
+        detection_objects = DetectionObjectService.find_detections_by_coordinates(
+            x=x,
+            y=y,
+            user=request.user,
+            tile_set_types=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
         )
-        queryset = queryset.order_by("-detections__score")
-        queryset = queryset.annotate(
-            geometry=F("detections__geometry"),
-            object_type_uuid=F("object_type__uuid"),
-            object_type_color=F("object_type__color"),
-        ).values("uuid", "geometry", "object_type_uuid", "object_type_color")
-        detection_object = queryset.first()
 
-        if detection_object:
-            output_serializer = GetFromCoordinatesOutputSerializer(detection_object)
-            output_data = output_serializer.data
+        if detection_objects:
+            # Get the first detection object and prepare response data
+            detection_object = detection_objects[0]
+            most_recent_detection = detection_object.detections.order_by(
+                "-score"
+            ).first()
+
+            if most_recent_detection:
+                output_data = {
+                    "uuid": detection_object.uuid,
+                    "geometry": most_recent_detection.geometry,
+                    "object_type_uuid": detection_object.object_type.uuid,
+                    "object_type_color": detection_object.object_type.color,
+                }
+                output_serializer = GetFromCoordinatesOutputSerializer(output_data)
+                output_data = output_serializer.data
+            else:
+                output_data = None
         else:
             output_data = None
 
@@ -171,7 +181,5 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             queryset.prefetch_related("detections").filter(uuid=uuid).first()
         )
         SerializerClass = self.get_serializer_class()
-        serializer = SerializerClass(
-            detection_object, context={"request": self.request}
-        )
+        serializer = SerializerClass(detection_object, context={"request": request})
         return Response(serializer.data)

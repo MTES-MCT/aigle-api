@@ -2,6 +2,7 @@ import json
 from time import sleep
 from django.core.management.base import BaseCommand
 
+from core.models.user import User
 from core.utils.logs_helpers import log_command_event
 
 from django.db import connection
@@ -54,6 +55,10 @@ class Command(BaseCommand):
                     "test_array": test_array,
                 })}');"
             )
+
+        user = User.objects.first()
+
+        log_event(f"FIRST USER: {user.email}")
 
         waiting_sec = 120
         log_event(f"waiting for {waiting_sec} seconds")

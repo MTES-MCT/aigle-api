@@ -49,4 +49,7 @@ class DetectionObject(
     history = HistoricalRecords(bases=[HistoriedModelMixin])
 
     class Meta:
-        indexes = UuidModelMixin.Meta.indexes + [models.Index(fields=["object_type"])]
+        indexes = UuidModelMixin.Meta.indexes + [
+            models.Index(fields=["object_type"]),
+            models.Index(fields=["object_type", "parcel"]),
+        ]

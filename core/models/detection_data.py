@@ -73,6 +73,6 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
                     "detection_validation_status",
                     "detection_control_status",
                     "detection_prescription_status",
-                ]
+                ],
             ),
         ]

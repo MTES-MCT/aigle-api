@@ -36,7 +36,7 @@ def log_api_call(
 def log_command_event(command_name: str, info: str, **kwargs):
     logger = get_app_logger()
     logger.info(
-        f"Command event: {command_name}",
+        f"Command {command_name}: {info}",
         extra={
             "command_name": command_name,
             "category": "command",

@@ -2,8 +2,8 @@ from django.core.management.base import BaseCommand, CommandError
 
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
+from core.services.prescription import PrescriptionService
 from core.utils.logs_helpers import log_command_event
-from core.utils.prescription import compute_prescription
 
 BATCH_SIZE = 10000
 
@@ -44,7 +44,9 @@ class Command(BaseCommand):
                 break
 
             for detection_object in detection_objects:
-                compute_prescription(detection_object)
+                PrescriptionService.compute_prescription(
+                    detection_object=detection_object
+                )
 
             offset += len(detection_objects)
 
