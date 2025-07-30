@@ -17,7 +17,13 @@ class ParcelFilterService:
     def __init__(self, user):
         self.user = user
 
-    def apply_filters(self, queryset: QuerySet, filter_params: dict) -> QuerySet:
+    def apply_filters(
+        self,
+        queryset: QuerySet,
+        filter_params: dict,
+        filter_has_detections: bool = False,
+        with_details: bool = False,
+    ) -> QuerySet:
         """Apply complex filtering logic to parcel queryset."""
         # Get collectivity filter based on user permissions
         collectivity_filter = UserPermission(user=self.user).get_collectivity_filter(
@@ -28,32 +34,38 @@ class ParcelFilterService:
 
         # Get tile set permissions
         repo = ParcelRepository(initial_queryset=queryset)
-        detection_tilesets_filter = TileSetPermission(
-            user=self.user,
-        ).get_last_detections_filters_parcels(
-            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-            filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
-            filter_collectivities=collectivity_filter,
-            filter_has_collectivities=True,
-        )
+
+        filter_args = {
+            "queryset": queryset,
+            "filter_collectivities": collectivity_filter,
+            "filter_section_contains": filter_params.get("sectionQ"),
+            "filter_num_parcel_contains": filter_params.get("numParcelQ"),
+            "filter_section": filter_params.get("section"),
+            "filter_num_parcel": filter_params.get("numParcel"),
+            "with_commune": True,
+        }
+
+        if filter_has_detections:
+            detection_tilesets_filter = TileSetPermission(
+                user=self.user,
+            ).get_last_detections_filters_parcels(
+                filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+                filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
+                filter_collectivities=collectivity_filter,
+                filter_has_collectivities=True,
+            )
+            filter_args["filter_detection"] = self._build_detection_filter(
+                filter_params, detection_tilesets_filter
+            )
+            filter_args["filter_detections_count_gt"] = 0
+
+        if with_details:
+            filter_args["with_zone_names"] = True
+            filter_args["with_detections_count"] = True
+            filter_args["with_detections_objects_types"] = True
 
         # Apply repository filters
-        queryset = repo.filter_(
-            queryset=queryset,
-            filter_collectivities=collectivity_filter,
-            filter_section_contains=filter_params.get("sectionQ"),
-            filter_num_parcel_contains=filter_params.get("numParcelQ"),
-            filter_section=filter_params.get("section"),
-            filter_num_parcel=filter_params.get("numParcel"),
-            filter_detection=self._build_detection_filter(
-                filter_params, detection_tilesets_filter
-            ),
-            filter_detections_count_gt=0,
-            with_commune=True,
-            with_zone_names=True,
-            with_detections_count=True,
-            with_detections_objects_types=True,
-        )
+        queryset = repo.filter_(**filter_args)
 
         # Apply ordering
         return self._apply_ordering(queryset, filter_params.get("ordering"))

@@ -19,10 +19,12 @@ from core.serializers.parcel import (
     ParcelSerializer,
     ParcelOverviewSerializer,
 )
+from core.services.parcel_filter import ParcelFilterService
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 from rest_framework.response import Response
 from rest_framework.decorators import action
 
+from core.services.parcel import ParcelService
 
 from core.utils.pagination import CachedCountLimitOffsetPagination
 from core.views.detection.utils import BOOLEAN_CHOICES, INTERFACE_DRAWN_CHOICES
@@ -64,8 +66,6 @@ class ParcelFilter(FilterSet):
         return queryset
 
     def filter_queryset(self, queryset):
-        from core.services.parcel_filter import ParcelFilterService
-
         filter_service = ParcelFilterService(user=self.request.user)
         return filter_service.apply_filters(queryset, self.data)
 
@@ -85,16 +85,12 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
         return ParcelSerializer
 
     def retrieve(self, request, uuid):
-        from core.services.parcel import ParcelService
-
         instance = ParcelService.get_parcel_detail(uuid=uuid, user=request.user)
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
     @action(methods=["get"], detail=True)
     def get_download_infos(self, request, uuid):
-        from core.services.parcel import ParcelService
-
         ParcelService.log_parcel_download(
             user=request.user,
             parcel_uuid=uuid,
@@ -104,8 +100,6 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
     @action(methods=["get"], detail=False)
     def suggest_section(self, request):
-        from core.services.parcel import ParcelService
-
         section_query = request.GET.get("sectionQ")
         if not section_query:
             return Response([])
@@ -118,8 +112,6 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
     @action(methods=["get"], detail=False)
     def suggest_num_parcel(self, request):
-        from core.services.parcel import ParcelService
-
         num_parcel_query = request.GET.get("numParcelQ")
         if not num_parcel_query:
             return Response([])
@@ -132,7 +124,21 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
     @action(methods=["get"], detail=False)
     def list_items(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
+        filter_service = ParcelFilterService(user=self.request.user)
+
+        # Create filter instance to get filter parameters
+        filter_instance = self.filterset_class(
+            request.GET, queryset=self.get_queryset(), request=request
+        )
+        filter_params = filter_instance.data
+
+        queryset = filter_service.apply_filters(
+            queryset=self.get_queryset(),
+            filter_params=filter_params,
+            filter_has_detections=True,
+            with_details=True,
+        )
+
         queryset = queryset.distinct()
         page = self.paginate_queryset(queryset)
 
@@ -146,9 +152,20 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
     @action(methods=["get"], detail=False, url_path="overview")
     def get_overview(self, request):
-        from core.services.parcel import ParcelService
+        filter_service = ParcelFilterService(user=self.request.user)
 
-        queryset = self.filter_queryset(self.get_queryset())
+        # Create filter instance to get filter parameters
+        filter_instance = self.filterset_class(
+            request.GET, queryset=self.get_queryset(), request=request
+        )
+        filter_params = filter_instance.data
+        queryset = filter_service.apply_filters(
+            queryset=self.get_queryset(),
+            filter_params=filter_params,
+            filter_has_detections=True,
+            with_details=True,
+        )
+
         data = ParcelService.get_parcel_overview_statistics(queryset=queryset)
         serializer = ParcelOverviewSerializer(data)
         return Response(serializer.data)
