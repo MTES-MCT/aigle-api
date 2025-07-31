@@ -2,7 +2,8 @@ from typing import List, Dict, Any, Optional
 from django.contrib.gis.geos import MultiPolygon
 from django.db.models import QuerySet
 
-from core.models.detection import Detection, DetectionValidationStatus
+from core.models.detection import Detection
+from core.models.detection_data import DetectionValidationStatus
 from core.models.object_type import ObjectType
 from core.permissions.user import UserPermission
 from django.core.exceptions import BadRequest
