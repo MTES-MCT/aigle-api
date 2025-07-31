@@ -4,6 +4,7 @@ from core.models.tile_set import TileSet, TileSetType
 from core.permissions.user import UserPermission
 from core.repository.tile_set import TileSetRepository
 from core.repository.detection import DetectionRepository
+from django.contrib.gis.geos import Point
 
 
 class TileSetService:
@@ -21,21 +22,14 @@ class TileSetService:
 
         # Use repository with user permissions
         tile_set_repo = TileSetRepository()
-        available_tile_sets = tile_set_repo.filter_(
-            queryset=tile_set_repo.initial_queryset,
+        tile_set = tile_set_repo.get(
             filter_collectivities=collectivity_filter,
             filter_tile_set_type_in=tile_set_types,
+            filter_tile_set_contains_point=Point(x, y),
+            order_bys=["-date"],
         )
 
-        # Find tile set containing the coordinates
-        for tile_set in available_tile_sets:
-            if (
-                tile_set.x_min <= x <= tile_set.x_max
-                and tile_set.y_min <= y <= tile_set.y_max
-            ):
-                return tile_set
-
-        return None
+        return tile_set
 
     @staticmethod
     def generate_tile_set_preview(

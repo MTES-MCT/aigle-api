@@ -101,64 +101,63 @@ class DetectionService:
         # Validate permissions
         UserPermission(user=user).validate_geometry_edit_permission(geometry=geometry)
 
-        with transaction.atomic():
-            # Get tile set
-            tile_set = TileSet.objects.filter(uuid=tile_set_uuid).first()
-            if not tile_set:
-                raise ValueError(f"Tile set with uuid {tile_set_uuid} not found")
+        # Get tile set
+        tile_set = TileSet.objects.filter(uuid=tile_set_uuid).first()
+        if not tile_set:
+            raise ValueError(f"Tile set with uuid {tile_set_uuid} not found")
 
-            # Find tile
-            centroid = Centroid(geometry)
-            tile = Tile.objects.filter(
-                geometry__contains=centroid, z=TILE_DEFAULT_ZOOM
+        # Find tile
+        centroid = Centroid(geometry)
+        tile = Tile.objects.filter(
+            geometry__contains=centroid, z=TILE_DEFAULT_ZOOM
+        ).first()
+
+        if not tile:
+            raise ValueError("Tile not found for specified geometry")
+
+        # Handle detection object
+        detection_object = None
+
+        if detection_object_uuid:
+            detection_object = DetectionObject.objects.filter(
+                uuid=detection_object_uuid
             ).first()
-
-            if not tile:
-                raise ValueError("Tile not found for specified geometry")
-
-            # Handle detection object
-            detection_object = None
-
-            if detection_object_uuid:
-                detection_object = DetectionObject.objects.filter(
-                    uuid=detection_object_uuid
-                ).first()
-                if not detection_object:
-                    raise ValueError(
-                        f"Detection object with uuid {detection_object_uuid} not found"
-                    )
-            else:
-                if not detection_object_data:
-                    raise ValueError("Detection object data or UUID must be specified")
-
-                detection_object = DetectionService._create_or_find_detection_object(
-                    geometry=geometry,
-                    centroid=centroid,
-                    detection_object_data=detection_object_data,
-                    tile_set=tile_set,
+            if not detection_object:
+                raise ValueError(
+                    f"Detection object with uuid {detection_object_uuid} not found"
                 )
+        else:
+            if not detection_object_data:
+                raise ValueError("Detection object data or UUID must be specified")
 
-            # Create detection data
-            detection_data = DetectionService._create_detection_data(
-                detection_data_data=detection_data_data,
-                detection_object=detection_object,
-                user=user,
-            )
-
-            # Create detection
-            detection = Detection(
+            detection_object = DetectionService._create_or_find_detection_object(
                 geometry=geometry,
-                detection_object=detection_object,
-                detection_data=detection_data,
+                centroid=centroid,
+                detection_object_data=detection_object_data,
                 tile_set=tile_set,
-                tile=tile,
             )
-            detection.save()
 
-            # Update prescription
-            PrescriptionService.compute_prescription(detection_object=detection_object)
+        # Create detection data
+        detection_data = DetectionService._create_detection_data(
+            detection_data_data=detection_data_data,
+            detection_object=detection_object,
+            user=user,
+        )
 
-            return detection
+        # Create detection
+        detection = Detection(
+            geometry=geometry,
+            detection_object=detection_object,
+            detection_data=detection_data,
+            tile_set=tile_set,
+            tile=tile,
+        )
+        detection.save()
+
+        # Update prescription
+        PrescriptionService.compute_prescription(detection_object=detection_object)
+
+        return detection
 
     @staticmethod
     def _create_or_find_detection_object(
