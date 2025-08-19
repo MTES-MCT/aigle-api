@@ -5,8 +5,10 @@ from typing import Dict, Any
 from django.http import HttpResponse, JsonResponse
 from django.conf import settings
 
+from core.models.analytic_log import AnalyticLogType
+from core.models.detection_data import DetectionControlStatus
 from core.models.detection_object import DetectionObject
-from core.utils.logs import create_log, AnalyticLogType
+from core.utils.analytic_log import create_log
 from core.utils.odt_processor import ODTTemplateProcessor
 from core.permissions.user import UserPermission
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
@@ -16,9 +18,7 @@ from rest_framework.status import HTTP_500_INTERNAL_SERVER_ERROR
 class PriorLetterService:
     """Service for handling prior letter document generation."""
 
-    TEMPLATE_PATH = getattr(
-        settings, "PRIOR_LETTER_TEMPLATE_PATH", "templates/prior_letter.odt"
-    )
+    TEMPLATE_PATH = os.path.join(settings.MEDIA_ROOT, "templates", "prior_letter.odt")
 
     def __init__(self, user):
         self.user = user
@@ -59,7 +59,7 @@ class PriorLetterService:
 
         # Check edit permissions
         UserPermission(user=self.user).can_edit(
-            geometry=detection_object.geometry, raise_exception=True
+            geometry=detection_object.detections.first().geometry, raise_exception=True
         )
 
         return detection_object
@@ -67,7 +67,6 @@ class PriorLetterService:
     def _update_control_status(self, detection_object: DetectionObject) -> None:
         """Update detection object control status with business rules."""
         # Import here to avoid circular imports
-        from core.models.detection import DetectionControlStatus
         from core.models.detection_data import DetectionData
 
         # Business logic for status updates
@@ -75,7 +74,7 @@ class PriorLetterService:
         for detection in detection_object.detections.all():
             if detection.detection_data:
                 detection.detection_data.detection_control_status = (
-                    DetectionControlStatus.CONTROLLED
+                    DetectionControlStatus.PRIOR_LETTER_SENT
                 )
                 detection.detection_data.user_last_update = self.user
                 detections_to_update.append(detection.detection_data)
@@ -93,9 +92,11 @@ class PriorLetterService:
             self.user,
             AnalyticLogType.PRIOR_LETTER_DOWNLOAD,
             {
-                "parcelUuid": str(detection_object.parcel.uuid)
-                if detection_object.parcel
-                else None,
+                "parcelUuid": (
+                    str(detection_object.parcel.uuid)
+                    if detection_object.parcel
+                    else None
+                ),
                 "detectionObjectUuid": str(detection_object_uuid),
             },
         )
