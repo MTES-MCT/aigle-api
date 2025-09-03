@@ -1,5 +1,5 @@
 from typing import List, Optional, Iterable, Dict, Any
-from django.contrib.gis.geos import GEOSGeometry
+from django.contrib.gis.geos import GEOSGeometry, Point
 from django.contrib.gis.db.models.functions import Intersection, Area, Centroid
 from django.db.models import Value, Q
 from django.db import transaction
@@ -13,9 +13,9 @@ from core.models.detection_data import (
     DetectionValidationStatus,
     DetectionPrescriptionStatus,
 )
+from core.models.geo_commune import GeoCommune
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_sub_custom_zone import GeoSubCustomZone
-from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import Tile, TILE_DEFAULT_ZOOM
@@ -196,34 +196,44 @@ class DetectionService:
         )
 
         # Find commune
-        commune_id = None
-        if parcel and parcel.commune:
-            commune_id = parcel.commune.id
-        else:
-            commune_ids = (
-                GeoZone.objects.filter(
-                    geo_zone_type=GeoZoneType.COMMUNE,
-                    geometry__contains=centroid,
-                )
-                .values_list("id")
-                .first()
-            )
-            if commune_ids:
-                commune_id = commune_ids[0]
+
+        commune = (
+            GeoCommune.objects.filter(geometry__contains=centroid)
+            .only("id", "department__id", "department__region__id")
+            .first()
+        )
+
+        if commune is None:
+            raise ValueError("Commune not found for input geometry")
 
         detection_object.parcel = parcel
-        detection_object.commune_id = commune_id
+        detection_object.commune_id = commune.id
         detection_object.save()
+
+        geometry_points = [Point(*coord) for coord in geometry.coords[0][:-1]]
 
         # Update geo_custom_zones
         geo_custom_zones = GeoCustomZone.objects.filter(
-            geometry__contains=geometry
-        ).all()
+            Q(
+                geo_zones__id__in=[
+                    commune.id,
+                    commune.department.id,
+                    commune.department.region.id,
+                ]
+            )
+        )
+        for point in geometry_points:
+            geo_custom_zones = geo_custom_zones.filter(geometry__contains=point)
+
+        geo_custom_zones = geo_custom_zones.all()
         detection_object.geo_custom_zones.add(*geo_custom_zones)
 
         geo_sub_custom_zones = GeoSubCustomZone.objects.filter(
-            geometry__contains=geometry
-        ).all()
+            custom_zone__id__in=[gcz.id for gcz in geo_custom_zones]
+        )
+        for point in geometry_points:
+            geo_sub_custom_zones = geo_sub_custom_zones.filter(geometry__contains=point)
+
         detection_object.geo_sub_custom_zones.add(*geo_sub_custom_zones)
 
         return detection_object
