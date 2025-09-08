@@ -61,7 +61,9 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         null=True
     )  # can be set if detection_control_status is OFFICIAL_REPORT_DRAWN_UP
 
-    history = HistoricalRecords(bases=[HistoriedModelMixin])
+    history = HistoricalRecords(
+        bases=[HistoriedModelMixin], cascade_delete_history=True
+    )
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [

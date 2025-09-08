@@ -46,7 +46,9 @@ class DetectionObject(
         GeoSubCustomZone, related_name="detection_objects"
     )
     tile_sets = models.ManyToManyField(TileSet, through="Detection")
-    history = HistoricalRecords(bases=[HistoriedModelMixin])
+    history = HistoricalRecords(
+        bases=[HistoriedModelMixin], cascade_delete_history=True
+    )
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [

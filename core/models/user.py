@@ -62,4 +62,6 @@ class User(
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["user_role"]
 
-    history = HistoricalRecords(bases=[HistoriedModelMixin])
+    history = HistoricalRecords(
+        bases=[HistoriedModelMixin], cascade_delete_history=True
+    )
