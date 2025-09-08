@@ -52,7 +52,9 @@ class Detection(
         TileSet, related_name="detections", on_delete=models.CASCADE
     )
 
-    history = HistoricalRecords(bases=[HistoriedModelMixin])
+    history = HistoricalRecords(
+        bases=[HistoriedModelMixin], cascade_delete_history=True
+    )
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [

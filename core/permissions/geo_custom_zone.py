@@ -5,8 +5,7 @@ from core.models.user import User, UserRole
 from core.permissions.base import BasePermission
 from core.repository.geo_custom_zone import GeoCustomZoneRepository
 
-from django.db.models import QuerySet
-from django.db.models import Prefetch
+from django.db.models import QuerySet, Prefetch
 
 
 class GeoCustomZonePermission(
