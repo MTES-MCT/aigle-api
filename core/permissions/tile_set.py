@@ -287,7 +287,7 @@ class TileSetPermission(
         else:
             # No user restriction, handle geometry union and optional intersection
             if filter_tile_set_intersects_geometry:
-                tile_sets = tile_sets.annotate(
+                tile_sets = tile_sets(
                     geo_zone_count=Count("geo_zones"),
                     union_geometry=Case(
                         When(geo_zone_count=1, then=F("geo_zones__geometry")),
