@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Literal, Union
 from django.core.management.base import BaseCommand
 
@@ -130,7 +130,7 @@ class Command(BaseCommand):
             ):
                 detection_to_keep.detection_data.official_report_date = max(
                     [
-                        detection.detection_data.official_report_date or datetime.min
+                        detection.detection_data.official_report_date or date.min
                         for detection in detections
                     ]
                 )
