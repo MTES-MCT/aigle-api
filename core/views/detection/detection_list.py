@@ -197,7 +197,8 @@ class DetectionListFilter(FilterSet):
     parcelsUuids = UuidInFilter(method="pass_")
 
     ordering = OrderingFilter(
-        fields=["score", "id", "parcel", "detectionControlStatus"], method="pass_"
+        fields=["score", "id", "parcel", "detectionControlStatus", "detectionsCount"],
+        method="pass_",
     )
 
     def __init__(self, *args, **kwargs):
