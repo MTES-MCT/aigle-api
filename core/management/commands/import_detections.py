@@ -26,6 +26,7 @@ from core.models.tile_set import TileSet
 from core.models.user import User
 from core.constants.detection import PERCENTAGE_SAME_DETECTION_THRESHOLD
 from core.services.detection import DetectionService
+from core.services.detection_process import DetectionProcessService
 from core.services.prescription import PrescriptionService
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
@@ -241,6 +242,8 @@ class Command(BaseCommand):
         self.insert_detections(force=True)
         self.tile_set.last_import_ended_at = datetime.now()
         self.tile_set.save()
+
+        DetectionProcessService.merge_double_detections(tile_set_id=self.tile_set.id)
 
         log_event(f"Detections import finished for batch: {self.batch_id}")
 
