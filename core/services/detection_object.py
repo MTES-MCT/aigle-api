@@ -14,99 +14,6 @@ class DetectionObjectService:
     """Service for handling DetectionObject business logic."""
 
     @staticmethod
-    def create_detection_object(
-        object_type_id: str,
-        user,
-        address: Optional[str] = None,
-        comment: Optional[str] = None,
-        parcel_id: Optional[str] = None,
-        location: Optional[Point] = None,
-        user_group_ids: Optional[List[str]] = None,
-        custom_zone_ids: Optional[List[str]] = None,
-    ) -> DetectionObject:
-        """Create a new DetectionObject with business logic validation."""
-        # Validate user has access to specified user groups
-        UserPermission(user=user).validate_user_group_access(
-            user_group_ids=user_group_ids
-        )
-
-        with transaction.atomic():
-            detection_object = DetectionObject.objects.create(
-                address=address,
-                comment=comment,
-                object_type_id=object_type_id,
-                parcel_id=parcel_id,
-                location=location,
-            )
-
-            if user_group_ids:
-                detection_object.user_groups.set(user_group_ids)
-
-            if custom_zone_ids:
-                detection_object.geo_custom_zones.set(custom_zone_ids)
-
-            return detection_object
-
-    @staticmethod
-    def update_detection_object(
-        detection_object: DetectionObject,
-        user,
-        address: Optional[str] = None,
-        comment: Optional[str] = None,
-        validation_status: Optional[DetectionValidationStatus] = None,
-        user_group_ids: Optional[List[str]] = None,
-        custom_zone_ids: Optional[List[str]] = None,
-        compute_prescription_flag: bool = False,
-    ) -> DetectionObject:
-        """Update DetectionObject with business logic."""
-        # Validate user has access to existing detection object
-        UserPermission(user=user).validate_user_group_access_for_detection_object(
-            detection_object=detection_object
-        )
-
-        # Validate user has access to new user groups if provided
-        UserPermission(user=user).validate_user_group_access(
-            user_group_ids=user_group_ids
-        )
-
-        with transaction.atomic():
-            if address is not None:
-                detection_object.address = address
-            if comment is not None:
-                detection_object.comment = comment
-
-            detection_object.save()
-
-            # Update relationships
-            if user_group_ids is not None:
-                detection_object.user_groups.set(user_group_ids)
-
-            if custom_zone_ids is not None:
-                detection_object.geo_custom_zones.set(custom_zone_ids)
-
-            # Handle validation status change
-            if validation_status is not None:
-                DetectionObjectService._update_validation_status(
-                    detection_object=detection_object,
-                    validation_status=validation_status,
-                )
-
-            # Compute prescription if requested
-            if compute_prescription_flag:
-                PrescriptionService.compute_prescription(
-                    detection_object=detection_object
-                )
-
-            return detection_object
-
-    @staticmethod
-    def _update_validation_status(
-        detection_object: DetectionObject, validation_status: DetectionValidationStatus
-    ):
-        """Update validation status for all detections of this object."""
-        detection_object.detections.update(validation_status=validation_status)
-
-    @staticmethod
     def find_detections_by_coordinates(
         x: float, y: float, user, tile_set_types: Optional[List[TileSetType]] = None
     ) -> List[DetectionObject]:
@@ -115,46 +22,16 @@ class DetectionObjectService:
 
         # Apply user group permissions
         detection_objects = DetectionObject.objects.filter(
-            location__intersects=point, user_groups__users=user
+            detections__geometry__intersects=point
         )
 
         # Apply tile set type filters if specified
         if tile_set_types:
             detection_objects = detection_objects.filter(
-                detections__tile__tile_set__type__in=tile_set_types
+                detections__tile_set__tile_set_type__in=tile_set_types
             ).distinct()
 
         return list(detection_objects)
-
-    @staticmethod
-    def get_detection_history_tile_sets(
-        detection_object: DetectionObject, user
-    ) -> List:
-        """Get tile sets for detection history with user permissions."""
-        detections = detection_object.detections.order_by("-tile_set__date").all()
-
-        if not detections:
-            return []
-
-        # Get accessible tile sets using permissions
-        tile_sets = TileSetPermission(user=user).list_(
-            filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
-            order_bys=["-date"],
-            filter_tile_set_intersects_geometry=detections[0].geometry,
-        )
-
-        if not tile_sets:
-            return []
-
-        return sorted(tile_sets, key=lambda t: t.date)
-
-    @staticmethod
-    def get_detection_history_mapping(
-        detection_object: DetectionObject,
-    ) -> Dict[int, Any]:
-        """Get mapping of tile set ID to detection for history."""
-        detections = detection_object.detections.order_by("-tile_set__date").all()
-        return {detection.tile_set.id: detection for detection in detections}
 
     @staticmethod
     def get_user_group_last_update(
@@ -220,8 +97,6 @@ class DetectionObjectService:
         """Get user group rights for a detection object."""
         if not detection_object.detections.exists():
             return []
-
-        from core.permissions.user import UserPermission
 
         detection_geometry = (
             detection_object.detections.order_by("-tile_set__date").first().geometry
@@ -293,7 +168,6 @@ class DetectionObjectService:
         """Comprehensive update for detection object including business rules."""
         from core.services.detection import DetectionService
         from core.models.object_type import ObjectType
-        from core.permissions.user import UserPermission
 
         # Validate permissions
         latest_detection = DetectionService.get_most_recent_detection(
