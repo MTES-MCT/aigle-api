@@ -35,7 +35,10 @@ class UserGroupViewSet(BaseViewSetMixin[UserGroup]):
     def get_queryset(self):
         queryset = UserGroup.objects.order_by("name")
         queryset = queryset.prefetch_related(
-            "geo_zones", "object_type_categories", "geo_custom_zones"
+            "geo_zones",
+            "object_type_categories",
+            "geo_custom_zones",
+            "geo_custom_zones__geo_custom_zone_category",
         )
 
         if self.request.user.user_role == UserRole.ADMIN:

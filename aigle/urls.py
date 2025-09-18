@@ -21,7 +21,6 @@ from django.urls import include, path, re_path
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include("core.urls")),
-    re_path(r"^auth/", include("djoser.urls")),
-    re_path(r"^auth/", include("djoser.urls.jwt")),
+    re_path(r"^auth/", include("core.urls_auth")),
     path("__debug__/", include("debug_toolbar.urls")),
 ]

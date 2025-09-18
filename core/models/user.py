@@ -20,6 +20,7 @@ class UserRole(models.TextChoices):
     SUPER_ADMIN = "SUPER_ADMIN", "SUPER_ADMIN"
     ADMIN = "ADMIN", "ADMIN"
     REGULAR = "REGULAR", "REGULAR"
+    DEACTIVATED = "DEACTIVATED", "DEACTIVATED"
 
 
 class UserManager_(UserManager):
