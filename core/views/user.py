@@ -38,7 +38,14 @@ class UserViewSet(
                 "Vous devez être identifié pour accéder à cette ressource"
             )
 
-        user = UserService.get_user_profile_with_logging(user=request.user)
+        if request.user.user_role == UserRole.DEACTIVATED:
+            raise PermissionDenied("Votre compte est désactivé")
+
+        queryset = self.get_queryset()
+        queryset = queryset.filter(id=request.user.id)
+        user = queryset.first()
+
+        user = UserService.get_user_profile_with_logging(user=user)
         serializer = UserSerializer(user, context={"request": request})
         return Response(serializer.data)
 
@@ -50,6 +57,12 @@ class UserViewSet(
 
     def get_queryset(self):
         queryset = UserModel.objects.order_by("-id")
+        queryset = queryset.prefetch_related(
+            "user_user_groups",
+            "user_user_groups__user_group",
+            "user_user_groups__user_group__geo_zones",
+        )
+
         return UserService.get_filtered_users_queryset(
             user=self.request.user, queryset=queryset
         )

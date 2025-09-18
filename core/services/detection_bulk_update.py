@@ -56,11 +56,12 @@ class DetectionBulkUpdateService:
                 detection_objects_to_update.append(detection.detection_object)
 
         # Bulk update database
-        self._perform_bulk_updates(
-            detection_datas_to_update,
-            detection_objects_to_update,
-            detection_data_fields_to_update,
-        )
+        if detection_data_fields_to_update:
+            self._perform_bulk_updates(
+                detection_datas_to_update,
+                detection_objects_to_update,
+                detection_data_fields_to_update + ["user_last_update"],
+            )
 
         return detections
 

@@ -72,6 +72,7 @@ DJOSER = {
     "LOGIN_FIELD": "email",
     "SERIALIZERS": {
         "current_user": "core.serializers.user.UserSerializer",
+        "token_create": "core.serializers.auth.CustomTokenCreateSerializer",
     },
     "PERMISSIONS": {
         "user_create": ["djoser.permissions.CurrentUserOrAdmin"],
@@ -83,6 +84,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -184,10 +186,20 @@ CORS_EXPOSE_HEADERS = [
 ]
 
 # Internationalization
-LANGUAGE_CODE = "fr"
+LANGUAGE_CODE = "fr-FR"
 TIME_ZONE = "UTC"
 USE_I18N = True
+USE_L10N = True
 USE_TZ = True
+
+LOCALE_PATHS = [
+    BASE_DIR / "locale",
+]
+
+LANGUAGES = [
+    ("fr", "Français"),
+    ("en", "English"),
+]
 
 # Static files
 STATIC_URL = "static/"
