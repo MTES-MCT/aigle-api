@@ -45,7 +45,7 @@ class User(
 
     first_name = None
     last_name = None
-    is_staff = None
+    is_staff = models.BooleanField(_("staff status"), default=False)
     is_active = models.BooleanField(_("active"), default=True)
     date_joined = models.DateTimeField(_("date joined"), default=datetime.now)
 
