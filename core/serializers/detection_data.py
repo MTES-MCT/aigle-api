@@ -3,6 +3,7 @@ from core.models.detection_data import (
     DetectionData,
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
+    DetectionValidationStatusChangeReason,
 )
 from core.models.detection import Detection
 from core.models.tile_set import TileSet, TileSetType
@@ -22,6 +23,8 @@ class DetectionDataSerializer(UuidTimestampedModelSerializerMixin):
             "detection_prescription_status",
             "user_last_update_uuid",
             "official_report_date",
+            "detection_validation_status_change_reason",
+            "legitimate_date",
         ]
 
     user_last_update_uuid = serializers.UUIDField(
@@ -36,6 +39,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             "detection_validation_status",
             "detection_prescription_status",
             "official_report_date",
+            "legitimate_date",
         ]
 
     def update(self, instance: DetectionData, validated_data):
@@ -123,6 +127,23 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
         # allow update official_report_date only if detection_control_status isOFFICIAL_REPORT_DRAWN_UP
         if detection_control_status != DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP:
             validated_data.pop("official_report_date", None)
+
+        # do not allow to change detection_validation_status or legitimate_date if has been changed by SITADEL
+        if (
+            instance.detection_validation_status_change_reason
+            == DetectionValidationStatusChangeReason.SITADEL
+        ):
+            validated_data.pop("detection_validation_status", None)
+            validated_data.pop("legitimate_date", None)
+
+        detection_validation_status = (
+            validated_data.get("detection_validation_status")
+            or instance.detection_validation_status
+        )
+
+        # allow update official_report_date only if detection_validation_status is LEGITIMATE
+        if detection_validation_status != DetectionValidationStatus.LEGITIMATE:
+            validated_data.pop("legitimate_date", None)
 
         for key, value in validated_data.items():
             setattr(instance, key, value)

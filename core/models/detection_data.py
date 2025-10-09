@@ -31,6 +31,10 @@ class DetectionValidationStatus(models.TextChoices):
     INVALIDATED = "INVALIDATED", "INVALIDATED"
 
 
+class DetectionValidationStatusChangeReason(models.TextChoices):
+    SITADEL = "SITADEL", "SITADEL"
+
+
 class DetectionPrescriptionStatus(models.TextChoices):
     PRESCRIBED = "PRESCRIBED", "PRESCRIBED"
     NOT_PRESCRIBED = "NOT_PRESCRIBED", "NOT_PRESCRIBED"
@@ -60,6 +64,14 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     official_report_date = models.DateField(
         null=True
     )  # can be set if detection_control_status is OFFICIAL_REPORT_DRAWN_UP
+    legitimate_date = models.DateField(
+        null=True
+    )  # when detection_validation_status is LEGITIMATE, this date can be specified
+    detection_validation_status_change_reason = models.CharField(
+        max_length=DEFAULT_MAX_LENGTH,
+        choices=DetectionValidationStatusChangeReason.choices,
+        null=True,
+    )
 
     history = HistoricalRecords(
         bases=[HistoriedModelMixin], cascade_delete_history=True
