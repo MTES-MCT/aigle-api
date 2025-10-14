@@ -41,13 +41,13 @@ class DetectionObjectFilter(FilterSet):
         model = DetectionObject
         fields = ["uuids"]
 
-    def filter_uuids(self, queryset, value):
+    def filter_uuids(self, queryset, name, value):
         if not value:
             return queryset
 
         return queryset.filter(uuid__in=value)
 
-    def filter_detection_uuids(self, queryset, value):
+    def filter_detection_uuids(self, queryset, name, value):
         if not value:
             return queryset
 
@@ -72,6 +72,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         return DetectionObjectSerializer
 
     def get_queryset(self):
+        detail = bool(self.request.query_params.get("detail"))
         queryset = DetectionObject.objects.order_by("-detections__tile_set__date")
         queryset = queryset.select_related(
             "object_type", "parcel", "parcel__commune"
@@ -88,7 +89,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         queryset = queryset.defer("parcel__commune__geometry")
         queryset = queryset.defer("parcel__geometry")
 
-        if self.action == "retrieve":
+        if self.action == "retrieve" or detail:
             geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
                 GeoCustomZonePermission(
                     user=self.request.user
