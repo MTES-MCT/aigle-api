@@ -19,6 +19,7 @@ DATE_FORMAT = "%d/%m/%Y"
 
 
 STATUSES_MAP = {
+    "Rapport de constatation redigé": DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
     "Astreinte Administrative": DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
     "Contrôlé terrain": DetectionControlStatus.CONTROLLED_FIELD,
     "PV dressé": DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
@@ -130,7 +131,8 @@ class Command(BaseCommand):
                         official_report_date = datetime.strptime(
                             row.get("DATE_PV") or row.get("DATE"), DATE_FORMAT
                         )
-                    except ValueError:
+                    # ruff: noqa: E722
+                    except:
                         pass
 
                 for detection in detection_object.detections.all():
