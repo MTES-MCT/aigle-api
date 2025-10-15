@@ -1,6 +1,5 @@
 from typing import List, Dict, Any, Optional
 from django.contrib.gis.geos import MultiPolygon
-from django.db.models import QuerySet
 
 from core.models.detection import Detection
 from core.models.detection_data import DetectionValidationStatus
@@ -16,12 +15,9 @@ class DetectionBulkUpdateService:
         self.user = user
 
     def update_multiple_detections(
-        self, detection_queryset: QuerySet, update_data: Dict[str, Any]
+        self, detections: List[Detection], update_data: Dict[str, Any]
     ) -> List[Detection]:
         """Update multiple detections with business logic validation."""
-        # Get detections to update
-        detections = list(detection_queryset.filter(uuid__in=update_data["uuids"]))
-
         # Check permissions for all geometries
         self._validate_edit_permissions(detections)
 
@@ -56,7 +52,7 @@ class DetectionBulkUpdateService:
                 detection_objects_to_update.append(detection.detection_object)
 
         # Bulk update database
-        if detection_data_fields_to_update:
+        if detection_data_fields_to_update or detection_objects_to_update:
             self._perform_bulk_updates(
                 detection_datas_to_update,
                 detection_objects_to_update,

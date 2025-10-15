@@ -3,7 +3,6 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet
 from django_filters import NumberFilter, ChoiceFilter
 from core.models.detection import Detection, DetectionSource
-from django.core.exceptions import BadRequest
 
 from core.models.detection_data import (
     DetectionControlStatus,
@@ -11,8 +10,6 @@ from core.models.detection_data import (
 )
 from django.http import HttpResponse
 from rest_framework.status import HTTP_200_OK, HTTP_202_ACCEPTED
-from core.models.object_type import ObjectType
-from core.permissions.user import UserPermission
 from core.repository.detection import (
     RepoFilterInterfaceDrawn,
 )
@@ -32,7 +29,6 @@ from core.views.detection.utils import (
     filter_prescripted,
     filter_score,
 )
-from django.contrib.gis.geos import MultiPolygon
 
 
 class DetectionGeoFilter(FilterSet):
@@ -102,36 +98,12 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         )
         detections = detections_queryset.all()
 
-        geometries = [detection.geometry for detection in detections]
-
-        UserPermission(user=self.request.user).can_edit(
-            geometry=MultiPolygon(geometries), raise_exception=True
-        )
-
-        detection_data_fields_to_update = []
-
-        if serializer.validated_data.get("detection_control_status"):
-            detection_data_fields_to_update.append("detection_control_status")
-        if serializer.validated_data.get("detection_validation_status"):
-            detection_data_fields_to_update.append("detection_validation_status")
-
-        object_type = None
-        if serializer.validated_data.get("object_type_uuid"):
-            object_type_uuid = serializer.validated_data.get("object_type_uuid")
-            object_type = ObjectType.objects.filter(uuid=object_type_uuid).first()
-
-            if not object_type:
-                raise BadRequest(
-                    f"Object type with following uuid not found: {
-                        object_type_uuid}"
-                )
-
         # Use bulk update service for business logic
         from core.services.detection_bulk_update import DetectionBulkUpdateService
 
         bulk_update_service = DetectionBulkUpdateService(user=request.user)
         bulk_update_service.update_multiple_detections(
-            detection_queryset=detections_queryset,
+            detections=detections,
             update_data=serializer.validated_data,
         )
 
