@@ -1,10 +1,17 @@
+from collections import defaultdict
 import csv
 from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
 from django.core.management.base import BaseCommand
 
-from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
+from core.models.detection_authorization import DetectionAuthorization
+from core.models.detection_data import (
+    DetectionControlStatus,
+    DetectionData,
+    DetectionValidationStatus,
+    DetectionValidationStatusChangeReason,
+)
 from core.models.parcel import Parcel
 from core.utils.logs_helpers import log_command_event
 from operator import or_
@@ -13,6 +20,7 @@ from core.models.detection_object import DetectionObject
 from core.models.detection import Detection
 
 BATCH_SIZE = 100
+BULK_UPDATE_BATCH_SIZE = 1000
 
 
 def log_event(info: str):
@@ -52,33 +60,41 @@ class DataParcel:
 class DataOutputRow:
     data_parcels: List[DataParcel]
     data_input: DataInputWithoutParcels
-    parcels: Optional[List[Parcel]]
+    parcels: Optional[List[Parcel]] = None
 
 
 class Command(BaseCommand):
     help = "Import Sitadel file"
+    total_detection_objects_updated_dpt_map = defaultdict(int)
+    total_parcels_updated_dpt_map = defaultdict(int)
 
     def add_arguments(self, parser):
         parser.add_argument("--file-csv-path", type=str, required=True)
+        parser.add_argument("--persist-data", type=bool, default=False)
 
     def handle(self, *args, **options):
         file_csv_path = options["file_csv_path"]
+        persist_data = options["persist_data"]
+
         file_csv = open(file_csv_path, mode="r")
         file_csv_reader = csv.DictReader(file_csv)
 
         while True:
-            data = self.get_data(file_csv_reader=file_csv_reader)
+            csv_data = self.extract_data_from_csv(file_csv_reader=file_csv_reader)
 
-            if not data:
+            if not csv_data:
                 break
 
-            parcels = self.get_parcels(data)
+            parcels = self.get_parcels(csv_data)
 
-            # Reconcile: populate data.parcels with corresponding parcels
-            self.reconcile_parcels(data, parcels)
+            # Reconcile: populate csv_data.parcels with corresponding parcels from database
+            csv_data = self.reconcile_parcels(csv_data, parcels)
+            self.update_database(data=csv_data, persist_data=persist_data)
+
+            self.log()
 
     @staticmethod
-    def get_data(file_csv_reader: csv.DictReader) -> List[DataOutputRow]:
+    def extract_data_from_csv(file_csv_reader: csv.DictReader) -> List[DataOutputRow]:
         data = []
 
         for row in file_csv_reader:
@@ -93,29 +109,6 @@ class Command(BaseCommand):
                 break
 
         return data
-
-    @staticmethod
-    def reconcile_parcels(data: List[DataOutputRow], parcels):
-        # Create a lookup dictionary for fast parcel matching
-        # Key: (commune_iso_code, section, num_parcel)
-        parcel_lookup = {
-            (parcel.commune.iso_code, parcel.section, parcel.num_parcel): parcel
-            for parcel in parcels
-        }
-
-        # Populate each data item's parcels field
-        for item in data:
-            commune_code = item.data_input["COMM"]
-            matched_parcels = []
-
-            for data_parcel in item.data_parcels:
-                key = (commune_code, data_parcel.section, data_parcel.num)
-                parcel = parcel_lookup.get(key)
-
-                if parcel:
-                    matched_parcels.append(parcel)
-
-            item.parcels = matched_parcels if matched_parcels else None
 
     @staticmethod
     def get_parcels(data: List[DataOutputRow]):
@@ -162,16 +155,128 @@ class Command(BaseCommand):
                     queryset=DetectionObject.objects.prefetch_related(
                         Prefetch(
                             "detections",
-                            queryset=Detection.objects.select_related(
-                                "detection_data"
-                            ).defer("geometry"),
+                            queryset=Detection.objects.select_related("detection_data")
+                            .prefetch_related(
+                                "detection_data__detection_authorizations"
+                            )
+                            .defer("geometry"),
                         )
                     ),
                 )
             )
+            .select_related("commune")
         )
 
         return parcels.all()
+
+    @staticmethod
+    def reconcile_parcels(
+        data: List[DataOutputRow], parcels: List[Parcel]
+    ) -> List[DataOutputRow]:
+        # Create a lookup dictionary for fast parcel matching
+        # Key: (commune_iso_code, section, num_parcel)
+        parcel_lookup = {
+            (parcel.commune.iso_code, parcel.section, parcel.num_parcel): parcel
+            for parcel in parcels
+        }
+
+        # Populate each data item's parcels field
+        for item in data:
+            commune_code = item.data_input["COMM"]
+            matched_parcels = []
+
+            for data_parcel in item.data_parcels:
+                key = (commune_code, data_parcel.section, data_parcel.num)
+                parcel = parcel_lookup.get(key)
+
+                if parcel:
+                    matched_parcels.append(parcel)
+
+            item.parcels = matched_parcels if matched_parcels else None
+
+        return data
+
+    def update_database(self, data: List[DataOutputRow], persist_data: bool):
+        detection_datas_to_update_map = defaultdict(
+            int
+        )  # structure: { detection_data_id: detection_data }
+        detection_authorization_to_insert = []
+
+        for item in data:
+            if not item.parcels:
+                continue
+
+            for parcel in item.parcels:
+                self.total_parcels_updated_dpt_map[item.data_input["DEP_CODE"]] += 1
+
+                for detection_object in parcel.detection_objects.all():
+                    self.total_detection_objects_updated_dpt_map[
+                        item.data_input["DEP_CODE"]
+                    ] += 1
+
+                    for detection in detection_object.detections.all():
+                        detection_data = (
+                            detection_datas_to_update_map.get(
+                                detection.detection_data.id
+                            )
+                            or detection.detection_data
+                        )
+
+                        # if authorization already exists, we skip
+                        if any(
+                            auth.authorization_id == item.data_input["NUM_DAU"]
+                            for auth in detection_data.detection_authorizations.all()
+                        ):
+                            continue
+
+                        detection_data.detection_validation_status = (
+                            DetectionValidationStatus.LEGITIMATE
+                        )
+                        detection_data.detection_validation_status_change_reason = (
+                            DetectionValidationStatusChangeReason.SITADEL
+                        )
+
+                        detection_authorization_to_insert.append(
+                            DetectionAuthorization(
+                                authorization_date=item.data_input[
+                                    "DATE_REELLE_AUTORISATION"
+                                ],
+                                authorization_id=item.data_input["NUM_DAU"],
+                                detection_data=detection_data,
+                            )
+                        )
+
+                        detection_datas_to_update_map[detection_data.id] = (
+                            detection_data
+                        )
+
+        if not persist_data:
+            return
+
+        DetectionData.objects.bulk_update(
+            objs=detection_datas_to_update_map.values(),
+            fields=[
+                "detection_validation_status",
+                "detection_validation_status_change_reason",
+            ],
+            batch_size=BULK_UPDATE_BATCH_SIZE,
+        )
+        DetectionAuthorization.objects.bulk_create(
+            objs=detection_authorization_to_insert
+        )
+
+    def log(self):
+        departments = list(
+            set(
+                list(self.total_detection_objects_updated_dpt_map.keys())
+                + list(self.total_parcels_updated_dpt_map.keys())
+            )
+        )
+        log_event(
+            f"""DATA UPDATED: {sum(self.total_detection_objects_updated_dpt_map.values())} detection objects, {sum(self.total_parcels_updated_dpt_map.values())} parcels
+{'\n'.join([f'- {dpt}: {self.total_detection_objects_updated_dpt_map.get(dpt, 0)} detection objects, {self.total_parcels_updated_dpt_map.get(dpt, 0)} parcels' for dpt in departments])}
+"""
+        )
 
 
 # utils

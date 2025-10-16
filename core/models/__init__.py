@@ -13,6 +13,7 @@ from .object_type import ObjectType
 from .detection import Detection
 from .detection_data import DetectionData
 from .detection_object import DetectionObject
+from .detection_authorization import DetectionAuthorization
 
 from .tile import Tile
 from .tile_set import TileSet
