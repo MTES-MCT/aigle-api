@@ -72,6 +72,10 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         choices=DetectionValidationStatusChangeReason.choices,
         null=True,
     )
+    legitimate_id = models.CharField(
+        max_length=DEFAULT_MAX_LENGTH,
+        null=True,
+    )
 
     history = HistoricalRecords(
         bases=[HistoriedModelMixin], cascade_delete_history=True
