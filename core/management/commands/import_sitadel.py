@@ -65,8 +65,8 @@ class DataOutputRow:
 
 class Command(BaseCommand):
     help = "Import Sitadel file"
-    total_detection_objects_updated_dpt_map = defaultdict(int)
-    total_parcels_updated_dpt_map = defaultdict(int)
+    dpt_detection_objects_ids_updated_map = defaultdict(set)
+    dpt_parcels_ids_updated_map = defaultdict(set)
 
     def add_arguments(self, parser):
         parser.add_argument("--file-csv-path", type=str, required=True)
@@ -87,7 +87,6 @@ class Command(BaseCommand):
 
             parcels = self.get_parcels(csv_data)
 
-            # Reconcile: populate csv_data.parcels with corresponding parcels from database
             csv_data = self.reconcile_parcels(csv_data, parcels)
             self.update_database(data=csv_data, persist_data=persist_data)
 
@@ -98,6 +97,10 @@ class Command(BaseCommand):
         data = []
 
         for row in file_csv_reader:
+            # état = Annulé
+            if row["ETAT_DAU"] == "4":
+                continue
+
             data_output = get_data_output(row)
 
             if not data_output.data_parcels:
@@ -207,12 +210,14 @@ class Command(BaseCommand):
                 continue
 
             for parcel in item.parcels:
-                self.total_parcels_updated_dpt_map[item.data_input["DEP_CODE"]] += 1
+                self.dpt_parcels_ids_updated_map[item.data_input["DEP_CODE"]].add(
+                    parcel.id
+                )
 
                 for detection_object in parcel.detection_objects.all():
-                    self.total_detection_objects_updated_dpt_map[
+                    self.dpt_detection_objects_ids_updated_map[
                         item.data_input["DEP_CODE"]
-                    ] += 1
+                    ].add(detection_object.id)
 
                     for detection in detection_object.detections.all():
                         detection_data = (
@@ -268,13 +273,13 @@ class Command(BaseCommand):
     def log(self):
         departments = list(
             set(
-                list(self.total_detection_objects_updated_dpt_map.keys())
-                + list(self.total_parcels_updated_dpt_map.keys())
+                list(self.dpt_detection_objects_ids_updated_map.keys())
+                + list(self.dpt_parcels_ids_updated_map.keys())
             )
         )
         log_event(
-            f"""DATA UPDATED: {sum(self.total_detection_objects_updated_dpt_map.values())} detection objects, {sum(self.total_parcels_updated_dpt_map.values())} parcels
-{'\n'.join([f'- {dpt}: {self.total_detection_objects_updated_dpt_map.get(dpt, 0)} detection objects, {self.total_parcels_updated_dpt_map.get(dpt, 0)} parcels' for dpt in departments])}
+            f"""DATA UPDATED: {sum(len(ids) for ids in self.dpt_detection_objects_ids_updated_map.values())} detection objects, {sum(len(ids) for ids in self.dpt_parcels_ids_updated_map.values())} parcels
+{'\n'.join([f'- {dpt}: {len(self.dpt_detection_objects_ids_updated_map.get(dpt, set()))} detection objects, {len(self.dpt_parcels_ids_updated_map.get(dpt, set()))} parcels' for dpt in departments])}
 """
         )
 

@@ -16,7 +16,7 @@ class DetectionAuthorization(
     TimestampedModelMixin, UuidModelMixin, DeletableModelMixin
 ):
     authorization_date = models.DateField()
-    authorization_id = models.CharField()
+    authorization_id = models.CharField(null=True)
     detection_data = models.ForeignKey(
         DetectionData, related_name="detection_authorizations", on_delete=models.CASCADE
     )

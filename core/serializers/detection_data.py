@@ -1,3 +1,4 @@
+from core.models.detection_authorization import DetectionAuthorization
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionData,
@@ -27,6 +28,16 @@ class DetectionDataSerializer(UuidTimestampedModelSerializerMixin):
             "legitimate_date",
         ]
 
+    legitimate_date = serializers.SerializerMethodField()
+
+    def get_legitimate_date(self, obj: DetectionData):
+        detection_authorizations = obj.detection_authorizations.all()
+
+        if not detection_authorizations:
+            return None
+
+        return min(auth.authorization_date for auth in detection_authorizations)
+
     user_last_update_uuid = serializers.UUIDField(
         source="user_last_update.uuid", read_only=True
     )
@@ -41,6 +52,8 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             "official_report_date",
             "legitimate_date",
         ]
+
+    legitimate_date = serializers.DateField(write_only=True)
 
     def update(self, instance: DetectionData, validated_data):
         user = self.context["request"].user
@@ -57,7 +70,9 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             and validated_data["detection_prescription_status"]
             == DetectionPrescriptionStatus.PRESCRIBED
         ):
-            prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
+            prescription_duration_years = (
+                instance.detection.detection_object.object_type.prescription_duration_years
+            )
             date_max = instance.detection.tile_set.date
             date_min = date_max - relativedelta(years=prescription_duration_years)
             existing_tile_set_ids = []
@@ -110,7 +125,9 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             and validated_data["detection_prescription_status"]
             == DetectionPrescriptionStatus.NOT_PRESCRIBED
         ):
-            prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
+            prescription_duration_years = (
+                instance.detection.detection_object.object_type.prescription_duration_years
+            )
             date_max = instance.detection.tile_set.date
             date_min = date_max - relativedelta(years=prescription_duration_years)
 
@@ -144,6 +161,22 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
         # allow update official_report_date only if detection_validation_status is LEGITIMATE
         if detection_validation_status != DetectionValidationStatus.LEGITIMATE:
             validated_data.pop("legitimate_date", None)
+
+        if validated_data.get("legitimate_date"):
+            existing_auth = instance.detection_authorizations.filter(
+                authorization_id=None
+            ).first()
+            if not existing_auth:
+                detection_authorization = DetectionAuthorization(
+                    detection_data=instance,
+                )
+            if existing_auth:
+                detection_authorization = existing_auth
+
+            detection_authorization.authorization_date = validated_data.pop(
+                "legitimate_date"
+            )
+            detection_authorization.save()
 
         for key, value in validated_data.items():
             setattr(instance, key, value)
