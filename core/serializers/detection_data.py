@@ -26,6 +26,7 @@ class DetectionDataSerializer(UuidTimestampedModelSerializerMixin):
             "official_report_date",
             "detection_validation_status_change_reason",
             "legitimate_date",
+            "authorization_ids",
         ]
 
     legitimate_date = serializers.SerializerMethodField()
@@ -37,6 +38,21 @@ class DetectionDataSerializer(UuidTimestampedModelSerializerMixin):
             return None
 
         return min(auth.authorization_date for auth in detection_authorizations)
+
+    authorization_ids = serializers.SerializerMethodField()
+
+    def get_authorization_ids(self, obj: DetectionData):
+        detection_authorizations = obj.detection_authorizations.all()
+        authorization_ids = [
+            auth.authorization_id
+            for auth in detection_authorizations
+            if auth.authorization_id
+        ]
+
+        if not authorization_ids:
+            return None
+
+        return authorization_ids
 
     user_last_update_uuid = serializers.UUIDField(
         source="user_last_update.uuid", read_only=True
@@ -70,9 +86,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             and validated_data["detection_prescription_status"]
             == DetectionPrescriptionStatus.PRESCRIBED
         ):
-            prescription_duration_years = (
-                instance.detection.detection_object.object_type.prescription_duration_years
-            )
+            prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
             date_max = instance.detection.tile_set.date
             date_min = date_max - relativedelta(years=prescription_duration_years)
             existing_tile_set_ids = []
@@ -125,9 +139,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             and validated_data["detection_prescription_status"]
             == DetectionPrescriptionStatus.NOT_PRESCRIBED
         ):
-            prescription_duration_years = (
-                instance.detection.detection_object.object_type.prescription_duration_years
-            )
+            prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
             date_max = instance.detection.tile_set.date
             date_min = date_max - relativedelta(years=prescription_duration_years)
 

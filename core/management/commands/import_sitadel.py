@@ -71,16 +71,20 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--file-csv-path", type=str, required=True)
         parser.add_argument("--persist-data", type=bool, default=False)
+        parser.add_argument("--filter-coms", action="append", required=False)
 
     def handle(self, *args, **options):
         file_csv_path = options["file_csv_path"]
         persist_data = options["persist_data"]
+        filter_coms = options["filter_coms"]
 
         file_csv = open(file_csv_path, mode="r")
         file_csv_reader = csv.DictReader(file_csv)
 
         while True:
-            csv_data = self.extract_data_from_csv(file_csv_reader=file_csv_reader)
+            csv_data = self.extract_data_from_csv(
+                file_csv_reader=file_csv_reader, filter_coms=filter_coms
+            )
 
             if not csv_data:
                 break
@@ -93,12 +97,17 @@ class Command(BaseCommand):
             self.log()
 
     @staticmethod
-    def extract_data_from_csv(file_csv_reader: csv.DictReader) -> List[DataOutputRow]:
+    def extract_data_from_csv(
+        file_csv_reader: csv.DictReader, filter_coms: Optional[List[str]]
+    ) -> List[DataOutputRow]:
         data = []
 
         for row in file_csv_reader:
             # état = Annulé
             if row["ETAT_DAU"] == "4":
+                continue
+
+            if filter_coms and row["COMM"] not in filter_coms:
                 continue
 
             data_output = get_data_output(row)
