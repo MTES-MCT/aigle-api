@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "rest_framework_gis",
+    "rest_framework_api_key",
     "core",
     "djoser",
     "django_filters",

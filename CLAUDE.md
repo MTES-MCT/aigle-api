@@ -45,12 +45,27 @@ python manage.py create_super_admin --email myemail@email.com --password mypassw
 ```bash
 # Import geographical collectivities (required first)
 python manage.py import_georegion
-python manage.py import_geodepartment  
+python manage.py import_geodepartment
 python manage.py import_geocommune
 
 # Import other data
 python manage.py import_parcels
 python manage.py create_tile --x-min 265750 --x-max 268364 --y-min 190647 --y-max 192325
+```
+
+### External API Authentication
+```bash
+# Create API key for external service access
+python manage.py create_api_key --name "External Service Name"
+
+# Create API key with expiry date (30 days)
+python manage.py create_api_key --name "External Service Name" --expiry-days 30
+
+# Revoke an existing API key
+python manage.py revoke_api_key --name "External Service Name"
+
+# Test external API (requires server running)
+python test_external_api.py YOUR_API_KEY
 ```
 
 ### Development Server
@@ -86,6 +101,45 @@ python manage.py test
 python manage.py test_cmd
 ```
 
+## Management Command Style Guide
+
+When creating custom Django management commands in `core/management/commands/`, follow these conventions:
+
+### Command Structure
+```python
+from django.core.management.base import BaseCommand
+from core.utils.logs_helpers import log_command_event
+
+def log_event(info: str):
+    log_command_event(command_name="your_command_name", info=info)
+
+class Command(BaseCommand):
+    help = "Brief description of the command"
+
+    def add_arguments(self, parser):
+        parser.add_argument("--arg-name", type=str, required=True, help="Argument description")
+
+    def handle(self, *args, **options):
+        # Command logic here
+        log_event("Important event or result")
+```
+
+### Key Conventions
+1. **Import Order**: Standard library → Django → Third-party → Local imports
+2. **Logging**: Always define a module-level `log_event()` function that wraps `log_command_event()`
+3. **Event Logging**: Use `log_event()` for all output instead of `self.stdout.write()`:
+   - Successful operations
+   - Important state changes
+   - Errors or failures with available options
+   - Summary statistics (e.g., number of records processed)
+4. **Help Text**: Provide clear `help` attribute for the command and all arguments
+5. **No stdout**: Do NOT use `self.stdout.write()` - use `log_event()` instead for all command output
+
+### Example Commands
+- `import_sitadel.py`: Complex data import with batch processing and logging
+- `create_api_key.py`: Simple command with optional parameters and event logging
+- `revoke_api_key.py`: Command with error handling and helpful user feedback
+
 ## Architecture Overview
 
 ### Core Models Hierarchy
@@ -106,7 +160,8 @@ The application uses a repository pattern in `core/repository/` for complex data
 
 ### API Structure
 - All endpoints are under `/api/` prefix
-- Authentication via JWT tokens using djoser
+- **User Authentication**: JWT tokens using djoser for standard user access
+- **External API Authentication**: API key-based authentication for external services (see EXTERNAL_API.md)
 - ViewSets follow Django REST framework conventions
 - Geographic data returned as GeoJSON where applicable
 

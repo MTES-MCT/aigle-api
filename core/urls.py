@@ -28,6 +28,7 @@ from core.views.utils import urls as utils_urls
 from django.urls import path
 
 from core.views.user_group import UserGroupViewSet
+from core.views.external_api_test import ExternalAPITestView
 
 router = DefaultRouter()
 router.register("users", UserViewSet, basename="UserViewSet")
@@ -68,7 +69,8 @@ router.register("run-command", CommandAsyncViewSet, basename="CommandAsyncViewSe
 urlpatterns = router.urls
 
 urlpatterns += [
-    path("map-settings/", MapSettingsView.as_view(), name="MapSettingsView")
+    path("map-settings/", MapSettingsView.as_view(), name="MapSettingsView"),
+    path("external/test/", ExternalAPITestView.as_view(), name="ExternalAPITestView"),
 ]
 
 # statistics
