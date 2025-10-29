@@ -72,18 +72,22 @@ class Command(BaseCommand):
         parser.add_argument("--file-csv-path", type=str, required=True)
         parser.add_argument("--persist-data", type=bool, default=False)
         parser.add_argument("--filter-coms", action="append", required=False)
+        parser.add_argument("--filter-dpts", action="append", required=False)
 
     def handle(self, *args, **options):
         file_csv_path = options["file_csv_path"]
         persist_data = options["persist_data"]
         filter_coms = options["filter_coms"]
+        filter_dpts = options["filter_dpts"]
 
         file_csv = open(file_csv_path, mode="r")
         file_csv_reader = csv.DictReader(file_csv)
 
         while True:
             csv_data = self.extract_data_from_csv(
-                file_csv_reader=file_csv_reader, filter_coms=filter_coms
+                file_csv_reader=file_csv_reader,
+                filter_coms=filter_coms,
+                filter_dpts=filter_dpts,
             )
 
             if not csv_data:
@@ -98,7 +102,9 @@ class Command(BaseCommand):
 
     @staticmethod
     def extract_data_from_csv(
-        file_csv_reader: csv.DictReader, filter_coms: Optional[List[str]]
+        file_csv_reader: csv.DictReader,
+        filter_coms: Optional[List[str]],
+        filter_dpts: Optional[List[str]],
     ) -> List[DataOutputRow]:
         data = []
 
@@ -107,7 +113,13 @@ class Command(BaseCommand):
             if row["ETAT_DAU"] == "4":
                 continue
 
-            if filter_coms and row["COMM"] not in filter_coms:
+            commune_code = row["COMM"]
+            department_code = commune_code[:2]
+
+            if filter_dpts and department_code not in filter_dpts:
+                continue
+
+            if filter_coms and commune_code not in filter_coms:
                 continue
 
             data_output = get_data_output(row)
@@ -156,15 +168,14 @@ class Command(BaseCommand):
                         DetectionControlStatus.REHABILITATED,
                     ]
                 ),
-                ~Q(
-                    detection_objects__detections__detection_data__detection_validation_status=DetectionValidationStatus.INVALIDATED
-                ),
                 nbr_detections__gt=0,
             )
             .prefetch_related(
                 Prefetch(
                     "detection_objects",
-                    queryset=DetectionObject.objects.prefetch_related(
+                    queryset=DetectionObject.objects.exclude(
+                        detections__detection_data__detection_validation_status=DetectionValidationStatus.INVALIDATED
+                    ).prefetch_related(
                         Prefetch(
                             "detections",
                             queryset=Detection.objects.select_related("detection_data")

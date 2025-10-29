@@ -1,10 +1,13 @@
+from datetime import datetime
+from typing import List, Optional
+from core.models.geo_zone import GeoZone
 from core.models.object_type_category import ObjectTypeCategory
 from core.models.tile_set import TileSet
-from core.models.user_group import UserGroup
 from core.serializers import UuidTimestampedModelSerializerMixin
 from rest_framework_gis.fields import GeometryField
 
 from rest_framework import serializers
+from django.db.models import Count, Q
 
 from core.serializers.utils.query import get_objects
 from core.serializers.utils.with_collectivities import (
@@ -84,6 +87,10 @@ class TileSetInputSerializer(TileSetSerializer, WithCollectivitiesInputSerialize
         )
         collectivities = extract_collectivities(validated_data)
 
+        check_tileset_uniqueness(
+            date=validated_data.get("date"), collectivities=collectivities
+        )
+
         instance = TileSet(
             **validated_data,
         )
@@ -99,8 +106,14 @@ class TileSetInputSerializer(TileSetSerializer, WithCollectivitiesInputSerialize
 
         return instance
 
-    def update(self, instance: UserGroup, validated_data):
+    def update(self, instance: TileSet, validated_data):
         collectivities = extract_collectivities(validated_data)
+
+        check_tileset_uniqueness(
+            date=validated_data.get("date", instance.date),
+            collectivities=collectivities,
+            exclude_tileset_id=instance.id,
+        )
 
         object_type_categories_uuids = validated_data.pop(
             "object_type_categories_uuids", None
@@ -120,3 +133,39 @@ class TileSetInputSerializer(TileSetSerializer, WithCollectivitiesInputSerialize
         instance.save()
 
         return instance
+
+
+# utils
+
+
+def check_tileset_uniqueness(
+    date: datetime,
+    collectivities: List[GeoZone],
+    exclude_tileset_id: Optional[int] = None,
+):
+    collectivity_ids = [col.id for col in collectivities]
+    collectivity_count = len(collectivity_ids)
+
+    # Find TileSets with same date, exact same count of geo_zones, and all matching geo_zones
+    # This is done in a single query by:
+    # 1. Filtering by date
+    # 2. Filtering only TileSets that have ALL the collectivity_ids
+    # 3. Annotating with count to ensure exact match (no extra geo_zones)
+    query = Q()
+    for geo_zone_id in collectivity_ids:
+        query &= Q(geo_zones__id=geo_zone_id)
+
+    queryset = (
+        TileSet.objects.filter(date=date)
+        .filter(query)
+        .annotate(geo_zones_count=Count("geo_zones"))
+        .filter(geo_zones_count=collectivity_count)
+    )
+
+    if exclude_tileset_id:
+        queryset = queryset.exclude(id=exclude_tileset_id)
+
+    if queryset.exists():
+        raise serializers.ValidationError(
+            {"date": "Un millésime avec ces collectivités et cette date existe déjà"}
+        )
