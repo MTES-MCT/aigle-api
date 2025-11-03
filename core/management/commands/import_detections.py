@@ -107,12 +107,8 @@ class Command(BaseCommand):
 
         self.start_time = datetime.now()
 
-        all_object_types = ObjectType.objects.all()
-
-        self.object_types_map = {
-            normalize(object_type.name): object_type for object_type in all_object_types
-        }
-        self.user_reviewer = User.objects.get(email=USER_REVIEWER_MAIL)
+        self.object_types_map = None
+        self._user_reviewer = None
 
         self.detection_objects_to_insert = []
         self.detection_datas_to_insert = []
@@ -124,6 +120,22 @@ class Command(BaseCommand):
         self.total = None
         self.query_colums = None
         self.cursor = None
+
+    @property
+    def user_reviewer(self):
+        """Lazy load user reviewer to avoid querying during command discovery."""
+        if self._user_reviewer is None:
+            self._user_reviewer = User.objects.get(email=USER_REVIEWER_MAIL)
+        return self._user_reviewer
+
+    def _initialize_object_types_map(self):
+        """Initialize object types map when command is executed."""
+        if self.object_types_map is None:
+            all_object_types = ObjectType.objects.all()
+            self.object_types_map = {
+                normalize(object_type.name): object_type
+                for object_type in all_object_types
+            }
 
     def add_arguments(self, parser):
         parser.add_argument("--tile-set-id", type=int, required=True)
@@ -193,6 +205,9 @@ class Command(BaseCommand):
         return map(lambda row: dict(zip(table_columns, row)), self.cursor)
 
     def handle(self, *args, **options):
+        # Initialize object types map lazily when command is executed
+        self._initialize_object_types_map()
+
         self.validate_arguments(options)
 
         tile_set_id = options["tile_set_id"]

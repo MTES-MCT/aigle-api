@@ -189,3 +189,145 @@ Uses Celery for background tasks:
 - Development requires GDAL/GEOS library paths for macOS
 - PostGIS database required (Docker setup available)
 - Environment variables managed through .env files
+- Test database uses separate environment variables (SQL_*_TEST)
+
+## Testing
+
+### Test Database Setup
+
+Tests use a **separate PostgreSQL database** to avoid interfering with development data.
+
+**Required environment variables** (add to `.env`):
+```bash
+SQL_ENGINE_TEST=django.contrib.gis.db.backends.postgis
+SQL_DATABASE_TEST=aigle_test_db
+SQL_USER_TEST=aigle_user
+SQL_PASSWORD_TEST=password
+SQL_HOST_TEST=localhost
+SQL_PORT_TEST=5432
+```
+
+**Create test database**:
+```bash
+# Create database
+psql -U postgres -c "CREATE DATABASE aigle_test_db;"
+
+# Enable PostGIS
+psql -U postgres -d aigle_test_db -c "CREATE EXTENSION postgis;"
+
+# Grant permissions
+psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE aigle_test_db TO aigle_user;"
+psql -U postgres -c "ALTER USER aigle_user CREATEDB;"
+```
+
+### Test Structure
+
+```
+core/tests/
+├── base.py                              # Base test classes
+├── fixtures/                            # Reusable test data
+│   ├── geo_data.py                     # Real France geographic data
+│   ├── users.py                        # User and auth fixtures
+│   └── detection_data.py               # Detection fixtures
+└── views/                              # View/API tests
+    ├── test_geo_commune.py
+    ├── test_user.py
+    ├── test_detection_object.py
+    └── test_external_api.py
+```
+
+### Running Tests
+
+```bash
+# Basic usage
+python manage.py test --settings=aigle.settings.test
+
+# Using Makefile
+make test              # Run all tests
+make test-keepdb       # Run with keepdb (faster)
+make test-core         # Run core tests only
+make test-verbose      # Verbose output
+make test-coverage     # With coverage report
+
+# Specific tests
+python manage.py test core.tests.views.test_geo_commune --settings=aigle.settings.test
+python manage.py test core.tests.views.test_user.UserViewSetTests --settings=aigle.settings.test
+
+# Advanced options
+python manage.py test --settings=aigle.settings.test --keepdb --verbosity=2
+python manage.py test --settings=aigle.settings.test --parallel
+```
+
+### Test Fixtures
+
+**Geographic data** (real France coordinates):
+```python
+from core.tests.fixtures.geo_data import (
+    create_montpellier_commune,    # Montpellier at 43.61°N, 3.88°E
+    create_complete_geo_hierarchy,  # Full hierarchy: Occitanie → Hérault → Montpellier
+)
+```
+
+**Users**:
+```python
+from core.tests.fixtures.users import (
+    create_super_admin,
+    create_admin,
+    create_regular_user,
+    create_api_key,
+)
+```
+
+**Detection data**:
+```python
+from core.tests.fixtures.detection_data import (
+    create_tile_set,
+    create_detection_object,
+    create_complete_detection_setup,
+)
+```
+
+### Writing Tests
+
+**API tests**:
+```python
+from core.tests.base import BaseAPITestCase
+from core.tests.fixtures.users import create_regular_user
+
+class MyViewTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = create_regular_user()
+        self.authenticate_user(self.user)  # Sets JWT token
+
+    def test_endpoint(self):
+        response = self.client.get('/api/endpoint/')
+        self.assertEqual(response.status_code, 200)
+```
+
+**PostGIS helpers**:
+```python
+# Available in BaseAPITestCase
+point = self.create_point(3.88, 43.61)  # Montpellier
+polygon = self.create_polygon([(x1,y1), (x2,y2), ...])
+bbox = self.create_bbox_polygon(min_x, min_y, max_x, max_y)
+```
+
+### Key Features
+
+- **Automatic cleanup**: Each test runs in a transaction, rolled back after completion
+- **Separate database**: Test database is independent from development
+- **Real geographic data**: Uses actual France coordinates (Montpellier, Hérault, Occitanie)
+- **PostGIS support**: Full spatial query testing
+- **Authentication helpers**: Easy JWT and API key testing
+- **Comprehensive fixtures**: Pre-built test data for common scenarios
+
+### Coverage
+
+Generate coverage reports:
+```bash
+make test-coverage        # Terminal report
+make test-coverage-html   # HTML report in htmlcov/
+```
+
+For detailed testing documentation, see `core/tests/README.md`.

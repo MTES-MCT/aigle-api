@@ -1,5 +1,6 @@
 # pull official base image
-FROM python:3.12.0-bullseye
+FROM python:3.9.25-alpine3.22
+
 # setup environment variable  
 ENV DockerHOME=/home/app/webapp  
 
@@ -10,8 +11,8 @@ RUN mkdir -p $DockerHOME
 WORKDIR $DockerHOME  
 
 # set environment variables  
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1  
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 # install dependencies  
 RUN pip install --upgrade pip  
