@@ -4,6 +4,7 @@ services:
   db:
     shm_size: 1g
     container_name: aigle_api_db_container
+    platform: linux/amd64
     image: postgis/postgis:16-3.5
     environment:
       POSTGRES_USER: ${SQL_USER}

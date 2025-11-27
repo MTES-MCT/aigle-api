@@ -64,9 +64,6 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     official_report_date = models.DateField(
         null=True
     )  # can be set if detection_control_status is OFFICIAL_REPORT_DRAWN_UP
-    legitimate_date = models.DateField(
-        null=True
-    )  # when detection_validation_status is LEGITIMATE, this date can be specified
     detection_validation_status_change_reason = models.CharField(
         max_length=DEFAULT_MAX_LENGTH,
         choices=DetectionValidationStatusChangeReason.choices,

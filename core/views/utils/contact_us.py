@@ -5,9 +5,11 @@ from rest_framework import serializers
 
 
 from common.constants.models import DEFAULT_MAX_LENGTH
-from django.core.mail import send_mail
 from django.db import models
 from rest_framework.status import HTTP_200_OK
+
+from core.models.email import EmailType
+from core.utils.email import send_mail
 
 
 class ContactReason(models.TextChoices):
@@ -71,7 +73,7 @@ def endpoint(request):
         """,
         from_email=settings.EMAIL_HOST_USER,
         recipient_list=[settings.EMAIL_HOST_USER],
-        fail_silently=False,
+        email_type=EmailType.CONTACT_US,
     )
 
     return HttpResponse(status=HTTP_200_OK)

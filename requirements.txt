@@ -21,6 +21,7 @@ django-filter==24.2
 django-simple-history==3.7.0
 django-templated-mail==1.1.1
 djangorestframework==3.15.1
+djangorestframework-api-key==2.3.0
 djangorestframework-camel-case==1.4.2
 djangorestframework-gis==1.0
 djangorestframework-simplejwt==5.3.1
@@ -32,6 +33,7 @@ identify==2.5.36
 idna==3.7
 kombu==5.5.4
 Markdown==3.6
+mysql-connector-python==9.5.0
 nodeenv==1.9.1
 oauthlib==3.2.2
 openpyxl==3.1.5

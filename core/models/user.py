@@ -1,10 +1,10 @@
-from datetime import datetime
 from django.db import models
 
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import PermissionsMixin
 
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 
 from common.constants.models import DEFAULT_MAX_LENGTH
 from common.models.deletable import DeletableModelMixin
@@ -47,7 +47,7 @@ class User(
     last_name = None
     is_staff = models.BooleanField(_("staff status"), default=False)
     is_active = models.BooleanField(_("active"), default=True)
-    date_joined = models.DateTimeField(_("date joined"), default=datetime.now)
+    date_joined = models.DateTimeField(_("date joined"), default=timezone.now)
 
     # Additional fields
 
