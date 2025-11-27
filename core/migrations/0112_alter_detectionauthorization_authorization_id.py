@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0111_remove_detectiondata_legitimate_date_and_more'),
+        ("core", "0111_remove_detectiondata_legitimate_date_and_more"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='detectionauthorization',
-            name='authorization_id',
+            model_name="detectionauthorization",
+            name="authorization_id",
             field=models.CharField(null=True),
         ),
     ]

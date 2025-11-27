@@ -6,43 +6,60 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('core', '0110_detectiondata_legitimate_id_and_more'),
+        ("core", "0110_detectiondata_legitimate_id_and_more"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='detectiondata',
-            name='legitimate_date',
+            model_name="detectiondata",
+            name="legitimate_date",
         ),
         migrations.RemoveField(
-            model_name='detectiondata',
-            name='legitimate_id',
+            model_name="detectiondata",
+            name="legitimate_id",
         ),
         migrations.RemoveField(
-            model_name='historicaldetectiondata',
-            name='legitimate_date',
+            model_name="historicaldetectiondata",
+            name="legitimate_date",
         ),
         migrations.RemoveField(
-            model_name='historicaldetectiondata',
-            name='legitimate_id',
+            model_name="historicaldetectiondata",
+            name="legitimate_id",
         ),
         migrations.CreateModel(
-            name='DetectionAuthorization',
+            name="DetectionAuthorization",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('deleted', models.BooleanField(default=False)),
-                ('deleted_at', models.DateTimeField(null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('uuid', models.UUIDField(default=uuid.uuid4, editable=False, unique=True)),
-                ('authorization_date', models.DateField()),
-                ('authorization_id', models.CharField()),
-                ('detection_data', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='detection_authorizations', to='core.detectiondata')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("deleted", models.BooleanField(default=False)),
+                ("deleted_at", models.DateTimeField(null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "uuid",
+                    models.UUIDField(default=uuid.uuid4, editable=False, unique=True),
+                ),
+                ("authorization_date", models.DateField()),
+                ("authorization_id", models.CharField()),
+                (
+                    "detection_data",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="detection_authorizations",
+                        to="core.detectiondata",
+                    ),
+                ),
             ],
             options={
-                'abstract': False,
+                "abstract": False,
             },
         ),
     ]
