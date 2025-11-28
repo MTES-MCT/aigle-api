@@ -15,6 +15,7 @@ from django.db.models import Prefetch
 from django.http import HttpResponse
 import csv
 from core.models.detection_object import DetectionObject
+from django.contrib.gis.db.models.functions import Centroid
 
 from django.db.models import F, Case, When, Value, Count
 from core.models.detection_data import (
@@ -81,6 +82,8 @@ DOWNLOAD_FILE_HEADERS = [
     "Statut de validation",
     "Millésimes",
     "Zones à enjeux",
+    "x",
+    "y",
 ]
 
 
@@ -379,6 +382,7 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
         queryset = queryset.annotate(
             tile_sets=Subquery(tile_sets_subquery),
             custom_zones=Subquery(custom_zones_subquery),
+            geometry_center=Centroid("geometry"),
         )
         # safety to not consume too much memory and kill the api
         queryset = queryset[:1000]
@@ -465,6 +469,7 @@ def process_rows(results):
     DETECTION_VALIDATION_STATUS_INDEX = 9
     TILE_SETS_INDEX = 10
     CUSTOM_ZONES_INDEX = 11
+    GEOMETRY_CENTER_INDEX = 12
 
     for row in results:
         obj_id = row[ID_INDEX]
@@ -511,6 +516,8 @@ def process_rows(results):
             *base_data[:TILE_SETS_INDEX],
             ", ".join(tile_sets),
             ", ".join([custom_zone for custom_zone in custom_zones if custom_zone]),
+            base_data[GEOMETRY_CENTER_INDEX].x,
+            base_data[GEOMETRY_CENTER_INDEX].y,
         ]
         final_results.append(result)
 
