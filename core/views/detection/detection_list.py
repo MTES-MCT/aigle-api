@@ -103,6 +103,7 @@ DETECTION_CONTROL_STATUSES_ORDERED = [
     DetectionControlStatus.REHABILITATED,
     DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
 ]
+DOWNLOAD_LIMIT_ROWS = 20000
 
 # returns order_bys and distincts
 
@@ -385,7 +386,7 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
             geometry_center=Centroid("geometry"),
         )
         # safety to not consume too much memory and kill the api
-        queryset = queryset[:1000]
+        queryset = queryset[:DOWNLOAD_LIMIT_ROWS]
 
         results = process_rows(list(queryset))
 
