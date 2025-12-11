@@ -1,3 +1,4 @@
+from aigle.settings.base import DOMAIN
 from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet, NumberFilter, ChoiceFilter, OrderingFilter
@@ -71,6 +72,7 @@ class DetectionListOverviewSerializer(serializers.Serializer):
 
 DOWNLOAD_FILE_HEADERS = [
     "Object n°",
+    "URL",
     "Commune",
     "Type",
     "Parcelle (section)",
@@ -346,6 +348,7 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
         queryset = get_list_values_list(
             queryset,
             "detection_object__id",
+            "detection_object__uuid",
             "detection_object__commune__name",
             "detection_object__object_type__name",
             "detection_object__parcel__section",
@@ -463,14 +466,15 @@ def process_rows(results):
     combined_data = {}
 
     ID_INDEX = 0
-    SCORE_INDEX = 5
-    SOURCE_INDEX = 6
-    DETECTION_CONTROL_STATUS_INDEX = 7
-    DETECTION_PRESCRIPTION_STATUS_INDEX = 8
-    DETECTION_VALIDATION_STATUS_INDEX = 9
-    TILE_SETS_INDEX = 10
-    CUSTOM_ZONES_INDEX = 11
-    GEOMETRY_CENTER_INDEX = 12
+    UUID_INDEX = 1
+    SCORE_INDEX = 6
+    SOURCE_INDEX = 7
+    DETECTION_CONTROL_STATUS_INDEX = 8
+    DETECTION_PRESCRIPTION_STATUS_INDEX = 9
+    DETECTION_VALIDATION_STATUS_INDEX = 10
+    TILE_SETS_INDEX = 11
+    CUSTOM_ZONES_INDEX = 12
+    GEOMETRY_CENTER_INDEX = 13
 
     for row in results:
         obj_id = row[ID_INDEX]
@@ -494,6 +498,9 @@ def process_rows(results):
                 row[DETECTION_VALIDATION_STATUS_INDEX],
             )
         )
+
+        # transform UUID to url
+        row[UUID_INDEX] = f"https://{DOMAIN}/map?detectionObjectUuid={row[UUID_INDEX]}"
 
         # format score
         row[SCORE_INDEX] = "{:.2f}".format(row[SCORE_INDEX] * 100)
