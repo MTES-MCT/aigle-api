@@ -82,7 +82,7 @@ class ObjectTypeCategoryService:
                     object_type_category=object_type_category,
                     object_type=object_type,
                     object_type_category_object_type_status=object_type_uuids_statuses_map[
-                        str(object_type.uuid)
+                        object_type.uuid
                     ],
                 )
             )
