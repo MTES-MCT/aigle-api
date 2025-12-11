@@ -69,7 +69,9 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             "legitimate_date",
         ]
 
-    legitimate_date = serializers.DateField(write_only=True)
+    legitimate_date = serializers.DateField(
+        write_only=True, required=False, allow_null=True
+    )
 
     def update(self, instance: DetectionData, validated_data):
         user = self.context["request"].user
