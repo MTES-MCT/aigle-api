@@ -41,9 +41,7 @@ class UserViewSet(
         if request.user.user_role == UserRole.DEACTIVATED:
             raise PermissionDenied("Votre compte est désactivé")
 
-        queryset = self.get_queryset()
-        queryset = queryset.filter(id=request.user.id)
-        user = queryset.first()
+        user = UserModel.objects.filter(id=request.user.id).first()
 
         user = UserService.get_user_profile_with_logging(user=user)
         serializer = UserSerializer(user, context={"request": request})
