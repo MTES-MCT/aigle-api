@@ -1,0 +1,489 @@
+{
+	"info": {
+		"_postman_id": "external-api-collection",
+		"name": "External API",
+		"description": "External API endpoints that require API key authentication.\n\n## Authentication\nAll endpoints require a valid API key in the Authorization header:\n```\nAuthorization: Api-Key YOUR_API_KEY_HERE\n```\n\n## Creating an API Key\nUse the management command:\n```bash\npython manage.py create_api_key --name \"External Service Name\"\n```\n\n## Available Endpoints\n- **GET /api/external/test/** - Test authentication with API key\n- **POST /api/external/test/** - Test POST request with API key\n- **POST /api/external/update-control-status/** - Update control status for a parcel detection",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Test GET - Authentication Check",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Api-Key {{api_key}}",
+						"type": "text",
+						"description": "API key for authentication"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/external/test/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"external",
+						"test",
+						""
+					]
+				},
+				"description": "Test endpoint to verify API key authentication is working correctly.\n\n**Response:**\n```json\n{\n  \"message\": \"Successfully authenticated with API key\",\n  \"status\": \"success\",\n  \"data\": {\n    \"timestamp\": \"2024-01-15T10:30:00\"\n  }\n}\n```"
+			},
+			"response": [
+				{
+					"name": "Success",
+					"originalRequest": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key YOUR_API_KEY_HERE",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/external/test/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"test"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{\n  \"message\": \"Successfully authenticated with API key\",\n  \"status\": \"success\",\n  \"data\": {\n    \"timestamp\": \"2024-01-15T10:30:00.123456\"\n  }\n}"
+				},
+				{
+					"name": "Unauthorized - Invalid API Key",
+					"originalRequest": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key invalid_key",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/external/test/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"test"
+							]
+						}
+					},
+					"status": "Forbidden",
+					"code": 403,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{\n  \"detail\": \"Invalid API key\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Test POST - Data Echo",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Api-Key {{api_key}}",
+						"type": "text",
+						"description": "API key for authentication"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"test_field\": \"test_value\",\n  \"number\": 123,\n  \"nested\": {\n    \"key\": \"value\"\n  }\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/external/test/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"external",
+						"test",
+						""
+					]
+				},
+				"description": "Test POST endpoint that echoes back the received data.\n\n**Request Body:** Any JSON data\n\n**Response:**\n```json\n{\n  \"message\": \"Data received successfully\",\n  \"status\": \"success\",\n  \"received_data\": {\n    \"test_field\": \"test_value\",\n    \"number\": 123,\n    \"nested\": {\n      \"key\": \"value\"\n    }\n  }\n}\n```"
+			},
+			"response": [
+				{
+					"name": "Success",
+					"originalRequest": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key YOUR_API_KEY_HERE",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"test_field\": \"test_value\",\n  \"number\": 123\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/external/test/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"test"
+							]
+						}
+					},
+					"status": "Created",
+					"code": 201,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{\n  \"message\": \"Data received successfully\",\n  \"status\": \"success\",\n  \"received_data\": {\n    \"test_field\": \"test_value\",\n    \"number\": 123\n  }\n}"
+				}
+			]
+		},
+		{
+			"name": "Update Control Status",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Api-Key {{api_key}}",
+						"type": "text",
+						"description": "API key for authentication"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"insee_code\": \"34172\",\n  \"parcel_code\": \"AB1234\",\n  \"control_status\": \"NOT_CONTROLLED\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/external/update-control-status/",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"external",
+						"update-control-status",
+						""
+					]
+				},
+				"description": "Mise à jour du statut de contrôle pour les détections d'une parcelle spécifique.\n\n**Corps de la requête:**\n- `insee_code` (string, requis): Code INSEE de la commune (ex: \"34172\" pour Montpellier)\n- `parcel_code` (string, requis): Code cadastral de la parcelle au format: 1-2 lettres majuscules + 1-4 chiffres (ex: \"B39\", \"AB1234\")\n- `control_status` (string, requis): Statut de contrôle parmi les valeurs de l'enum DetectionControlStatus\n\n**Format du code parcelle:**\n- Section: 1 ou 2 lettres majuscules (A-Z)\n- Numéro de parcelle: 1 à 4 chiffres\n- Exemples: \"B39\", \"AB1234\", \"C1\"\n\n**Valeurs valides pour control_status:**\n1. `NOT_CONTROLLED` - Non contrôlé\n2. `PRIOR_LETTER_SENT` - Courrier préalable envoyé\n3. `CONTROLLED_FIELD` - Contrôlé terrain\n4. `OFFICIAL_REPORT_DRAWN_UP` - PV dressé\n5. `ADMINISTRATIVE_CONSTRAINT` - Astreinte Administrative\n6. `OBSERVARTION_REPORT_REDACTED` - Rapport de constatations rédigé\n7. `REHABILITATED` - Remis en état\n\n**Exemple de requête:**\n```json\n{\n  \"insee_code\": \"34172\",\n  \"parcel_code\": \"AB1234\",\n  \"control_status\": \"NOT_CONTROLLED\"\n}\n```\n\nModifiez la valeur de `control_status` avec l'une des valeurs valides listées ci-dessus."
+			},
+			"response": [
+				{
+					"name": "Success",
+					"originalRequest": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key YOUR_API_KEY_HERE",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"insee_code\": \"34172\",\n  \"parcel_code\": \"AB1234\",\n  \"control_status\": \"CONTROLLED_FIELD\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/external/update-control-status/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"update-control-status"
+							]
+						}
+					},
+					"status": "OK",
+					"code": 200,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{}"
+				},
+				{
+					"name": "Validation Error - Invalid Parcel Code",
+					"originalRequest": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key YOUR_API_KEY_HERE",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"insee_code\": \"34172\",\n  \"parcel_code\": \"invalid123\",\n  \"control_status\": \"CONTROLLED_FIELD\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/external/update-control-status/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"update-control-status"
+							]
+						}
+					},
+					"status": "Bad Request",
+					"code": 400,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{\n  \"parcel_code\": [\n    \"Code parcelle invalide. Format attendu: 1-2 lettres suivi de 1-4 chiffres (exemples : 'B39', 'AB1234')\"\n  ]\n}"
+				},
+				{
+					"name": "Validation Error - Missing Fields",
+					"originalRequest": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key YOUR_API_KEY_HERE",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"insee_code\": \"34172\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/external/update-control-status/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"update-control-status"
+							]
+						}
+					},
+					"status": "Bad Request",
+					"code": 400,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{\n  \"parcel_code\": [\n    \"This field is required.\"\n  ],\n  \"control_status\": [\n    \"This field is required.\"\n  ]\n}"
+				},
+				{
+					"name": "Validation Error - Invalid Control Status",
+					"originalRequest": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Api-Key YOUR_API_KEY_HERE",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"insee_code\": \"34172\",\n  \"parcel_code\": \"AB1234\",\n  \"control_status\": \"INVALID_STATUS\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/external/update-control-status/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"external",
+								"update-control-status"
+							]
+						}
+					},
+					"status": "Bad Request",
+					"code": 400,
+					"_postman_previewlanguage": "json",
+					"header": [
+						{
+							"key": "Content-Type",
+							"value": "application/json"
+						}
+					],
+					"cookie": [],
+					"body": "{\n  \"control_status\": [\n    \"\\\"INVALID_STATUS\\\" is not a valid choice.\"\n  ]\n}"
+				}
+			]
+		}
+	],
+	"auth": {
+		"type": "apikey",
+		"apikey": [
+			{
+				"key": "value",
+				"value": "Api-Key {{api_key}}",
+				"type": "string"
+			},
+			{
+				"key": "key",
+				"value": "Authorization",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string",
+			"description": "Base URL for the Aigle API (default: local development server)"
+		},
+		{
+			"key": "api_key",
+			"value": "YOUR_API_KEY_HERE",
+			"type": "string",
+			"description": "API key for external API authentication. Generate using: python manage.py create_api_key --name \"Service Name\""
+		}
+	]
+}
