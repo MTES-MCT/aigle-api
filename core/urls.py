@@ -2,6 +2,10 @@ from core.views.detection import DetectionGeoViewSet
 from core.views.detection.detection_list import DetectionListViewSet
 from core.views.detection_data import DetectionDataViewSet
 from core.views.detection_object import DetectionObjectViewSet
+from core.views.external_api import (
+    ExternalAPITestView,
+    ExternalAPIUpdateControlStatusView,
+)
 from core.views.geo_commune import GeoCommuneViewSet
 from core.views.geo_custom_zone import GeoCustomZoneViewSet
 from core.views.geo_custom_zone_category import GeoCustomZoneCategoryViewSet
@@ -28,7 +32,6 @@ from core.views.utils import urls as utils_urls
 from django.urls import path
 
 from core.views.user_group import UserGroupViewSet
-from core.views.external_api_test import ExternalAPITestView
 
 router = DefaultRouter()
 router.register("users", UserViewSet, basename="UserViewSet")
@@ -71,6 +74,11 @@ urlpatterns = router.urls
 urlpatterns += [
     path("map-settings/", MapSettingsView.as_view(), name="MapSettingsView"),
     path("external/test/", ExternalAPITestView.as_view(), name="ExternalAPITestView"),
+    path(
+        "external/update-control-status/",
+        ExternalAPIUpdateControlStatusView.as_view(),
+        name="ExternalAPIUpdateControlStatusView",
+    ),
 ]
 
 # statistics

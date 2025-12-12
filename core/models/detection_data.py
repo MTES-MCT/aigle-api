@@ -33,6 +33,7 @@ class DetectionValidationStatus(models.TextChoices):
 
 class DetectionValidationStatusChangeReason(models.TextChoices):
     SITADEL = "SITADEL", "SITADEL"
+    EXTERNAL_API = "EXTERNAL_API", "EXTERNAL_API"
 
 
 class DetectionPrescriptionStatus(models.TextChoices):
