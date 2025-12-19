@@ -69,18 +69,10 @@ class ExternalApiService:
         for detection_object in parcel.detection_objects.all():
             for detection in detection_object.detections.all():
                 detection_data = detection.detection_data
-                detection_data.detection_control_status = control_status
+                detection_data.set_detection_control_status(control_status)
                 detection_data.detection_validation_status_change_reason = (
                     DetectionValidationStatusChangeReason.EXTERNAL_API
                 )
-
-                if (
-                    detection_data.detection_validation_status
-                    == DetectionValidationStatus.DETECTED_NOT_VERIFIED
-                ):
-                    detection_data.detection_validation_status = (
-                        DetectionValidationStatus.SUSPECT
-                    )
 
                 detections_data_to_update.append(detection_data)
 

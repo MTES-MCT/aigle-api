@@ -341,7 +341,7 @@ class Command(BaseCommand):
 
             if linked_detection_same_tileset:
                 log_event(f"Detection already exists in tileset {self.tile_set.name}, id: {
-                      linked_detection_same_tileset.id}. Skipping...")
+                    linked_detection_same_tileset.id}. Skipping...")
                 return
         else:
             linked_detections = DetectionService.get_linked_detections(
@@ -404,14 +404,14 @@ class Command(BaseCommand):
                 detection_object.address = serialized_detection["address"]
                 detection_object.save()
 
-            if not detection_data.detection_control_status:
-                detection_data.detection_control_status = (
-                    linked_detection.detection_data.detection_control_status
-                )
-
             if not detection_data.detection_validation_status:
                 detection_data.detection_validation_status = (
                     linked_detection.detection_data.detection_validation_status
+                )
+
+            if not detection_data.detection_control_status:
+                detection_data.set_detection_control_status(
+                    linked_detection.detection_data.detection_control_status
                 )
         else:
             parcel = (
@@ -449,7 +449,7 @@ class Command(BaseCommand):
             self.detection_objects_to_insert.append(detection_object)
 
             if not detection_data.detection_control_status:
-                detection_data.detection_control_status = (
+                detection_data.set_detection_control_status(
                     DetectionControlStatus.NOT_CONTROLLED
                 )
 
@@ -510,7 +510,7 @@ class Command(BaseCommand):
             )
         else:
             log_event(f"Inserted {
-                  self.total_inserted_detections} detections in total")
+                self.total_inserted_detections} detections in total")
 
         log_event(f"Elapsed time: {datetime.now() - self.start_time}")
 

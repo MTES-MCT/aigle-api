@@ -192,14 +192,13 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             )
             detection_authorization.save()
 
+        detection_control_status = validated_data.pop("detection_control_status", None)
+
         for key, value in validated_data.items():
             setattr(instance, key, value)
 
-        if (
-            instance.detection_validation_status
-            == DetectionValidationStatus.DETECTED_NOT_VERIFIED
-        ):
-            instance.detection_validation_status = DetectionValidationStatus.SUSPECT
+        if detection_control_status:
+            instance.set_detection_control_status(detection_control_status)
 
         instance.user_last_update = user
         instance.save()

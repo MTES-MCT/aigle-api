@@ -140,7 +140,7 @@ class Command(BaseCommand):
                         detection.detection_data.official_report_date = (
                             official_report_date
                         )
-                    detection.detection_data.detection_control_status = (
+                    detection.detection_data.set_detection_control_status(
                         detection_control_status
                     )
 

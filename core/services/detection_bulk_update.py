@@ -2,7 +2,6 @@ from typing import List, Dict, Any, Optional
 from django.contrib.gis.geos import MultiPolygon
 
 from core.models.detection import Detection
-from core.models.detection_data import DetectionValidationStatus
 from core.models.object_type import ObjectType
 from core.permissions.user import UserPermission
 from django.core.exceptions import BadRequest
@@ -39,9 +38,6 @@ class DetectionBulkUpdateService:
                 self._update_detection_data_fields(
                     detection, detection_data_fields_to_update, update_data
                 )
-
-                # Apply business rules for validation status
-                self._apply_validation_status_rules(detection)
 
                 detection.detection_data.user_last_update = self.user
                 detection_datas_to_update.append(detection.detection_data)
@@ -99,20 +95,16 @@ class DetectionBulkUpdateService:
     ) -> None:
         """Update detection data fields with new values."""
         for field in fields_to_update:
+            if field == "detection_control_status":
+                detection.detection_data.set_detection_control_status(
+                    update_data[field]
+                )
+                continue
+
             setattr(
                 detection.detection_data,
                 field,
                 update_data[field],
-            )
-
-    def _apply_validation_status_rules(self, detection: Detection) -> None:
-        """Apply business rules for validation status changes."""
-        if (
-            detection.detection_data.detection_validation_status
-            == DetectionValidationStatus.DETECTED_NOT_VERIFIED
-        ):
-            detection.detection_data.detection_validation_status = (
-                DetectionValidationStatus.SUSPECT
             )
 
     def _perform_bulk_updates(

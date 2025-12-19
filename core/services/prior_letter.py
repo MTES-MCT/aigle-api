@@ -73,7 +73,7 @@ class PriorLetterService:
         detections_to_update = []
         for detection in detection_object.detections.all():
             if detection.detection_data:
-                detection.detection_data.detection_control_status = (
+                detection.detection_data.set_detection_control_status(
                     DetectionControlStatus.PRIOR_LETTER_SENT
                 )
                 detection.detection_data.user_last_update = self.user
