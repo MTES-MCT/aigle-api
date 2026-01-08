@@ -44,7 +44,7 @@ class EndpointSerializer(serializers.Serializer):
         choices=Interest.choices,
         default=Interest.RESOLVE_AN_ISSUE,
     )
-    issue = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
+    issue = serializers.CharField()
     name = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
     job = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)
     phone = serializers.CharField(max_length=DEFAULT_MAX_LENGTH)

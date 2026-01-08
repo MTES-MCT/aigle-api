@@ -83,7 +83,7 @@ def update_control_status(detection_object: DetectionObject, user: User):
     ]:
         return
 
-    detection.detection_data.detection_control_status = (
+    detection.detection_data.set_detection_control_status(
         DetectionControlStatus.PRIOR_LETTER_SENT
     )
     detection.detection_data.save()

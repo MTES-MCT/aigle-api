@@ -62,7 +62,7 @@ class DetectionProcessService:
             detection_to_keep.detection_source = extract_higest_priority_value(
                 detections, "detection_source"
             )
-            detection_to_keep.detection_data.detection_control_status = (
+            detection_to_keep.detection_data.set_detection_control_status(
                 extract_higest_priority_value(
                     detections_data, "detection_control_status"
                 )

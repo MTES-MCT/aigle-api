@@ -75,6 +75,16 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         bases=[HistoriedModelMixin], cascade_delete_history=True
     )
 
+    def set_detection_control_status(self, value: DetectionControlStatus):
+        self.detection_control_status = value
+
+        if (
+            value != DetectionControlStatus.NOT_CONTROLLED
+            and self.detection_validation_status
+            == DetectionValidationStatus.DETECTED_NOT_VERIFIED
+        ):
+            self.detection_validation_status = DetectionValidationStatus.SUSPECT
+
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [
             models.Index(fields=["detection_validation_status"]),
