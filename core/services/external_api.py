@@ -10,7 +10,7 @@ from core.models.geo_commune import GeoCommune
 from core.models.parcel import Parcel
 from django.db.models import Prefetch
 from simple_history.utils import bulk_update_with_history
-from django.core.exceptions import BadRequest
+from rest_framework.exceptions import ValidationError
 
 
 class ExternalApiService:
@@ -26,8 +26,10 @@ class ExternalApiService:
         commune = GeoCommune.objects.filter(iso_code=insee_code).first()
 
         if not commune:
-            raise BadRequest(
-                f"La commune avec le code insee suivant est introuvable: {insee_code}"
+            raise ValidationError(
+                {
+                    "insee_code": f"La commune avec le code insee suivant est introuvable: {insee_code}"
+                }
             )
 
         parcel = (
@@ -55,13 +57,17 @@ class ExternalApiService:
         )
 
         if not parcel:
-            raise BadRequest(
-                f"La parcelle avec les valeurs suivantes est introuvable pour la commune {commune.name}: section {parcel_section}, numéro {parcel_number}"
+            raise ValidationError(
+                {
+                    "parcel_code": f"La parcelle avec les valeurs suivantes est introuvable pour la commune {commune.name}: section {parcel_section}, numéro {parcel_number}"
+                }
             )
 
         if not parcel.detection_objects.count():
-            raise BadRequest(
-                f"La parcelle suivante a été trouvé mais ne contient aucune détection valide: commune {commune.name}, section {parcel_section}, numéro {parcel_number}"
+            raise ValidationError(
+                {
+                    "parcel_code": f"La parcelle suivante a été trouvé mais ne contient aucune détection valide: commune {commune.name}, section {parcel_section}, numéro {parcel_number}"
+                }
             )
 
         detections_data_to_update = []
