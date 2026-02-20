@@ -34,6 +34,7 @@ class LuccaStatHistory(LuccaAnalyticsTable):
     ville: str
     interco: str
     departement: str
+    parcelle: str
 
 
 class LuccaStatLog(LuccaAnalyticsTable):

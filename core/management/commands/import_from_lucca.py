@@ -1,6 +1,14 @@
 from datetime import datetime, date
+import re
+from typing import List, Tuple
+from functools import reduce
+import operator
 from django.core.management.base import BaseCommand, CommandError
-from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
+from core.models.detection_data import (
+    DetectionControlStatus,
+    DetectionValidationStatus,
+    DetectionValidationStatusChangeReason,
+)
 from core.models.parcel import Parcel
 from core.services.lucca_analytics import (
     LuccaAnalyticsDatabaseConnector,
@@ -76,77 +84,149 @@ class Command(BaseCommand):
             order_bys=[OrderBy(field="action_date"), OrderBy(field="id")],
         )
 
-        # for now, we do not have access to parcel info
-        # once we have access, we can continue
-        return
+        nbr_parcels_updated = 0
+        nbr_parcels_not_found = 0
 
         for row in history_rows:
             # get parcel
-            parcel = (
+
+            try:
+                parcels_from_lucca = extract_parcels(parcels_from_lucca=row["parcelle"])
+            except ValueError:
+                log_event(
+                    f'Lucca row parcel has invalid format: {row["parcelle"]}, skipping...'
+                )
+                continue
+
+            parcels = (
                 Parcel.objects.filter(
                     Q(commune__name_normalized=normalize(row["ville"]))
                 )
-                # .filter(
-                #     section=cadastre_letters,
-                #     num_parcel=cadastre_numbers,
-                # )
+                .filter(
+                    reduce(
+                        operator.or_,
+                        [
+                            Q(section=section, num_parcel=num_parcel)
+                            for section, num_parcel in parcels_from_lucca
+                        ],
+                    )
+                )
                 .prefetch_related(
                     "detection_objects",
                     "detection_objects__detections",
                     "detection_objects__detections__detection_data",
                 )
-                .first()
+                .all()
             )
 
-            if not parcel:
-                log_event("Parcel not found")
+            # Check which parcels were not found
+            found_parcels = {(p.section, p.num_parcel) for p in parcels}
+            requested_parcels = set(parcels_from_lucca)
+            not_found = requested_parcels - found_parcels
+
+            if not_found:
+                nbr_parcels_not_found += len(not_found)
+                log_event(
+                    f"Parcels not found: {not_found} (requested: {requested_parcels}, found: {found_parcels})"
+                )
+
+            if not parcels:
+                log_event("No parcels found, skipping...")
                 continue
 
-            for detection_object in parcel.detection_objects.all():
-                detection_control_status = None
-                detection_validation_status = None
+            nbr_parcels_updated += len(parcels)
 
-                # statuts non pris en charge:
-                # Création PV reactualisation
-                # Création décisions de justice
+            for parcel in parcels:
+                for detection_object in parcel.detection_objects.all():
+                    detection_control_status = None
+                    detection_validation_status = None
 
-                if row["action_type"] == "Ouverture dossier":
-                    detection_validation_status = DetectionValidationStatus.SUSPECT
+                    # statuts non pris en charge:
+                    # Création PV reactualisation
+                    # Création décisions de justice
 
-                if row["action_type"] == "Création courrier":
-                    detection_control_status = DetectionControlStatus.PRIOR_LETTER_SENT
+                    if row["action_type"] == "Ouverture dossier":
+                        detection_validation_status = DetectionValidationStatus.SUSPECT
 
-                if row["action_type"] == "Création PV avec natinfs":
-                    detection_control_status = (
-                        DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP
-                    )
-
-                if (
-                    row["action_type"]
-                    == "Création rapport de constatation (PV sans natinfs)"
-                ):
-                    detection_control_status = (
-                        DetectionControlStatus.OBSERVARTION_REPORT_REDACTED
-                    )
-
-                if row["action_type"] == "Clôture dossier avec remise en état":
-                    detection_control_status = DetectionControlStatus.REHABILITATED
-
-                if row["action_type"] in [
-                    "Création contrôle avec droit de visite",
-                    "Création contrôle sans droit visite",
-                ]:
-                    detection_control_status = DetectionControlStatus.CONTROLLED_FIELD
-
-                for detection in detection_object.detections.all():
-                    if detection_validation_status:
-                        detection.detection_data.detection_validation_status = (
-                            detection_validation_status
+                    if row["action_type"] == "Création courrier":
+                        detection_control_status = (
+                            DetectionControlStatus.PRIOR_LETTER_SENT
                         )
 
-                    if detection_control_status:
-                        detection.detection_data.set_detection_control_status(
-                            detection_control_status
+                    if row["action_type"] == "Création PV avec natinfs":
+                        detection_control_status = (
+                            DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP
                         )
 
-                    detection.detection_data.save()
+                    if (
+                        row["action_type"]
+                        == "Création rapport de constatation (PV sans natinfs)"
+                    ):
+                        detection_control_status = (
+                            DetectionControlStatus.OBSERVARTION_REPORT_REDACTED
+                        )
+
+                    if row["action_type"] == "Clôture dossier avec remise en état":
+                        detection_control_status = DetectionControlStatus.REHABILITATED
+
+                    if row["action_type"] in [
+                        "Création contrôle avec droit de visite",
+                        "Création contrôle sans droit visite",
+                    ]:
+                        detection_control_status = (
+                            DetectionControlStatus.CONTROLLED_FIELD
+                        )
+
+                    for detection in detection_object.detections.all():
+                        if (
+                            not detection_validation_status
+                            and not detection_control_status
+                        ):
+                            continue
+
+                        detection.detection_data.detection_validation_status_change_reason = DetectionValidationStatusChangeReason.IMPORT_FROM_LUCCA
+
+                        if detection_validation_status:
+                            detection.detection_data.detection_validation_status = (
+                                detection_validation_status
+                            )
+
+                        if detection_control_status:
+                            detection.detection_data.set_detection_control_status(
+                                detection_control_status
+                            )
+
+                        detection.detection_data.save()
+
+        log_event(
+            f"finished, nbr parcels updated: {nbr_parcels_updated}, nbr not found: {nbr_parcels_not_found}"
+        )
+
+
+# utils
+
+PARCEL_LUCCA_SEPARATOR = ","
+
+
+def extract_parcels(parcels_from_lucca: str) -> List[Tuple[str, int]]:
+    """
+    parcelle_from_lucca: format "OF0888,OF0886,OF0486" or "OF0888, OF0886, OF0486"
+    """
+
+    if PARCEL_LUCCA_SEPARATOR not in parcels_from_lucca:
+        parcels_str = [parcels_from_lucca]
+    else:
+        parcels_str = list(
+            PARCEL_LUCCA_SEPARATOR.split(parcels_from_lucca.replace(" ", ""))
+        )
+
+    return [split_leading_letters(parcel_str) for parcel_str in parcels_str]
+
+
+def split_leading_letters(text: str) -> Tuple[str, int]:
+    match = re.match(r"^([a-zA-Z]+)(.*)", text, re.DOTALL)
+
+    if match is None:
+        raise ValueError
+
+    return (match.group(1), int(match.group(2)))
