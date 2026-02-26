@@ -1,14 +1,17 @@
 [Unit]
 Description=Celery Service
-After=network.target
+After=network.target redis-server.service
+Requires=redis-server.service
 
 [Service]
+EnvironmentFile=/home/ubuntu/aigle-api/.env
 Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/aigle-api
-ExecStart=/bin/bash -c 'cd /home/ubuntu/aigle-api && set -a && source .env && set +a && exec venv/bin/celery -A aigle worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -Q sequential_commands'
+ExecStart=/home/ubuntu/aigle-api/venv/bin/celery -A aigle worker --loglevel=info --concurrency=1 --prefetch-multiplier=1 -Q sequential_commands
 Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
