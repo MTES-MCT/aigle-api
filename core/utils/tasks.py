@@ -2,13 +2,16 @@ from io import StringIO
 from celery import shared_task
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from typing import Dict, Any, Union
+from typing import Dict, Any, Optional, Union
 from core.models.command_run import CommandRun, CommandRunStatus
 
 
 @shared_task(bind=True)
 def run_management_command(
-    self, command_name: str, command_run_uuid: str = None, *args: Any, **kwargs: Any
+    self,
+    command_name: str,
+    command_run_uuid: Optional[str] = None,
+    command_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Union[str, Any]]:
     task_id = self.request.id
 
@@ -28,7 +31,9 @@ def run_management_command(
 
     try:
         output = StringIO()
-        call_command(command_name, *args, stdout=output, stderr=output, **kwargs)
+        call_command(
+            command_name, stdout=output, stderr=output, **(command_kwargs or {})
+        )
 
         if command_run:
             command_run.status = CommandRunStatus.SUCCESS
@@ -63,7 +68,10 @@ def run_management_command(
 
 @shared_task(bind=True)
 def run_custom_command(
-    self, command_name: str, command_run_uuid: str = None, **options: Any
+    self,
+    command_name: str,
+    command_run_uuid: Optional[str] = None,
+    command_kwargs: Optional[Dict[str, Any]] = None,
 ) -> str:
     task_id = self.request.id
 
@@ -83,7 +91,9 @@ def run_custom_command(
 
     output = StringIO()
     try:
-        call_command(command_name, stdout=output, stderr=output, **options)
+        call_command(
+            command_name, stdout=output, stderr=output, **(command_kwargs or {})
+        )
 
         if command_run:
             command_run.status = CommandRunStatus.SUCCESS

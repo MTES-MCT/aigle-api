@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from celery.result import AsyncResult
 from core.models.command_run import CommandRun, CommandRunStatus
 from core.utils.tasks import run_management_command, run_custom_command
@@ -9,7 +9,7 @@ class CommandAsyncService:
     """Service for handling asynchronous command execution."""
 
     @staticmethod
-    def run_command_async(command_name: str, *args: Any, **kwargs: Any) -> str:
+    def run_command_async(command_name: str, **kwargs: Any) -> str:
         """Run Django management command asynchronously."""
         # Generate unique temporary task_id to avoid constraint violation
         temp_task_id = f"pending-{str(uuid.uuid4())[:8]}"
@@ -18,13 +18,14 @@ class CommandAsyncService:
         command_run = CommandRun.objects.create(
             command_name=command_name,
             task_id=temp_task_id,
-            arguments={"args": args, "kwargs": kwargs},
+            arguments={"kwargs": kwargs},
             status=CommandRunStatus.PENDING,
         )
 
-        # Pass the UUID to the task so it can find and update the record
-        task = run_management_command.delay(
-            command_name, str(command_run.uuid), *args, **kwargs
+        # Pass the UUID and command kwargs as explicit parameters
+        # to avoid Celery *args serialization issues
+        task = run_management_command.delay(  # type: ignore[operator]
+            command_name, str(command_run.uuid), kwargs
         )
 
         return task.id
@@ -43,8 +44,9 @@ class CommandAsyncService:
             status=CommandRunStatus.PENDING,
         )
 
-        # Pass the UUID to the task so it can find and update the record
-        task = run_custom_command.delay(command_name, str(command_run.uuid), **options)
+        # Pass the UUID and command kwargs as explicit parameters
+        # to avoid Celery serialization issues
+        task = run_custom_command.delay(command_name, str(command_run.uuid), options)  # type: ignore[operator]
 
         return task.id
 
@@ -112,7 +114,9 @@ class CommandAsyncService:
 
     @staticmethod
     def get_command_runs(
-        limit: int = None, offset: int = None, statuses: List[str] = None
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        statuses: Optional[List[str]] = None,
     ) -> Tuple[List[CommandRun], int]:
         """Get CommandRun instances with optional filtering and pagination."""
         queryset = CommandRun.objects.all().order_by("-created_at")
@@ -122,7 +126,8 @@ class CommandAsyncService:
 
         count = queryset.count()
         if limit:
-            queryset = queryset[offset : offset + limit]
+            start = offset or 0
+            queryset = queryset[start : start + limit]
         return list(queryset), count
 
     @staticmethod
