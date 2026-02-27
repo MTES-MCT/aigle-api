@@ -1,8 +1,11 @@
+import logging
 from typing import Any, Dict, List, Optional, Tuple, Union
 from celery.result import AsyncResult
 from core.models.command_run import CommandRun, CommandRunStatus
 from core.utils.tasks import run_management_command, run_custom_command
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 class CommandAsyncService:
@@ -11,44 +14,47 @@ class CommandAsyncService:
     @staticmethod
     def run_command_async(command_name: str, **kwargs: Any) -> str:
         """Run Django management command asynchronously."""
-        # Generate unique temporary task_id to avoid constraint violation
-        temp_task_id = f"pending-{str(uuid.uuid4())[:8]}"
+        command_run_uuid = str(uuid.uuid4())
 
-        # Create CommandRun record first
         command_run = CommandRun.objects.create(
             command_name=command_name,
-            task_id=temp_task_id,
+            task_id=command_run_uuid,
             arguments={"kwargs": kwargs},
             status=CommandRunStatus.PENDING,
         )
 
-        # Pass the UUID and command kwargs as explicit parameters
-        # to avoid Celery *args serialization issues
-        task = run_management_command.delay(  # type: ignore[operator]
-            command_name, str(command_run.uuid), kwargs
+        logger.info(
+            "run_command_async: command_name=%s, kwargs=%s, uuid=%s",
+            command_name,
+            kwargs,
+            command_run_uuid,
         )
 
-        return task.id
+        run_management_command.apply_async(
+            args=[command_name, str(command_run.uuid), kwargs],
+            task_id=command_run_uuid,
+        )
+
+        return command_run_uuid
 
     @staticmethod
     def run_custom_command_async(command_name: str, **options: Any) -> str:
         """Run custom Django command asynchronously."""
-        # Generate unique temporary task_id to avoid constraint violation
-        temp_task_id = f"pending-{str(uuid.uuid4())[:8]}"
+        command_run_uuid = str(uuid.uuid4())
 
-        # Create CommandRun record first
         command_run = CommandRun.objects.create(
             command_name=command_name,
-            task_id=temp_task_id,
+            task_id=command_run_uuid,
             arguments={"kwargs": options},
             status=CommandRunStatus.PENDING,
         )
 
-        # Pass the UUID and command kwargs as explicit parameters
-        # to avoid Celery serialization issues
-        task = run_custom_command.delay(command_name, str(command_run.uuid), options)  # type: ignore[operator]
+        run_custom_command.apply_async(
+            args=[command_name, str(command_run.uuid), options],
+            task_id=command_run_uuid,
+        )
 
-        return task.id
+        return command_run_uuid
 
     @staticmethod
     def get_task_status(task_id: str) -> Dict[str, Union[str, Any, None]]:

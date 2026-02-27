@@ -15,19 +15,11 @@ def run_management_command(
 ) -> Dict[str, Union[str, Any]]:
     task_id = self.request.id
 
-    # Find CommandRun by UUID if provided, otherwise fallback to task_id
-    if command_run_uuid:
-        command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
-        if command_run:
-            # Update with the actual Celery task_id
-            command_run.task_id = task_id
-            command_run.status = CommandRunStatus.RUNNING
-            command_run.save()
-    else:
-        command_run = CommandRun.objects.filter(task_id=task_id).first()
-        if command_run:
-            command_run.status = CommandRunStatus.RUNNING
-            command_run.save()
+    # task_id == command_run.uuid (set via apply_async)
+    command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
+    if command_run:
+        command_run.status = CommandRunStatus.RUNNING
+        command_run.save()
 
     try:
         output = StringIO()
@@ -73,21 +65,11 @@ def run_custom_command(
     command_run_uuid: Optional[str] = None,
     command_kwargs: Optional[Dict[str, Any]] = None,
 ) -> str:
-    task_id = self.request.id
-
-    # Find CommandRun by UUID if provided, otherwise fallback to task_id
-    if command_run_uuid:
-        command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
-        if command_run:
-            # Update with the actual Celery task_id
-            command_run.task_id = task_id
-            command_run.status = CommandRunStatus.RUNNING
-            command_run.save()
-    else:
-        command_run = CommandRun.objects.filter(task_id=task_id).first()
-        if command_run:
-            command_run.status = CommandRunStatus.RUNNING
-            command_run.save()
+    # task_id == command_run.uuid (set via apply_async)
+    command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
+    if command_run:
+        command_run.status = CommandRunStatus.RUNNING
+        command_run.save()
 
     output = StringIO()
     try:
