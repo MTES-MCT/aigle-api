@@ -9,7 +9,10 @@ from django.db.models import Value
 from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.tile_set import TileSet, TileSetScheme, TileSetStatus, TileSetType
 from core.services.tile_set import TileSetService
+from rest_framework import status
+
 from core.serializers.tile_set import (
+    TileSetBulkCreateInputSerializer,
     TileSetDetailSerializer,
     TileSetInputSerializer,
     TileSetMinimalSerializer,
@@ -48,6 +51,9 @@ class TileSetViewSet(BaseViewSetMixin[TileSet]):
     permission_classes = [SuperAdminRoleModifyActionPermission]
 
     def get_serializer_class(self):
+        if self.action == "bulk_create":
+            return TileSetBulkCreateInputSerializer
+
         if self.action in ["create", "partial_update", "update"]:
             return TileSetInputSerializer
 
@@ -61,6 +67,16 @@ class TileSetViewSet(BaseViewSetMixin[TileSet]):
         queryset = queryset.annotate(detections_count=Value(0))
 
         return queryset
+
+    @action(methods=["post"], detail=False, url_path="bulk-create")
+    def bulk_create(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instances = serializer.save()
+        for instance in instances:
+            instance.detections_count = 0
+        output_serializer = TileSetSerializer(instances, many=True)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED)
 
     @action(methods=["get"], detail=False, url_path="last-from-coordinates")
     def get_from_coordinates(self, request):
