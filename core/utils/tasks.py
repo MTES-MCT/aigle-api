@@ -1,9 +1,12 @@
+import logging
 from io import StringIO
 from celery import shared_task
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from typing import Dict, Any, Optional, Union
 from core.models.command_run import CommandRun, CommandRunStatus
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True)
@@ -14,6 +17,13 @@ def run_management_command(
     command_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Union[str, Any]]:
     task_id = self.request.id
+
+    logger.info(
+        "run_management_command: command_name=%s, command_run_uuid=%s, command_kwargs=%s",
+        command_name,
+        command_run_uuid,
+        command_kwargs,
+    )
 
     # task_id == command_run.uuid (set via apply_async)
     command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
@@ -65,6 +75,13 @@ def run_custom_command(
     command_run_uuid: Optional[str] = None,
     command_kwargs: Optional[Dict[str, Any]] = None,
 ) -> str:
+    logger.info(
+        "run_custom_command: command_name=%s, command_run_uuid=%s, command_kwargs=%s",
+        command_name,
+        command_run_uuid,
+        command_kwargs,
+    )
+
     # task_id == command_run.uuid (set via apply_async)
     command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
     if command_run:
