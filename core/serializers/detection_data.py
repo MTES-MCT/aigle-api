@@ -155,7 +155,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             or instance.detection_control_status
         )
 
-        # allow update official_report_date only if detection_control_status isOFFICIAL_REPORT_DRAWN_UP
+        # allow update official_report_date only if detection_control_status is OFFICIAL_REPORT_DRAWN_UP
         if detection_control_status != DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP:
             validated_data.pop("official_report_date", None)
 
