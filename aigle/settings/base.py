@@ -225,7 +225,7 @@ CELERY_WORKER_SEND_TASK_EVENTS = True  # Enable task events for monitoring
 CELERY_TASK_RESULT_EXPIRES = 3600  # Keep task results for 1 hour
 
 # Task routing for sequential execution
-CELERY_ROUTES = {
+CELERY_TASK_ROUTES = {
     "core.utils.tasks.run_management_command": {"queue": "sequential_commands"},
     "core.utils.tasks.run_custom_command": {"queue": "sequential_commands"},
 }

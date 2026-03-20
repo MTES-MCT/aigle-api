@@ -22,7 +22,7 @@ redis:
 services: db redis
 
 celery:
-	celery -A aigle worker --loglevel=info
+	celery -A aigle worker --loglevel=info -Q celery,sequential_commands
 
 test:
 	python3 manage.py test --settings=aigle.settings.test

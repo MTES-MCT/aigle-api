@@ -79,6 +79,12 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     def set_detection_control_status(self, value: DetectionControlStatus):
         self.detection_control_status = value
 
+        # un-prescribe when detection_control_status is OFFICIAL_REPORT_DRAWN_UP
+        if value == DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP:
+            self.detection_prescription_status = (
+                DetectionPrescriptionStatus.NOT_PRESCRIBED
+            )
+
         if (
             value != DetectionControlStatus.NOT_CONTROLLED
             and self.detection_validation_status

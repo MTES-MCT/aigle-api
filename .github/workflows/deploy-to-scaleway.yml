@@ -30,6 +30,10 @@ jobs:
 
             cd /home/ubuntu/aigle-api || exit 1
 
+            # Stop workers before updating code to avoid running tasks with stale code
+            sudo systemctl stop celery || true
+            sudo systemctl stop gunicorn_aigle || true
+
             # Fetch latest code
             git fetch origin ${{ github.ref_name }} || exit 1
             git reset --hard origin/${{ github.ref_name }} || exit 1
