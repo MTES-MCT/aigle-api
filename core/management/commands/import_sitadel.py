@@ -81,7 +81,7 @@ class Command(BaseCommand):
         filter_dpts = options["filter_dpts"]
 
         file_csv = open(file_csv_path, mode="r")
-        file_csv_reader = csv.DictReader(file_csv)
+        file_csv_reader = csv.DictReader(file_csv, delimiter=";")
 
         while True:
             csv_data = self.extract_data_from_csv(

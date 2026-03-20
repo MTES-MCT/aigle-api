@@ -61,20 +61,47 @@ class UserGroupInputSerializer(
         child=serializers.UUIDField(), required=False, allow_empty=True, write_only=True
     )
 
-    def create(self, validated_data):
+    def _extract_collectivities(self, validated_data):
         collectivities = extract_collectivities(validated_data)
+        if not collectivities:
+            raise serializers.ValidationError(
+                {
+                    "communes_uuids": [
+                        "Une collectivité au moins doit être spécifiée."
+                    ],
+                    "departments_uuids": [
+                        "Une collectivité au moins doit être spécifiée."
+                    ],
+                    "regions_uuids": ["Une collectivité au moins doit être spécifiée."],
+                }
+            )
+        return collectivities
 
+    def _extract_geo_custom_zones(self, validated_data):
         geo_custom_zones_uuids = validated_data.pop("geo_custom_zones_uuids", None)
-        geo_custom_zones = (
-            get_objects(uuids=geo_custom_zones_uuids, model=GeoCustomZone) or []
-        )
+        return get_objects(uuids=geo_custom_zones_uuids, model=GeoCustomZone) or []
 
+    def _extract_object_type_categories(self, validated_data):
         object_type_categories_uuids = validated_data.pop(
             "object_type_categories_uuids", None
         )
         object_type_categories = get_objects(
             uuids=object_type_categories_uuids, model=ObjectTypeCategory
         )
+        if not object_type_categories:
+            raise serializers.ValidationError(
+                {
+                    "object_type_categories_uuids": [
+                        "Une thématique au moins doit être spécifiée"
+                    ],
+                }
+            )
+        return object_type_categories
+
+    def create(self, validated_data):
+        collectivities = self._extract_collectivities(validated_data)
+        geo_custom_zones = self._extract_geo_custom_zones(validated_data)
+        object_type_categories = self._extract_object_type_categories(validated_data)
 
         instance = UserGroup(
             **validated_data,
@@ -82,39 +109,22 @@ class UserGroupInputSerializer(
 
         instance.save()
 
-        if collectivities:
-            instance.geo_zones.set(collectivities)
-
-        if geo_custom_zones:
-            instance.geo_custom_zones.set(geo_custom_zones)
-
-        if object_type_categories:
-            instance.object_type_categories.set(object_type_categories)
+        instance.geo_zones.set(collectivities)
+        instance.geo_custom_zones.set(geo_custom_zones)
+        instance.object_type_categories.set(object_type_categories)
 
         instance.save()
 
         return instance
 
     def update(self, instance: UserGroup, validated_data):
-        geo_custom_zones_uuids = validated_data.pop("geo_custom_zones_uuids", None)
-        geo_custom_zones = (
-            get_objects(uuids=geo_custom_zones_uuids, model=GeoCustomZone) or []
-        )
-
-        collectivities = extract_collectivities(validated_data)
-
-        object_type_categories_uuids = validated_data.pop(
-            "object_type_categories_uuids", None
-        )
-        object_type_categories = get_objects(
-            uuids=object_type_categories_uuids, model=ObjectTypeCategory
-        )
+        collectivities = self._extract_collectivities(validated_data)
+        geo_custom_zones = self._extract_geo_custom_zones(validated_data)
+        object_type_categories = self._extract_object_type_categories(validated_data)
 
         instance.geo_zones.set(collectivities)
         instance.geo_custom_zones.set(geo_custom_zones)
-
-        if object_type_categories is not None:
-            instance.object_type_categories.set(object_type_categories)
+        instance.object_type_categories.set(object_type_categories)
 
         for key, value in validated_data.items():
             setattr(instance, key, value)
