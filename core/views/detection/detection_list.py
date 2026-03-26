@@ -326,39 +326,25 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
     queryset = Detection.objects
     pagination_class = CachedCountLimitOffsetPagination
 
-    def list(self, request, *args, **kwargs):
+    def get_filtered_queryset(self):
         queryset = self.filter_queryset(self.get_queryset())
 
-        page = self.paginate_queryset(queryset)
+        if self.action == "download":
+            queryset = get_list_values_list(
+                queryset,
+                "detection_object__id",
+                "detection_object__uuid",
+                "detection_object__commune__name",
+                "detection_object__object_type__name",
+                "detection_object__parcel__section",
+                "detection_object__parcel__num_parcel",
+                "score",
+                "detection_source",
+                "detection_data__detection_control_status",
+                "detection_data__detection_prescription_status",
+                "detection_data__detection_validation_status",
+            )
 
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-
-        serializer = self.get_serializer(queryset, many=True)
-
-        return Response(serializer.data)
-
-    @action(methods=["get"], detail=False, url_path="download")
-    def download(self, request):
-        params_serializer = DownloadParamsSerializer(data=request.GET)
-        params_serializer.is_valid(raise_exception=True)
-
-        queryset = self.filter_queryset(self.get_queryset())
-        queryset = get_list_values_list(
-            queryset,
-            "detection_object__id",
-            "detection_object__uuid",
-            "detection_object__commune__name",
-            "detection_object__object_type__name",
-            "detection_object__parcel__section",
-            "detection_object__parcel__num_parcel",
-            "score",
-            "detection_source",
-            "detection_data__detection_control_status",
-            "detection_data__detection_prescription_status",
-            "detection_data__detection_validation_status",
-        )
         tile_sets_subquery = (
             DetectionObject.objects.filter(id=OuterRef("detection_object__id"))
             .annotate(
@@ -385,9 +371,32 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
 
         queryset = queryset.annotate(
             tile_sets=Subquery(tile_sets_subquery),
-            custom_zones=Subquery(custom_zones_subquery),
+            geo_custom_zones=Subquery(custom_zones_subquery),
             geometry_center=Centroid("geometry"),
         )
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_filtered_queryset()
+
+        page = self.paginate_queryset(queryset)
+
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(serializer.data)
+
+    @action(methods=["get"], detail=False, url_path="download")
+    def download(self, request):
+        params_serializer = DownloadParamsSerializer(data=request.GET)
+        params_serializer.is_valid(raise_exception=True)
+
+        queryset = self.get_filtered_queryset()
+
         # safety to not consume too much memory and kill the api
         queryset = queryset[:DOWNLOAD_LIMIT_ROWS]
 
