@@ -149,7 +149,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             x=x,
             y=y,
             user=request.user,
-            tile_set_types=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            tile_set=tile_set,
         )
 
         if detection_objects:

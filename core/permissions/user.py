@@ -138,6 +138,9 @@ class UserPermission(
                 total_geo_union=total_geometry
             ).get("total_geo_union")
 
+        if accessible_geometry is None:
+            return None
+
         return None if accessible_geometry.empty else accessible_geometry
 
     def _has_rights(
