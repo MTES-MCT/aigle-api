@@ -5,7 +5,7 @@ from core.models.user import User, UserRole
 from core.permissions.base import BasePermission
 from core.repository.geo_custom_zone import GeoCustomZoneRepository
 
-from django.db.models import QuerySet, Prefetch
+from django.db.models import Q, QuerySet, Prefetch
 
 
 class GeoCustomZonePermission(
@@ -57,3 +57,19 @@ class GeoCustomZonePermission(
 
     def get_parcel_prefetch(self):
         return self._get_prefetch()
+
+    def get_geo_custom_zones_q(self, lookup_root: str = "") -> Q:
+        q = Q(
+            **{
+                f"{lookup_root}geo_custom_zones__geo_custom_zone_status": GeoCustomZoneStatus.ACTIVE
+            }
+        )
+
+        if self.user.user_role != UserRole.SUPER_ADMIN:
+            q &= Q(
+                **{
+                    f"{lookup_root}geo_custom_zones__user_groups_custom_geo_zones__user_user_groups__user": self.user.id
+                }
+            )
+
+        return q

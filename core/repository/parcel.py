@@ -83,6 +83,7 @@ class ParcelRepository(
         filter_detections_count_gt: Optional[int] = None,
         with_commune: bool = False,
         with_zone_names: bool = False,
+        filter_geo_custom_zones: Optional[Q] = None,
         with_detections_count: bool = False,
         with_detections_objects_types: bool = False,
         *args,
@@ -143,6 +144,7 @@ class ParcelRepository(
         queryset = self._annotate_zone_names(
             queryset=queryset,
             with_zone_names=with_zone_names,
+            filter_geo_custom_zones=filter_geo_custom_zones,
         )
         queryset = self._annotate_detections_count(
             queryset=queryset,
@@ -183,9 +185,15 @@ class ParcelRepository(
     def _annotate_zone_names(
         queryset: QuerySet[Parcel],
         with_zone_names: bool = False,
+        filter_geo_custom_zones: Optional[Q] = None,
     ) -> QuerySet[Parcel]:
         if not with_zone_names:
             return queryset
+
+        zone_names_filter = models.Q(geo_custom_zones__isnull=False)
+
+        if filter_geo_custom_zones is not None:
+            zone_names_filter &= filter_geo_custom_zones
 
         queryset = queryset.annotate(
             zone_names=ArrayAgg(
@@ -194,7 +202,7 @@ class ParcelRepository(
                     "geo_custom_zones__name",
                 ),
                 distinct=True,
-                filter=models.Q(geo_custom_zones__isnull=False),
+                filter=zone_names_filter,
             ),
         )
 

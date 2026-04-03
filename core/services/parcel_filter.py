@@ -3,6 +3,7 @@ from django.db.models import QuerySet
 
 from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
 from core.models.tile_set import TileSetType, TileSetStatus
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
 from core.permissions.tile_set import TileSetPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
@@ -61,6 +62,9 @@ class ParcelFilterService:
 
         if with_details:
             filter_args["with_zone_names"] = True
+            filter_args["filter_geo_custom_zones"] = GeoCustomZonePermission(
+                user=self.user
+            ).get_geo_custom_zones_q()
             filter_args["with_detections_count"] = True
             filter_args["with_detections_objects_types"] = True
 

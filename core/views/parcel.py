@@ -19,6 +19,7 @@ from core.serializers.parcel import (
     ParcelSerializer,
     ParcelOverviewSerializer,
 )
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.services.parcel_filter import ParcelFilterService
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 from rest_framework.response import Response
@@ -137,6 +138,15 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
             filter_params=filter_params,
             filter_has_detections=True,
             with_details=True,
+        )
+
+        geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
+            GeoCustomZonePermission(user=self.request.user).get_parcel_prefetch()
+        )
+
+        queryset = queryset.prefetch_related(
+            geo_custom_zones_prefetch,
+            geo_custom_zones_category_prefetch,
         )
 
         queryset = queryset.distinct()
