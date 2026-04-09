@@ -4,7 +4,7 @@ from django.contrib.gis.geos import Point
 
 from core.models.detection_object import DetectionObject
 from core.models.detection_data import DetectionValidationStatus
-from core.models.tile_set import TileSetType
+from core.models.tile_set import TileSet, TileSetType
 from core.permissions.tile_set import TileSetPermission
 from core.services.prescription import PrescriptionService
 from core.permissions.user import UserPermission
@@ -15,21 +15,30 @@ class DetectionObjectService:
 
     @staticmethod
     def find_detections_by_coordinates(
-        x: float, y: float, user, tile_set_types: Optional[List[TileSetType]] = None
+        x: float,
+        y: float,
+        user,
+        tile_set: Optional[TileSet] = None,
+        tile_set_types: Optional[List[TileSetType]] = None,
     ) -> List[DetectionObject]:
         """Find detection objects at given coordinates with permission checks."""
         point = Point(x, y)
 
-        # Apply user group permissions
         detection_objects = DetectionObject.objects.filter(
             detections__geometry__intersects=point
         )
 
-        # Apply tile set type filters if specified
+        if tile_set:
+            detection_objects = detection_objects.filter(
+                detections__tile_set__uuid=tile_set.uuid
+            )
+
         if tile_set_types:
             detection_objects = detection_objects.filter(
                 detections__tile_set__tile_set_type__in=tile_set_types
-            ).distinct()
+            )
+
+        detection_objects = detection_objects.order_by("-detections__score").distinct()
 
         return list(detection_objects)
 
@@ -39,6 +48,7 @@ class DetectionObjectService:
     ) -> Optional[Dict[str, Any]]:
         """Get the user group of the last user who updated this detection object."""
         from core.services.detection import DetectionService
+        from core.serializers.user_group import UserGroupSerializer
 
         most_recent_detection = DetectionService.get_most_recent_detection(
             detection_object=detection_object
@@ -51,18 +61,16 @@ class DetectionObjectService:
         if not detection_data.user_last_update:
             return None
 
-        user_user_group = detection_data.user_last_update.user_user_groups.order_by(
-            "created_at"
-        ).first()
+        user_user_group = (
+            detection_data.user_last_update.user_user_groups.order_by("created_at")
+            .all()
+            .first()
+        )
 
         if not user_user_group:
             return None
 
-        return {
-            "id": user_user_group.user_group.id,
-            "uuid": str(user_user_group.user_group.uuid),
-            "name": user_user_group.user_group.name,
-        }
+        return UserGroupSerializer(user_user_group.user_group).data
 
     @staticmethod
     def get_filtered_detections_queryset(

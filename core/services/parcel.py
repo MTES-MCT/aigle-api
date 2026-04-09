@@ -5,8 +5,9 @@ from django.db.models.query import QuerySet
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
 from core.models.parcel import Parcel
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
-from core.repository.parcel import ParcelRepository
+from core.repository.parcel import DetectionFilter, ParcelRepository
 from core.utils.analytic_log import create_log
 
 if TYPE_CHECKING:
@@ -20,12 +21,36 @@ class ParcelService:
     def get_parcel_detail(uuid: str, user: "User") -> Optional[Parcel]:
         """Get parcel detail with permissions check."""
         collectivity_filter = UserPermission(user=user).get_collectivity_filter()
+        user_permission = UserPermission(user)
+        object_types_with_status = user_permission.get_user_object_types_with_status()
+        filter_geo_custom_zones = GeoCustomZonePermission(
+            user=user
+        ).get_geo_custom_zones_q()
 
         repo = ParcelRepository()
         return repo.get(
             filter_uuid_in=[uuid],
             filter_collectivities=collectivity_filter,
-            with_detections=True,
+            filter_detection=DetectionFilter(
+                filter_detection_validation_status_in=[
+                    DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+                    DetectionValidationStatus.SUSPECT,
+                ],
+                filter_object_type_uuid_in=[
+                    str(object_type.uuid) for object_type, _ in object_types_with_status
+                ],
+                filter_detection_control_status_in=[
+                    DetectionControlStatus.NOT_CONTROLLED,
+                    DetectionControlStatus.CONTROLLED_FIELD,
+                    DetectionControlStatus.PRIOR_LETTER_SENT,
+                    DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+                    DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
+                    DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+                ],
+                filter_prescribed=False,
+            ),
+            filter_geo_custom_zones=filter_geo_custom_zones,
+            with_detail_prefetch=True,
             with_commune=True,
         )
 
@@ -166,24 +191,21 @@ class ParcelService:
 
     @staticmethod
     def get_parcel_custom_geo_zones(parcel: Parcel) -> List[Dict[str, Any]]:
-        """Get custom geo zones for a parcel with reconciliation."""
+        """Get custom geo zones for a parcel with reconciliation.
+
+        Uses prefetched data from detection_objects when available.
+        """
         from core.serializers.utils.custom_zones import (
             reconciliate_custom_zones_with_sub,
         )
 
-        # Collect geo custom zones from all detection objects
+        # Collect geo custom zones and sub custom zones from all detection objects
         geo_custom_zones_set = set()
-        for detection_obj in parcel.detection_objects.all():
-            geo_custom_zones_set.update(
-                detection_obj.geo_custom_zones.defer("geometry").all()
-            )
-
-        # Collect sub custom zones
         sub_custom_zones_set = set()
+
         for detection_obj in parcel.detection_objects.all():
-            sub_custom_zones_set.update(
-                detection_obj.geo_sub_custom_zones.defer("geometry").all()
-            )
+            geo_custom_zones_set.update(detection_obj.geo_custom_zones.all())
+            sub_custom_zones_set.update(detection_obj.geo_sub_custom_zones.all())
 
         return reconciliate_custom_zones_with_sub(
             custom_zones=list(geo_custom_zones_set),
