@@ -5,7 +5,7 @@ from django.db import models
 
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models.functions import Coalesce
-from core.models.detection import DetectionSource
+from core.models.detection import Detection, DetectionSource
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionPrescriptionStatus,
@@ -86,6 +86,7 @@ class ParcelRepository(
         filter_geo_custom_zones: Optional[Q] = None,
         with_detections_count: bool = False,
         with_detections_objects_types: bool = False,
+        with_detail_prefetch: bool = False,
         *args,
         **kwargs,
     ) -> QuerySet[Parcel]:
@@ -140,6 +141,7 @@ class ParcelRepository(
         queryset = self._annotate_commune(
             queryset=queryset,
             with_commune=with_commune,
+            with_commune_geometry=with_detail_prefetch,
         )
         queryset = self._annotate_zone_names(
             queryset=queryset,
@@ -157,6 +159,11 @@ class ParcelRepository(
             with_detections_objects_types=with_detections_objects_types,
             filter_detection=filter_detection,
         )
+        queryset = self._annotate_detail_prefetch(
+            queryset=queryset,
+            with_detail_prefetch=with_detail_prefetch,
+            filter_detection=filter_detection,
+        )
 
         # custom filters
 
@@ -171,13 +178,16 @@ class ParcelRepository(
     def _annotate_commune(
         queryset: QuerySet[Parcel],
         with_commune: bool = False,
+        with_commune_geometry: bool = False,
     ) -> QuerySet[Parcel]:
         if not with_commune:
             return queryset
 
         # Use select_related for ForeignKey relationship for better performance
         queryset = queryset.select_related("commune")
-        queryset = queryset.defer("commune__geometry")
+
+        if not with_commune_geometry:
+            queryset = queryset.defer("commune__geometry")
 
         return queryset
 
@@ -385,6 +395,45 @@ class ParcelRepository(
                 .select_related("object_type")
                 .distinct(),
             )
+        )
+
+        return queryset
+
+    @staticmethod
+    def _annotate_detail_prefetch(
+        queryset: QuerySet[Parcel],
+        with_detail_prefetch: bool = False,
+        filter_detection: Optional[DetectionFilter] = None,
+    ) -> QuerySet[Parcel]:
+        if not with_detail_prefetch:
+            return queryset
+
+        detection_object_filter_q = ParcelRepository._build_detection_object_filter_q(
+            filter_detection
+        )
+
+        queryset = queryset.prefetch_related(
+            Prefetch(
+                "detection_objects",
+                queryset=DetectionObject.objects.filter(detection_object_filter_q)
+                .select_related("object_type")
+                .prefetch_related(
+                    Prefetch(
+                        "detections",
+                        queryset=Detection.objects.select_related(
+                            "detection_data",
+                            "tile",
+                            "tile_set",
+                        ).prefetch_related(
+                            "detection_data__detection_authorizations",
+                        ),
+                    ),
+                    "geo_custom_zones__geo_custom_zone_category",
+                    "geo_custom_zones__sub_custom_zones",
+                    "geo_sub_custom_zones",
+                )
+                .distinct(),
+            ),
         )
 
         return queryset
