@@ -5,8 +5,9 @@ from django.db.models.query import QuerySet
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
 from core.models.parcel import Parcel
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
-from core.repository.parcel import ParcelRepository
+from core.repository.parcel import DetectionFilter, ParcelRepository
 from core.utils.analytic_log import create_log
 
 if TYPE_CHECKING:
@@ -20,11 +21,35 @@ class ParcelService:
     def get_parcel_detail(uuid: str, user: "User") -> Optional[Parcel]:
         """Get parcel detail with permissions check."""
         collectivity_filter = UserPermission(user=user).get_collectivity_filter()
+        user_permission = UserPermission(user)
+        object_types_with_status = user_permission.get_user_object_types_with_status()
+        filter_geo_custom_zones = GeoCustomZonePermission(
+            user=user
+        ).get_geo_custom_zones_q()
 
         repo = ParcelRepository()
         return repo.get(
             filter_uuid_in=[uuid],
             filter_collectivities=collectivity_filter,
+            filter_detection=DetectionFilter(
+                filter_detection_validation_status_in=[
+                    DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+                    DetectionValidationStatus.SUSPECT,
+                ],
+                filter_object_type_uuid_in=[
+                    str(object_type.uuid) for object_type, _ in object_types_with_status
+                ],
+                filter_detection_control_status_in=[
+                    DetectionControlStatus.NOT_CONTROLLED,
+                    DetectionControlStatus.CONTROLLED_FIELD,
+                    DetectionControlStatus.PRIOR_LETTER_SENT,
+                    DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+                    DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
+                    DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+                ],
+                filter_prescribed=False,
+            ),
+            filter_geo_custom_zones=filter_geo_custom_zones,
             with_detections=True,
             with_commune=True,
         )
