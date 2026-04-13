@@ -18,6 +18,10 @@ from django.contrib.gis.geos import GEOSGeometry
 from django.contrib.gis.db.models.functions import Centroid
 
 
+from core.models.geo_commune import GeoCommune
+from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_department import GeoDepartment
+from core.models.geo_epci import GeoEpci
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
@@ -259,6 +263,8 @@ class Command(BaseCommand):
         self.tile_set.save()
 
         DetectionProcessService.merge_double_detections(tile_set_id=self.tile_set.id)
+
+        self.associate_detections_to_custom_zones()
 
         log_event(f"Detections import finished for batch: {self.batch_id}")
 
@@ -517,3 +523,94 @@ class Command(BaseCommand):
         self.detection_objects_to_insert = []
         self.detection_datas_to_insert = []
         self.detections_to_insert = []
+
+    def _get_tile_set_geo_zone_ids_with_ancestors(self) -> List[int]:
+        tile_set_geo_zones = list(
+            self.tile_set.geo_zones.values_list("id", "geo_zone_type")
+        )
+
+        geo_zone_ids = set(gz[0] for gz in tile_set_geo_zones)
+        commune_ids = [
+            gz[0] for gz in tile_set_geo_zones if gz[1] == GeoZoneType.COMMUNE
+        ]
+        epci_ids = [gz[0] for gz in tile_set_geo_zones if gz[1] == GeoZoneType.EPCI]
+        department_ids = [
+            gz[0] for gz in tile_set_geo_zones if gz[1] == GeoZoneType.DEPARTMENT
+        ]
+
+        if commune_ids:
+            communes_data = GeoCommune.objects.filter(id__in=commune_ids).values_list(
+                "department_id", "department__region_id", "epci_id"
+            )
+            for dept_id, region_id, epci_id in communes_data:
+                geo_zone_ids.add(dept_id)
+                geo_zone_ids.add(region_id)
+                department_ids.append(dept_id)
+                if epci_id:
+                    geo_zone_ids.add(epci_id)
+
+        if epci_ids:
+            epcis_data = GeoEpci.objects.filter(id__in=epci_ids).values_list(
+                "department_id", "department__region_id"
+            )
+            for dept_id, region_id in epcis_data:
+                geo_zone_ids.add(dept_id)
+                geo_zone_ids.add(region_id)
+                department_ids.append(dept_id)
+
+        if department_ids:
+            region_ids = GeoDepartment.objects.filter(
+                id__in=department_ids
+            ).values_list("region_id", flat=True)
+            geo_zone_ids.update(region_ids)
+
+        return list(geo_zone_ids)
+
+    def associate_detections_to_custom_zones(self):
+        tile_set_geo_zone_ids = self._get_tile_set_geo_zone_ids_with_ancestors()
+
+        custom_zones = (
+            GeoCustomZone.objects.filter(
+                geo_zones__id__in=tile_set_geo_zone_ids,
+                geometry__isnull=False,
+            )
+            .distinct()
+            .defer("geometry")
+        )
+
+        if not custom_zones:
+            log_event("No custom zones found for this tile set")
+            return
+
+        log_event(f"Associating detections to {len(custom_zones)} custom zones")
+
+        for zone in custom_zones:
+            log_event(f"Associating detections to custom zone: {zone.name}")
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO core_detectionobject_geo_custom_zones (detectionobject_id, geocustomzone_id)
+                    SELECT DISTINCT
+                        dobj.id AS detectionobject_id,
+                        %s AS geocustomzone_id
+                    FROM
+                        core_detectionobject dobj
+                        JOIN core_detection detec ON detec.detection_object_id = dobj.id
+                    WHERE
+                        detec.batch_id = %s AND
+                        detec.tile_set_id = %s AND
+                        ST_Within(
+                            detec.geometry,
+                            (
+                                SELECT geozone.geometry
+                                FROM core_geozone geozone
+                                WHERE id = %s
+                            )
+                        )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [zone.id, self.batch_id, self.tile_set.id, zone.id],
+                )
+
+            log_event(f"Done associating detections to custom zone: {zone.name}")
