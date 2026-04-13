@@ -10,6 +10,7 @@ from core.serializers.object_type_category import (
 )
 from core.utils.filters import UuidInFilter
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 class ObjectTypeCategoryFilter(FilterSet):
@@ -33,6 +34,7 @@ class ObjectTypeCategoryFilter(FilterSet):
 
 
 class ObjectTypeCategoryViewSet(
+    UserActionLogMixin,
     BaseViewSetMixin[ObjectTypeCategory],
 ):
     filterset_class = ObjectTypeCategoryFilter

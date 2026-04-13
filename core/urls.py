@@ -27,6 +27,7 @@ from core.views.statistics.validation_status_object_types_global import (
 )
 from core.views.tile_set import TileSetViewSet
 from core.views.user import UserViewSet
+from core.views.user_action_log import UserActionLogViewSet
 from rest_framework.routers import DefaultRouter
 from core.views.utils import urls as utils_urls
 from django.urls import path
@@ -68,6 +69,9 @@ router.register(
 )
 router.register("detection-data", DetectionDataViewSet, basename="DetectionDataViewSet")
 router.register("run-command", CommandAsyncViewSet, basename="CommandAsyncViewSet")
+router.register(
+    "user-action-log", UserActionLogViewSet, basename="UserActionLogViewSet"
+)
 
 urlpatterns = router.urls
 

@@ -69,3 +69,14 @@ MODIFY_ACTIONS = list(set(BASE_ACTIONS) - set(READ_ACTIONS))
 AdminRoleModifyActionPermission = get_admin_role_permission(MODIFY_ACTIONS)
 SuperAdminRoleModifyActionPermission = get_super_admin_role_permission(MODIFY_ACTIONS)
 AdminRolePermission = get_admin_role_permission()
+
+
+class SuperAdminRolePermission(BasePermission):
+    message = "Vous devez être super-administrateur pour accéder à cette ressource"
+
+    def has_permission(self, request: Request, view: APIView):
+        return (
+            request.user
+            and not request.user.is_anonymous
+            and request.user.user_role == UserRole.SUPER_ADMIN
+        )

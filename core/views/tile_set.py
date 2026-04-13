@@ -21,6 +21,7 @@ from core.serializers.tile_set import (
 from rest_framework.decorators import action
 from core.utils.filters import ChoiceInFilter
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 class GetLastFromCoordinatesParamsSerializer(serializers.Serializer):
@@ -46,7 +47,7 @@ class TileSetFilter(FilterSet):
         return queryset.filter(Q(name__icontains=value) | Q(url__icontains=value))
 
 
-class TileSetViewSet(BaseViewSetMixin[TileSet]):
+class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
     filterset_class = TileSetFilter
     permission_classes = [SuperAdminRoleModifyActionPermission]
 

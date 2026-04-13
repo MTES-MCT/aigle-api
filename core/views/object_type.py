@@ -11,6 +11,7 @@ from core.serializers.object_type import (
 )
 from core.utils.filters import UuidInFilter
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 class ObjectTypeFilter(FilterSet):
@@ -35,7 +36,7 @@ class ObjectTypeFilter(FilterSet):
         )
 
 
-class ObjectTypeViewSet(BaseViewSetMixin[ObjectType]):
+class ObjectTypeViewSet(UserActionLogMixin, BaseViewSetMixin[ObjectType]):
     filterset_class = ObjectTypeFilter
     permission_classes = [SuperAdminRoleModifyActionPermission]
 
