@@ -9,6 +9,7 @@ from core.serializers.user_group import (
     UserGroupDetailSerializer,
 )
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 class UserGroupFilter(FilterSet):
@@ -22,7 +23,7 @@ class UserGroupFilter(FilterSet):
         return queryset.filter(name__icontains=value)
 
 
-class UserGroupViewSet(BaseViewSetMixin[UserGroup]):
+class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
     filterset_class = UserGroupFilter
     permission_classes = [SuperAdminRoleModifyActionPermission]
 

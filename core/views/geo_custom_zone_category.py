@@ -6,6 +6,7 @@ from django_filters import FilterSet, CharFilter
 from core.models.geo_custom_zone_category import GeoCustomZoneCategory
 from core.serializers.geo_custom_zone_category import GeoCustomZoneCategorySerializer
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 class GeoCustomZoneCategoryFilter(FilterSet):
@@ -20,6 +21,7 @@ class GeoCustomZoneCategoryFilter(FilterSet):
 
 
 class GeoCustomZoneCategoryViewSet(
+    UserActionLogMixin,
     BaseViewSetMixin[GeoCustomZoneCategory],
 ):
     filterset_class = GeoCustomZoneCategoryFilter

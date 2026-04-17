@@ -17,10 +17,11 @@ from core.serializers.command_run import (
 )
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
 from core.utils.run_command import COMMANDS_AND_PARAMETERS, CommandParameters
+from core.utils.user_action_log import UserActionLogMixin
 from core.services.command_async import CommandAsyncService
 
 
-class CommandAsyncViewSet(ViewSet):
+class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
     permission_classes = [SuperAdminRoleModifyActionPermission]
 
     def list(self, request):
