@@ -113,6 +113,7 @@ class ParcelRepository(
         queryset = self._filter_detection(
             queryset=queryset,
             filter_detection=filter_detection,
+            filter_geo_custom_zones=filter_geo_custom_zones,
         )
 
         queryset = self._filter_filter_commune_uuid_in(
@@ -163,6 +164,7 @@ class ParcelRepository(
             queryset=queryset,
             with_detail_prefetch=with_detail_prefetch,
             filter_detection=filter_detection,
+            filter_geo_custom_zones=filter_geo_custom_zones,
         )
 
         # custom filters
@@ -456,6 +458,7 @@ class ParcelRepository(
         queryset: QuerySet[Parcel],
         with_detail_prefetch: bool = False,
         filter_detection: Optional[DetectionFilter] = None,
+        filter_geo_custom_zones: Optional[Q] = None,
     ) -> QuerySet[Parcel]:
         if not with_detail_prefetch:
             return queryset
@@ -463,6 +466,10 @@ class ParcelRepository(
         detection_object_filter_q = ParcelRepository._build_detection_object_filter_q(
             filter_detection
         )
+
+        if filter_geo_custom_zones is not None:
+            detection_object_filter_q &= filter_geo_custom_zones
+
         detection_filter_q = ParcelRepository._build_detection_queryset_filter_q(
             filter_detection
         )
@@ -712,15 +719,48 @@ class ParcelRepository(
         return queryset
 
     @staticmethod
+    def _prefix_q(q_obj: Q, prefix: str) -> Q:
+        if not q_obj:
+            return Q()
+
+        new_q = Q()
+
+        for child in q_obj.children:
+            if isinstance(child, Q):
+                transformed_child = ParcelRepository._prefix_q(child, prefix)
+                if q_obj.connector == Q.AND:
+                    new_q &= transformed_child
+                else:
+                    new_q |= transformed_child
+            elif isinstance(child, tuple) and len(child) == 2:
+                field_lookup, value = child
+                child_q = Q((f"{prefix}{field_lookup}", value))
+                if q_obj.connector == Q.AND:
+                    new_q &= child_q
+                else:
+                    new_q |= child_q
+
+        if q_obj.negated:
+            new_q.negate()
+
+        return new_q
+
+    @staticmethod
     def _filter_detection(
         queryset: QuerySet[Parcel],
         filter_detection: Optional[DetectionFilter] = None,
+        filter_geo_custom_zones: Optional[Q] = None,
     ) -> QuerySet[Parcel]:
         if filter_detection is None or filter_detection.is_empty():
             return queryset
 
         # Build a combined Q object to apply all filters at once
         q = Q()
+
+        if filter_geo_custom_zones is not None:
+            q &= ParcelRepository._prefix_q(
+                filter_geo_custom_zones, "detection_objects__"
+            )
 
         # Score filter
         if filter_detection.filter_score is not None:

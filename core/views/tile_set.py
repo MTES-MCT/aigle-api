@@ -288,7 +288,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "tile_set_status": TileSetStatus.VISIBLE,
                     "tile_set_scheme": TileSetScheme.xyz,
                     "tile_set_type": TileSetType.BACKGROUND,
-                    "min_zoom": 0,
+                    "min_zoom": 1,
                     "max_zoom": 22,
                     "monochrome": False,
                     "regions_uuids": regions_uuids,
