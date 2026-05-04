@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
+
 from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet, CharFilter
 
@@ -19,9 +22,33 @@ from core.serializers.tile_set import (
     TileSetSerializer,
 )
 from rest_framework.decorators import action
+from core.utils.bulk_csv import (
+    attachment_response,
+    bulk_import_preview_response,
+    bulk_import_run,
+    join_list,
+    parse_csv,
+    parse_list,
+    partition_zones_by_type,
+    resolve_collectivity_uuids,
+    write_csv,
+)
 from core.utils.filters import ChoiceInFilter
-from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.permissions import (
+    SuperAdminRoleModifyActionPermission,
+    SuperAdminRolePermission,
+)
 from core.utils.user_action_log import UserActionLogMixin
+
+
+TILE_SET_CSV_HEADERS = [
+    "année",
+    "nom du fond de carte",
+    "url",
+    "régions",
+    "départements",
+    "communes",
+]
 
 
 class GetLastFromCoordinatesParamsSerializer(serializers.Serializer):
@@ -102,3 +129,172 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
             output_data = None
 
         return Response(output_data)
+
+    # ------------------------------------------------------------------
+    # Bulk CSV: export / preview / import
+    # ------------------------------------------------------------------
+
+    @action(
+        methods=["get"],
+        detail=False,
+        url_path="export",
+        permission_classes=[SuperAdminRolePermission],
+    )
+    def export_csv(self, request):
+        from core.models.geo_zone import GeoZoneType
+
+        queryset = self.filter_queryset(self.get_queryset())
+        queryset = queryset.prefetch_related("geo_zones")
+
+        rows = []
+        for tile_set in queryset:
+            zones_by_type = partition_zones_by_type(tile_set.geo_zones.all())
+            rows.append(
+                {
+                    "année": str(tile_set.date.year) if tile_set.date else "",
+                    "nom du fond de carte": tile_set.name,
+                    "url": tile_set.url,
+                    "régions": join_list(zones_by_type[GeoZoneType.REGION]),
+                    "départements": join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
+                    "communes": join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                }
+            )
+
+        response = attachment_response("fonds-de-carte-export.csv")
+        write_csv(response, TILE_SET_CSV_HEADERS, rows)
+        return response
+
+    @action(
+        methods=["post"],
+        detail=False,
+        url_path="bulk-import-preview",
+        permission_classes=[SuperAdminRolePermission],
+    )
+    def bulk_import_preview(self, request):
+        return bulk_import_preview_response(self._validate_tile_set_csv, request)
+
+    @action(
+        methods=["post"],
+        detail=False,
+        url_path="bulk-import",
+        permission_classes=[SuperAdminRolePermission],
+    )
+    def bulk_import(self, request):
+        return bulk_import_run(
+            self._validate_tile_set_csv,
+            request,
+            TileSetInputSerializer,
+            "bulk_import_tile_set",
+        )
+
+    def _validate_tile_set_csv(
+        self, request
+    ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+        uploaded = request.FILES.get("file")
+        if not uploaded:
+            return [], ["Aucun fichier fourni"], []
+
+        rows, parse_errors = parse_csv(uploaded)
+        if parse_errors:
+            return [], parse_errors, []
+
+        errors: List[str] = []
+        preview: List[Dict[str, Any]] = []
+        payloads: List[Dict[str, Any]] = []
+
+        existing_names = set(TileSet.objects.values_list("name", flat=True))
+        existing_urls = set(TileSet.objects.values_list("url", flat=True))
+        seen_names: set[str] = set()
+        seen_urls: set[str] = set()
+
+        for index, row in enumerate(rows, start=2):
+            year_raw = row.get("année", "")
+            name = row.get("nom du fond de carte", "")
+            url = row.get("url", "")
+            regions_raw = parse_list(row.get("régions", ""))
+            departments_raw = parse_list(row.get("départements", ""))
+            communes_raw = parse_list(row.get("communes", ""))
+
+            if not name:
+                errors.append(f"Ligne {index}: nom du fond de carte manquant")
+                continue
+            if name in seen_names:
+                errors.append(
+                    f"Ligne {index}: nom de fond de carte en doublon ({name})"
+                )
+                continue
+            seen_names.add(name)
+            if name in existing_names:
+                errors.append(
+                    f"Ligne {index}: un fond de carte avec le nom '{name}' "
+                    f"existe déjà"
+                )
+                continue
+
+            if not url:
+                errors.append(f"Ligne {index}: URL manquante")
+                continue
+            if url in seen_urls:
+                errors.append(f"Ligne {index}: URL en doublon ({url})")
+                continue
+            seen_urls.add(url)
+            if url in existing_urls:
+                errors.append(
+                    f"Ligne {index}: un fond de carte avec l'URL '{url}' "
+                    f"existe déjà"
+                )
+                continue
+
+            if not year_raw or not year_raw.isdigit() or len(year_raw) != 4:
+                errors.append(
+                    f"Ligne {index}: année invalide '{year_raw}'. "
+                    f"Format attendu: 'YYYY'"
+                )
+                continue
+
+            try:
+                date = datetime(int(year_raw), 1, 1)
+            except ValueError as exc:
+                errors.append(f"Ligne {index}: année invalide '{year_raw}': {exc}")
+                continue
+
+            (
+                regions_uuids,
+                departments_uuids,
+                communes_uuids,
+                row_has_error,
+            ) = resolve_collectivity_uuids(
+                regions_raw, departments_raw, communes_raw, index, errors
+            )
+
+            if row_has_error:
+                continue
+
+            preview.append(
+                {
+                    "année": year_raw,
+                    "nom du fond de carte": name,
+                    "url": url,
+                    "régions": join_list(regions_raw),
+                    "départements": join_list(departments_raw),
+                    "communes": join_list(communes_raw),
+                }
+            )
+            payloads.append(
+                {
+                    "name": name,
+                    "url": url,
+                    "date": date.isoformat(),
+                    "tile_set_status": TileSetStatus.VISIBLE,
+                    "tile_set_scheme": TileSetScheme.xyz,
+                    "tile_set_type": TileSetType.BACKGROUND,
+                    "min_zoom": 0,
+                    "max_zoom": 22,
+                    "monochrome": False,
+                    "regions_uuids": regions_uuids,
+                    "departments_uuids": departments_uuids,
+                    "communes_uuids": communes_uuids,
+                }
+            )
+
+        return preview, errors, payloads
