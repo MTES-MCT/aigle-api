@@ -7,6 +7,7 @@ from core.models.detection_data import DetectionControlStatus, DetectionValidati
 from core.models.parcel import Parcel
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
+from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.parcel import DetectionFilter, ParcelRepository
 from core.utils.analytic_log import create_log
 
@@ -32,6 +33,10 @@ class ParcelService:
             filter_uuid_in=[uuid],
             filter_collectivities=collectivity_filter,
             filter_detection=DetectionFilter(
+                filter_score=NumberRepoFilter(
+                    lookup=RepoFilterLookup.GTE,
+                    number=0.3,
+                ),
                 filter_detection_validation_status_in=[
                     DetectionValidationStatus.DETECTED_NOT_VERIFIED,
                     DetectionValidationStatus.SUSPECT,
