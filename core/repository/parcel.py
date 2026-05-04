@@ -113,6 +113,7 @@ class ParcelRepository(
         queryset = self._filter_detection(
             queryset=queryset,
             filter_detection=filter_detection,
+            filter_geo_custom_zones=filter_geo_custom_zones,
         )
 
         queryset = self._filter_filter_commune_uuid_in(
@@ -163,6 +164,7 @@ class ParcelRepository(
             queryset=queryset,
             with_detail_prefetch=with_detail_prefetch,
             filter_detection=filter_detection,
+            filter_geo_custom_zones=filter_geo_custom_zones,
         )
 
         # custom filters
@@ -400,10 +402,63 @@ class ParcelRepository(
         return queryset
 
     @staticmethod
+    def _build_detection_queryset_filter_q(
+        filter_detection: Optional[DetectionFilter] = None,
+    ) -> Q:
+        if filter_detection is None or filter_detection.is_empty():
+            return Q()
+
+        q = Q()
+
+        if filter_detection.filter_score is not None:
+            q &= Q(
+                Q(
+                    **{
+                        f"score__{filter_detection.filter_score.lookup.value}": filter_detection.filter_score.number
+                    }
+                )
+                | Q(
+                    detection_source__in=[
+                        DetectionSource.INTERFACE_DRAWN,
+                        DetectionSource.INTERFACE_FORCED_VISIBLE,
+                    ]
+                )
+            )
+
+        if filter_detection.filter_tile_set_uuid_in is not None:
+            q &= Q(tile_set__uuid__in=filter_detection.filter_tile_set_uuid_in)
+
+        if filter_detection.filter_detection_validation_status_in is not None:
+            q &= Q(
+                detection_data__detection_validation_status__in=filter_detection.filter_detection_validation_status_in
+            )
+
+        if filter_detection.filter_detection_control_status_in is not None:
+            q &= Q(
+                detection_data__detection_control_status__in=filter_detection.filter_detection_control_status_in
+            )
+
+        if filter_detection.filter_prescribed is not None:
+            if filter_detection.filter_prescribed:
+                q &= Q(
+                    detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED
+                )
+            else:
+                q &= Q(
+                    Q(
+                        detection_data__detection_prescription_status=DetectionPrescriptionStatus.NOT_PRESCRIBED
+                    )
+                    | Q(detection_data__detection_prescription_status__isnull=True)
+                )
+
+        return q
+
+    @staticmethod
     def _annotate_detail_prefetch(
         queryset: QuerySet[Parcel],
         with_detail_prefetch: bool = False,
         filter_detection: Optional[DetectionFilter] = None,
+        filter_geo_custom_zones: Optional[Q] = None,
     ) -> QuerySet[Parcel]:
         if not with_detail_prefetch:
             return queryset
@@ -411,6 +466,24 @@ class ParcelRepository(
         detection_object_filter_q = ParcelRepository._build_detection_object_filter_q(
             filter_detection
         )
+
+        if filter_geo_custom_zones is not None:
+            detection_object_filter_q &= filter_geo_custom_zones
+
+        detection_filter_q = ParcelRepository._build_detection_queryset_filter_q(
+            filter_detection
+        )
+
+        detection_queryset = Detection.objects.select_related(
+            "detection_data",
+            "tile",
+            "tile_set",
+        ).prefetch_related(
+            "detection_data__detection_authorizations",
+        )
+
+        if detection_filter_q:
+            detection_queryset = detection_queryset.filter(detection_filter_q)
 
         queryset = queryset.prefetch_related(
             Prefetch(
@@ -420,13 +493,7 @@ class ParcelRepository(
                 .prefetch_related(
                     Prefetch(
                         "detections",
-                        queryset=Detection.objects.select_related(
-                            "detection_data",
-                            "tile",
-                            "tile_set",
-                        ).prefetch_related(
-                            "detection_data__detection_authorizations",
-                        ),
+                        queryset=detection_queryset,
                     ),
                     "geo_custom_zones__geo_custom_zone_category",
                     "geo_custom_zones__sub_custom_zones",
@@ -652,15 +719,48 @@ class ParcelRepository(
         return queryset
 
     @staticmethod
+    def _prefix_q(q_obj: Q, prefix: str) -> Q:
+        if not q_obj:
+            return Q()
+
+        new_q = Q()
+
+        for child in q_obj.children:
+            if isinstance(child, Q):
+                transformed_child = ParcelRepository._prefix_q(child, prefix)
+                if q_obj.connector == Q.AND:
+                    new_q &= transformed_child
+                else:
+                    new_q |= transformed_child
+            elif isinstance(child, tuple) and len(child) == 2:
+                field_lookup, value = child
+                child_q = Q((f"{prefix}{field_lookup}", value))
+                if q_obj.connector == Q.AND:
+                    new_q &= child_q
+                else:
+                    new_q |= child_q
+
+        if q_obj.negated:
+            new_q.negate()
+
+        return new_q
+
+    @staticmethod
     def _filter_detection(
         queryset: QuerySet[Parcel],
         filter_detection: Optional[DetectionFilter] = None,
+        filter_geo_custom_zones: Optional[Q] = None,
     ) -> QuerySet[Parcel]:
         if filter_detection is None or filter_detection.is_empty():
             return queryset
 
         # Build a combined Q object to apply all filters at once
         q = Q()
+
+        if filter_geo_custom_zones is not None:
+            q &= ParcelRepository._prefix_q(
+                filter_geo_custom_zones, "detection_objects__"
+            )
 
         # Score filter
         if filter_detection.filter_score is not None:
