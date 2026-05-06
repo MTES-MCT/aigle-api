@@ -23,7 +23,7 @@ from core.utils.bulk_csv import (
     parse_csv,
     write_csv,
 )
-from core.utils.filters import ChoiceInFilter
+from core.utils.filters import ChoiceInFilter, UuidInFilter
 from core.utils.permissions import (
     MODIFY_ACTIONS,
     AdminRolePermission,
@@ -47,6 +47,9 @@ USER_RIGHTS_READ_VALUES = [UserGroupRight.READ]
 class UserFilter(FilterSet):
     email = CharFilter(lookup_expr="icontains")
     roles = ChoiceInFilter(field_name="user_role", choices=UserRole.choices)
+    user_group_uuids = UuidInFilter(
+        field_name="user_user_groups__user_group__uuid", distinct=True
+    )
     ordering = OrderingFilter(fields=("email", "created_at", "updated_at"))
 
     class Meta:
