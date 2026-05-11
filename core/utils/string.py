@@ -69,7 +69,10 @@ def to_enum_array(
     return result
 
 
-def to_bool(string: str) -> Optional[bool]:
+def to_bool(string: Optional[str]) -> Optional[bool]:
+    if string is None:
+        return None
+
     string_lower = string.lower()
 
     if string_lower == "true":

@@ -193,3 +193,32 @@ class ExternalAPITestViewTests(BaseAPITestCase):
         self.client.credentials(HTTP_AUTHORIZATION=self.api_key)
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class ExternalAPIUpdateControlStatusViewTests(BaseAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.api_key_obj, self.api_key = create_api_key(name="Update Control Key")
+        self.url = reverse("ExternalAPIUpdateControlStatusView")
+
+    def test_post_without_api_key(self):
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_post_with_invalid_api_key(self):
+        self.client.credentials(HTTP_AUTHORIZATION="Api-Key invalid-key-12345")
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_post_with_empty_data(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.api_key}")
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_jwt_token_does_not_work(self):
+        from core.tests.fixtures.users import create_regular_user
+
+        user = create_regular_user(email="extupdate@test.com")
+        self.authenticate_user(user)
+        response = self.client.post(self.url, {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

@@ -296,6 +296,40 @@ FROM bbox;
 
 </details>
 
+### Testing
+
+Tests run against a separate PostgreSQL database (`aigle-test`) on the same server as the main app.
+
+**Local setup:**
+
+1. Create the `aigle-test` database on your PostgreSQL server with PostGIS enabled
+2. Set `SQL_DATABASE_TEST=aigle-test` in your `.env` file (falls back to main `SQL_*` connection vars)
+3. Run tests:
+
+```bash
+make test            # run all tests
+make test-verbose    # verbose output
+make test-coverage   # with coverage report
+```
+
+**CI:** Tests run automatically on PRs and pushes to `develop`/`main` via GitHub Actions using a PostGIS service container.
+
+**Test structure:**
+
+```
+core/tests/
+├── base.py                     # BaseAPITestCase with auth + PostGIS helpers
+├── fixtures/
+│   ├── geo_data.py             # 2 regions, 4 departments, 8 communes, parcels
+│   ├── users.py                # Users with all roles, groups, API keys
+│   └── detection_data.py       # TileSets, ObjectTypes, Detections
+└── views/
+    ├── test_user.py
+    ├── test_geo_commune.py
+    ├── test_detection_object.py
+    └── test_external_api.py
+```
+
 ### Emails
 
 To send emails locally, you'll need to install local certificates, [here is how to do it in MacOS](https://korben.info/ssl-sslcertverificationerror-ssl-certificate_verify_failed-certificate-verify-failed-unable-to-get-local-issuer-certificate-_ssl-c1129.html)

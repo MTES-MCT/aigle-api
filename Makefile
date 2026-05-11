@@ -25,24 +25,13 @@ celery:
 	celery -A aigle worker --loglevel=info -Q celery,sequential_commands
 
 test:
-	python3 manage.py test --settings=aigle.settings.test
-
-test-keepdb:
-	python3 manage.py test --settings=aigle.settings.test --keepdb
-
-test-core:
-	python3 manage.py test core --settings=aigle.settings.test --keepdb
-
-test-verbose:
-	python3 manage.py test --settings=aigle.settings.test --keepdb -v 2
+	pytest
 
 test-coverage:
-	coverage run --source='core' manage.py test core --settings=aigle.settings.test
-	coverage report
+	pytest --cov=core --cov-report=term-missing
 
 test-coverage-html:
-	coverage run --source='core' manage.py test core --settings=aigle.settings.test
-	coverage html
+	pytest --cov=core --cov-report=html
 	@echo "Coverage report generated in htmlcov/index.html"
 
 start: services server

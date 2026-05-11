@@ -94,11 +94,9 @@ make clean
 
 ### Testing
 ```bash
-# Run Django tests
-python manage.py test
-
-# Run specific test command
-python manage.py test_cmd
+make test              # run all tests (pytest with --reuse-db)
+make test-coverage     # with coverage report
+pytest core/tests/views/test_geo_commune.py -v   # specific test file
 ```
 
 ## Management Command Style Guide
@@ -226,45 +224,60 @@ psql -U postgres -c "ALTER USER aigle_user CREATEDB;"
 core/tests/
 ├── base.py                              # Base test classes
 ├── fixtures/                            # Reusable test data
-│   ├── geo_data.py                     # Real France geographic data
+│   ├── geo_data.py                     # Real France geographic data (2 regions, 4 depts, 8 communes)
 │   ├── users.py                        # User and auth fixtures
 │   └── detection_data.py               # Detection fixtures
-└── views/                              # View/API tests
+└── views/                              # View/API tests (one file per ViewSet)
     ├── test_geo_commune.py
+    ├── test_geo_department.py
+    ├── test_geo_region.py
+    ├── test_geo_custom_zone.py
+    ├── test_geo_custom_zone_category.py
     ├── test_user.py
+    ├── test_user_group.py
+    ├── test_user_action_log.py
     ├── test_detection_object.py
+    ├── test_detection_data.py
+    ├── test_detection_geo.py
+    ├── test_detection_list.py
+    ├── test_object_type.py
+    ├── test_object_type_category.py
+    ├── test_tile_set.py
+    ├── test_parcel.py
+    ├── test_map_settings.py
+    ├── test_run_command.py
+    ├── test_statistics.py
     └── test_external_api.py
 ```
 
 ### Running Tests
 
-```bash
-# Basic usage
-python manage.py test --settings=aigle.settings.test
+Tests use **pytest** + **pytest-django** (configured in `pytest.ini`).
 
+```bash
 # Using Makefile
-make test              # Run all tests
-make test-keepdb       # Run with keepdb (faster)
-make test-core         # Run core tests only
-make test-verbose      # Verbose output
+make test              # Run all tests (pytest with --reuse-db)
 make test-coverage     # With coverage report
 
 # Specific tests
-python manage.py test core.tests.views.test_geo_commune --settings=aigle.settings.test
-python manage.py test core.tests.views.test_user.UserViewSetTests --settings=aigle.settings.test
-
-# Advanced options
-python manage.py test --settings=aigle.settings.test --keepdb --verbosity=2
-python manage.py test --settings=aigle.settings.test --parallel
+pytest core/tests/views/test_geo_commune.py -v
+pytest core/tests/views/test_user.py::UserViewSetTests -v
 ```
+
+### Mandatory: Tests for New Routes
+
+**Every new ViewSet or API endpoint must have a corresponding test file.** At minimum, test:
+- List endpoint (authenticated returns 200, unauthenticated returns 401)
+- Retrieve endpoint (valid uuid returns 200, nonexistent uuid returns 404)
+- Permission enforcement (regular user gets 403 on restricted actions)
+- Search/filter if the view has a `q` parameter
 
 ### Test Fixtures
 
 **Geographic data** (real France coordinates):
 ```python
 from core.tests.fixtures.geo_data import (
-    create_montpellier_commune,    # Montpellier at 43.61°N, 3.88°E
-    create_complete_geo_hierarchy,  # Full hierarchy: Occitanie → Hérault → Montpellier
+    create_complete_geo_hierarchy,  # 2 regions, 4 departments, 8 communes with parcels
 )
 ```
 
@@ -330,4 +343,4 @@ make test-coverage        # Terminal report
 make test-coverage-html   # HTML report in htmlcov/
 ```
 
-For detailed testing documentation, see `core/tests/README.md`.
+See existing test files for patterns.

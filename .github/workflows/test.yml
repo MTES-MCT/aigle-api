@@ -1,0 +1,63 @@
+name: Tests
+
+on:
+  pull_request:
+    branches:
+      - develop
+  push:
+    branches:
+      - develop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: aigle-test
+          POSTGRES_USER: aigle
+          POSTGRES_PASSWORD: aigle-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SQL_ENGINE: django.contrib.gis.db.backends.postgis
+      SQL_DATABASE_TEST: aigle-test
+      SQL_USER: aigle
+      SQL_PASSWORD: aigle-test-password
+      SQL_HOST: localhost
+      SQL_PORT: "5432"
+      ENVIRONMENT: test
+      DJANGO_SETTINGS_MODULE: aigle.settings.test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin libgdal-dev libgeos-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          GDAL_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu/libgdal.so
+          GEOS_LIBRARY_PATH: /usr/lib/x86_64-linux-gnu/libgeos_c.so
+        run: pytest

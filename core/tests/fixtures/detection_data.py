@@ -1,13 +1,3 @@
-"""
-Detection-related test fixtures.
-
-This module provides functions to create detection-related entities for testing:
-- TileSets and Tiles
-- ObjectTypes and Categories
-- DetectionObjects and Detections
-- DetectionData
-"""
-
 from django.contrib.gis.geos import Point
 from django.utils import timezone
 from core.models import (
@@ -23,24 +13,16 @@ from core.models import (
     DetectionData,
     DetectionSource,
 )
+from core.models.object_type_category import (
+    ObjectTypeCategoryObjectType,
+    ObjectTypeCategoryObjectTypeStatus,
+)
 
 
 def create_tile_set(name="Test TileSet", date=None, **kwargs):
-    """
-    Create a TileSet for testing.
-
-    Args:
-        name: TileSet name
-        date: Date of the tileset (defaults to now)
-        **kwargs: Additional TileSet fields
-
-    Returns:
-        TileSet object
-    """
     if date is None:
         date = timezone.now()
 
-    # Check if TileSet already exists
     try:
         return TileSet.objects.get(name=name)
     except TileSet.DoesNotExist:
@@ -58,121 +40,61 @@ def create_tile_set(name="Test TileSet", date=None, **kwargs):
         **kwargs,
     }
 
-    tileset = TileSet.objects.create(**tileset_data)
-    return tileset
+    return TileSet.objects.create(**tileset_data)
 
 
-def create_tile(tile_set=None, x=100, y=200, z=18, **kwargs):
-    """
-    Create a Tile for testing.
-
-    Args:
-        tile_set: TileSet object (creates one if None)
-        x: Tile X coordinate
-        y: Tile Y coordinate
-        z: Tile Z (zoom) level
-        **kwargs: Additional Tile fields
-
-    Returns:
-        Tile object
-    """
-    if tile_set is None:
-        tile_set = create_tile_set()
-
-    tile_data = {"tile_set": tile_set, "x": x, "y": y, "z": z, **kwargs}
-
-    tile = Tile.objects.create(**tile_data)
+def create_tile(x=100, y=200, z=18, **kwargs):
+    tile, _ = Tile.objects.get_or_create(x=x, y=y, z=z, defaults={**kwargs})
     return tile
 
 
-def create_object_type_category(name="Test Category", color="#FF0000", **kwargs):
-    """
-    Create an ObjectTypeCategory for testing.
-
-    Args:
-        name: Category name
-        color: Hex color code
-        **kwargs: Additional category fields
-
-    Returns:
-        ObjectTypeCategory object
-    """
-    defaults = {"color": color, **kwargs}
-
-    category, _ = ObjectTypeCategory.objects.get_or_create(name=name, defaults=defaults)
+def create_object_type_category(name="Test Category", **kwargs):
+    category, _ = ObjectTypeCategory.objects.get_or_create(
+        name=name, defaults={**kwargs}
+    )
     return category
 
 
-def create_object_type(name="Test Object Type", category=None, color=None, **kwargs):
-    """
-    Create an ObjectType for testing.
-
-    Args:
-        name: Object type name
-        category: ObjectTypeCategory (creates one if None)
-        color: Hex color code
-        **kwargs: Additional object type fields
-
-    Returns:
-        ObjectType object
-    """
-    if category is None:
-        category = create_object_type_category()
-
+def create_object_type(name="Test Object Type", color=None, **kwargs):
     if color is None:
-        color = category.color
+        color = f"#{hash(name) % 0xFFFFFF:06x}"
 
-    defaults = {"category": category, "color": color, **kwargs}
-
+    defaults = {"color": color, **kwargs}
     object_type, _ = ObjectType.objects.get_or_create(name=name, defaults=defaults)
     return object_type
 
 
-def create_detection_object(object_type=None, tile_set=None, parcel=None, **kwargs):
-    """
-    Create a DetectionObject for testing.
+def create_object_type_with_category(
+    object_type_name="Test Object Type",
+    category_name="Test Category",
+    color=None,
+):
+    category = create_object_type_category(name=category_name)
+    object_type = create_object_type(name=object_type_name, color=color)
+    ObjectTypeCategoryObjectType.objects.get_or_create(
+        object_type_category=category,
+        object_type=object_type,
+        defaults={
+            "object_type_category_object_type_status": ObjectTypeCategoryObjectTypeStatus.VISIBLE,
+        },
+    )
+    return object_type, category
 
-    Args:
-        object_type: ObjectType (creates one if None)
-        tile_set: TileSet (creates one if None)
-        parcel: Parcel object (optional)
-        **kwargs: Additional detection object fields
 
-    Returns:
-        DetectionObject object
-    """
+def create_detection_object(object_type=None, parcel=None, commune=None, **kwargs):
     if object_type is None:
         object_type = create_object_type()
 
-    if tile_set is None:
-        tile_set = create_tile_set()
-
-    detection_object_data = {
-        "object_type": object_type,
-        "tile_set": tile_set,
-        "parcel": parcel,
+    return DetectionObject.objects.create(
+        object_type=object_type,
+        parcel=parcel,
+        commune=commune,
         **kwargs,
-    }
-
-    detection_object = DetectionObject.objects.create(**detection_object_data)
-    return detection_object
+    )
 
 
 def create_detection_data(user=None, **kwargs):
-    """
-    Create DetectionData for testing.
-
-    Args:
-        user: User who last updated (optional)
-        **kwargs: Additional detection data fields
-
-    Returns:
-        DetectionData object
-    """
-    detection_data_fields = {"user_last_update": user, **kwargs}
-
-    detection_data = DetectionData.objects.create(**detection_data_fields)
-    return detection_data
+    return DetectionData.objects.create(user_last_update=user, **kwargs)
 
 
 def create_detection(
@@ -185,48 +107,28 @@ def create_detection(
     detection_data=None,
     **kwargs,
 ):
-    """
-    Create a Detection for testing.
+    if tile_set is None:
+        tile_set = create_tile_set()
 
-    Args:
-        detection_object: DetectionObject (creates one if None)
-        tile: Tile (creates one if None)
-        tile_set: TileSet (uses detection_object's or creates one)
-        geometry: Point geometry (creates default if None)
-        score: Detection score (0-1)
-        detection_source: Detection source
-        detection_data: DetectionData (optional)
-        **kwargs: Additional detection fields
-
-    Returns:
-        Detection object
-    """
     if detection_object is None:
         detection_object = create_detection_object()
 
-    if tile_set is None:
-        tile_set = detection_object.tile_set
-
     if tile is None:
-        tile = create_tile(tile_set=tile_set)
+        tile = create_tile()
 
     if geometry is None:
-        # Default to Montpellier center
         geometry = Point(3.88, 43.61, srid=4326)
 
-    detection_fields = {
-        "detection_object": detection_object,
-        "tile": tile,
-        "tile_set": tile_set,
-        "geometry": geometry,
-        "score": score,
-        "detection_source": detection_source,
-        "detection_data": detection_data,
+    return Detection.objects.create(
+        detection_object=detection_object,
+        tile=tile,
+        tile_set=tile_set,
+        geometry=geometry,
+        score=score,
+        detection_source=detection_source,
+        detection_data=detection_data,
         **kwargs,
-    }
-
-    detection = Detection.objects.create(**detection_fields)
-    return detection
+    )
 
 
 def create_detection_with_object(
@@ -237,27 +139,11 @@ def create_detection_with_object(
     tile_set=None,
     parcel=None,
 ):
-    """
-    Create a complete detection with object for testing.
-
-    Args:
-        x: Longitude
-        y: Latitude
-        score: Detection score
-        object_type_name: Name of object type
-        tile_set: TileSet (creates one if None)
-        parcel: Parcel (optional)
-
-    Returns:
-        tuple: (DetectionObject, Detection)
-    """
     if tile_set is None:
         tile_set = create_tile_set()
 
     object_type = create_object_type(name=object_type_name)
-    detection_object = create_detection_object(
-        object_type=object_type, tile_set=tile_set, parcel=parcel
-    )
+    detection_object = create_detection_object(object_type=object_type, parcel=parcel)
 
     geometry = Point(x, y, srid=4326)
     detection = create_detection(
@@ -271,32 +157,21 @@ def create_detection_with_object(
 
 
 def create_complete_detection_setup(parcel=None, commune=None):
-    """
-    Create a complete detection setup for testing.
-
-    Returns:
-        dict: Dictionary containing all created detection objects:
-            - tile_set: TileSet
-            - tile: Tile
-            - category: ObjectTypeCategory
-            - object_type: ObjectType
-            - detection_object: DetectionObject
-            - detection_data: DetectionData
-            - detection: Detection
-    """
     tile_set = create_tile_set(name="Montpellier 2024")
-    tile = create_tile(tile_set=tile_set, x=100, y=200, z=18)
+    tile = create_tile(x=100, y=200, z=18)
 
-    category = create_object_type_category(name="Leisure", color="#00FF00")
-    object_type = create_object_type(name="Swimming Pool", category=category)
+    object_type, category = create_object_type_with_category(
+        object_type_name="Swimming Pool",
+        category_name="Leisure",
+        color="#00FF00",
+    )
 
     detection_object = create_detection_object(
-        object_type=object_type, tile_set=tile_set, parcel=parcel
+        object_type=object_type, parcel=parcel, commune=commune
     )
 
     detection_data = create_detection_data()
 
-    # Create detection in Montpellier
     geometry = Point(3.88, 43.61, srid=4326)
     detection = create_detection(
         detection_object=detection_object,
