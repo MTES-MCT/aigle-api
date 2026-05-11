@@ -13,7 +13,11 @@ from core.serializers.user_group import (
     UserGroupInputSerializer,
 )
 from core.utils.bulk_csv import (
+    COL_COMMUNES,
+    COL_DEPARTMENTS,
+    COL_REGIONS,
     attachment_response,
+    bulk_error,
     bulk_import_preview_response,
     bulk_import_run,
     join_list,
@@ -35,9 +39,9 @@ USER_GROUP_CSV_HEADERS = [
     "nom du groupe",
     "type",
     "thématiques",
-    "régions",
-    "départements",
-    "communes",
+    COL_REGIONS,
+    COL_DEPARTMENTS,
+    COL_COMMUNES,
 ]
 USER_GROUP_TYPE_LABELS = {
     UserGroupType.COLLECTIVITY: "Collectivité",
@@ -112,9 +116,9 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                         group.user_group_type, group.user_group_type
                     ),
                     "thématiques": join_list(thematics),
-                    "régions": join_list(zones_by_type[GeoZoneType.REGION]),
-                    "départements": join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
-                    "communes": join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                    COL_REGIONS: join_list(zones_by_type[GeoZoneType.REGION]),
+                    COL_DEPARTMENTS: join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
+                    COL_COMMUNES: join_list(zones_by_type[GeoZoneType.COMMUNE]),
                 }
             )
 
@@ -147,16 +151,16 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
 
     def _validate_user_group_csv(
         self, request
-    ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         uploaded = request.FILES.get("file")
         if not uploaded:
-            return [], ["Aucun fichier fourni"], []
+            return [], [bulk_error("Aucun fichier fourni")], []
 
         rows, parse_errors = parse_csv(uploaded)
         if parse_errors:
             return [], parse_errors, []
 
-        errors: List[str] = []
+        errors: List[Dict[str, Any]] = []
         preview: List[Dict[str, Any]] = []
         payloads: List[Dict[str, Any]] = []
 
@@ -167,20 +171,24 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
             name = row.get("nom du groupe", "")
             type_label = row.get("type", "")
             thematics_raw = parse_list(row.get("thématiques", ""))
-            regions_raw = parse_list(row.get("régions", ""))
-            departments_raw = parse_list(row.get("départements", ""))
-            communes_raw = parse_list(row.get("communes", ""))
+            regions_raw = parse_list(row.get(COL_REGIONS.lower(), ""))
+            departments_raw = parse_list(row.get(COL_DEPARTMENTS.lower(), ""))
+            communes_raw = parse_list(row.get(COL_COMMUNES.lower(), ""))
 
             if not name:
-                errors.append(f"Ligne {index}: nom du groupe manquant")
+                errors.append(bulk_error("nom du groupe manquant", line=index))
                 continue
             if name in seen_names:
-                errors.append(f"Ligne {index}: nom de groupe en doublon ({name})")
+                errors.append(
+                    bulk_error(f"nom de groupe en doublon ({name})", line=index)
+                )
                 continue
             seen_names.add(name)
             if name in existing_names:
                 errors.append(
-                    f"Ligne {index}: un groupe avec le nom '{name}' existe déjà"
+                    bulk_error(
+                        f"un groupe avec le nom '{name}' existe déjà", line=index
+                    )
                 )
                 continue
 
@@ -188,8 +196,11 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
             user_group_type = USER_GROUP_TYPE_REVERSE.get(type_normalized)
             if not user_group_type:
                 errors.append(
-                    f"Ligne {index}: type invalide '{type_label}'. "
-                    f"Valeurs attendues: 'Collectivité' ou 'DDTM'"
+                    bulk_error(
+                        f"type invalide '{type_label}'. "
+                        f"Valeurs attendues: 'Collectivité' ou 'DDTM'",
+                        line=index,
+                    )
                 )
                 continue
 
@@ -198,12 +209,16 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
             for raw in thematics_raw:
                 cat = ObjectTypeCategory.objects.filter(name=raw).first()
                 if not cat:
-                    errors.append(f"Ligne {index}: thématique introuvable '{raw}'")
+                    errors.append(
+                        bulk_error(f"thématique introuvable '{raw}'", line=index)
+                    )
                     row_has_error = True
                     continue
                 thematics_uuids.append(str(cat.uuid))
             if not thematics_uuids and not row_has_error:
-                errors.append(f"Ligne {index}: au moins une thématique est requise")
+                errors.append(
+                    bulk_error("au moins une thématique est requise", line=index)
+                )
                 row_has_error = True
 
             (
@@ -222,8 +237,11 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                 and not row_has_error
             ):
                 errors.append(
-                    f"Ligne {index}: au moins une collectivité (région, département "
-                    f"ou commune) est requise"
+                    bulk_error(
+                        "au moins une collectivité (région, département "
+                        "ou commune) est requise",
+                        line=index,
+                    )
                 )
                 row_has_error = True
 
@@ -235,9 +253,9 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                     "nom du groupe": name,
                     "type": USER_GROUP_TYPE_LABELS[user_group_type],
                     "thématiques": join_list(thematics_raw),
-                    "régions": join_list(regions_raw),
-                    "départements": join_list(departments_raw),
-                    "communes": join_list(communes_raw),
+                    COL_REGIONS: join_list(regions_raw),
+                    COL_DEPARTMENTS: join_list(departments_raw),
+                    COL_COMMUNES: join_list(communes_raw),
                 }
             )
             payloads.append(

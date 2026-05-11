@@ -24,12 +24,21 @@ from core.models.geo_department import GeoDepartment
 from core.models.geo_region import GeoRegion
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user_action_log import UserActionLog, UserActionLogAction
-from core.utils.string import normalize
 
 
 CSV_SEP = ";"
 LIST_SEP = "|"
 BOM = "﻿"
+
+COL_REGIONS = "régions (code INSEE)"
+COL_DEPARTMENTS = "départements (code INSEE)"
+COL_COMMUNES = "communes (code ISO)"
+
+BulkError = Dict[str, Any]
+
+
+def bulk_error(message: str, line: Optional[int] = None) -> BulkError:
+    return {"line": line, "message": message}
 
 
 def parse_list(value: Optional[str]) -> List[str]:
@@ -43,17 +52,17 @@ def join_list(values: Iterable[str]) -> str:
     return LIST_SEP.join(v for v in values if v)
 
 
-def parse_csv(uploaded_file) -> Tuple[List[Dict[str, str]], List[str]]:
+def parse_csv(uploaded_file) -> Tuple[List[Dict[str, str]], List[BulkError]]:
     """Parse an uploaded CSV file.
 
     Returns (rows, errors) where rows is a list of dicts keyed by normalized
-    header (lowercase, stripped). Errors is a list of human-readable strings;
+    header (lowercase, stripped). Errors is a list of structured error dicts;
     if non-empty, callers should bail before attempting any per-row validation.
     """
     try:
         raw = uploaded_file.read()
     except Exception as exc:
-        return [], [f"Impossible de lire le fichier: {exc}"]
+        return [], [bulk_error(f"Impossible de lire le fichier: {exc}")]
 
     if isinstance(raw, bytes):
         try:
@@ -62,13 +71,13 @@ def parse_csv(uploaded_file) -> Tuple[List[Dict[str, str]], List[str]]:
             try:
                 text = raw.decode("latin-1")
             except UnicodeDecodeError as exc:
-                return [], [f"Encodage du fichier non supporté: {exc}"]
+                return [], [bulk_error(f"Encodage du fichier non supporté: {exc}")]
     else:
         text = raw.lstrip(BOM)
 
     reader = csv.DictReader(io.StringIO(text), delimiter=CSV_SEP)
     if not reader.fieldnames:
-        return [], ["Le fichier CSV est vide ou invalide"]
+        return [], [bulk_error("Le fichier CSV est vide ou invalide")]
 
     normalized_field_map = {fn: (fn or "").strip().lower() for fn in reader.fieldnames}
 
@@ -109,21 +118,55 @@ def write_csv(
 def partition_zones_by_type(
     zones: Iterable[GeoZone],
 ) -> Dict[str, List[str]]:
-    """Group GeoZones by their geo_zone_type, returning lists of names.
+    """Group GeoZones by type, returning lists of codes (insee/iso).
 
     Returns a dict keyed by GeoZoneType.{REGION,DEPARTMENT,COMMUNE} containing
-    the matching zone names. Used by export endpoints that emit one column per
+    the matching zone codes (insee_code for regions and departments, iso_code
+    for communes). Used by export endpoints that emit one column per
     collectivity level.
     """
-    buckets: Dict[str, List[str]] = {
+    ids_by_type: Dict[str, List[int]] = {
         GeoZoneType.REGION: [],
         GeoZoneType.DEPARTMENT: [],
         GeoZoneType.COMMUNE: [],
     }
     for zone in zones:
-        if zone.geo_zone_type in buckets:
-            buckets[zone.geo_zone_type].append(zone.name)
-    return buckets
+        if zone.geo_zone_type in ids_by_type:
+            ids_by_type[zone.geo_zone_type].append(zone.id)
+
+    region_codes = dict(
+        GeoRegion.objects.filter(id__in=ids_by_type[GeoZoneType.REGION]).values_list(
+            "id", "insee_code"
+        )
+    )
+    department_codes = dict(
+        GeoDepartment.objects.filter(
+            id__in=ids_by_type[GeoZoneType.DEPARTMENT]
+        ).values_list("id", "insee_code")
+    )
+    commune_codes = dict(
+        GeoCommune.objects.filter(id__in=ids_by_type[GeoZoneType.COMMUNE]).values_list(
+            "id", "iso_code"
+        )
+    )
+
+    return {
+        GeoZoneType.REGION: [
+            region_codes[zid]
+            for zid in ids_by_type[GeoZoneType.REGION]
+            if zid in region_codes
+        ],
+        GeoZoneType.DEPARTMENT: [
+            department_codes[zid]
+            for zid in ids_by_type[GeoZoneType.DEPARTMENT]
+            if zid in department_codes
+        ],
+        GeoZoneType.COMMUNE: [
+            commune_codes[zid]
+            for zid in ids_by_type[GeoZoneType.COMMUNE]
+            if zid in commune_codes
+        ],
+    }
 
 
 def resolve_collectivity_uuids(
@@ -131,26 +174,31 @@ def resolve_collectivity_uuids(
     departments: List[str],
     communes: List[str],
     line_index: int,
-    errors: List[str],
+    errors: List[BulkError],
 ) -> Tuple[List[str], List[str], List[str], bool]:
-    """Resolve human-readable collectivity names to GeoZone uuids.
+    """Resolve collectivity codes to GeoZone uuids.
 
-    Lookups are case/accent-insensitive via ``name_normalized``. Any unmatched
-    name is appended to ``errors`` (mutated in place) prefixed with the line
-    number. Returns (region_uuids, department_uuids, commune_uuids, has_error).
+    Regions and departments are looked up by ``insee_code``, communes by
+    ``iso_code``. Any unmatched code is appended to ``errors`` (mutated in
+    place). Returns (region_uuids, department_uuids, commune_uuids, has_error).
     """
     has_error = False
     resolved: Dict[str, List[str]] = {"région": [], "département": [], "commune": []}
 
-    for label, model, raw_names in (
-        ("région", GeoRegion, regions),
-        ("département", GeoDepartment, departments),
-        ("commune", GeoCommune, communes),
+    for label, model, raw_values, code_field in (
+        ("région", GeoRegion, regions, "insee_code"),
+        ("département", GeoDepartment, departments, "insee_code"),
+        ("commune", GeoCommune, communes, "iso_code"),
     ):
-        for raw in raw_names:
-            obj = model.objects.filter(name_normalized=normalize(raw)).first()
+        for raw in raw_values:
+            obj = model.objects.filter(**{code_field: raw.strip()}).first()
             if not obj:
-                errors.append(f"Ligne {line_index}: {label} introuvable '{raw}'")
+                errors.append(
+                    bulk_error(
+                        f"{label} avec le code '{raw}' introuvable",
+                        line=line_index,
+                    )
+                )
                 has_error = True
                 continue
             resolved[label].append(str(obj.uuid))
@@ -170,7 +218,7 @@ def attachment_response(filename: str) -> HttpResponse:
 
 
 ValidateFn = Callable[
-    [Any], Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]
+    [Any], Tuple[List[Dict[str, Any]], List[BulkError], List[Dict[str, Any]]]
 ]
 
 
