@@ -30,6 +30,7 @@ from core.utils.permissions import (
     AdminRolePermission,
     SuperAdminRolePermission,
 )
+from core.utils.user_action_log import UserActionLogMixin
 
 UserModel = get_user_model()
 
@@ -59,6 +60,7 @@ class UserFilter(FilterSet):
 
 
 class UserViewSet(
+    UserActionLogMixin,
     BaseViewSetMixin[UserModel],
 ):
     lookup_field = "uuid"

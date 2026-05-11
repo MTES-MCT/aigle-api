@@ -34,6 +34,7 @@ from core.utils.bulk_csv import (
     write_csv,
 )
 from core.utils.permissions import AdminRolePermission, SuperAdminRolePermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 CUSTOM_ZONE_CSV_HEADERS = [
@@ -67,7 +68,7 @@ class GeoCustomZoneFilter(FilterSet):
         return queryset.filter(name__icontains=value)
 
 
-class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
+class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
     filterset_class = GeoCustomZoneFilter
     permission_classes = [AdminRolePermission]
 
