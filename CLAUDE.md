@@ -17,13 +17,12 @@ source venv/bin/activate
 # Install dependencies
 pip3 install -r requirements.txt
 
-# Setup environment files
+# Setup environment file
 cp .env.template .env
-cp .env.compose.template .env.compose
 
 # Start development server (includes database)
 source venv/bin/activate
-source .env
+set -a && source .env && set +a
 make start
 ```
 
@@ -72,7 +71,7 @@ python test_external_api.py YOUR_API_KEY
 ```bash
 # Start local development server with environment
 source venv/bin/activate
-source .env
+set -a && source .env && set +a
 make start
 
 # Alternative: Start server only (without database)
@@ -184,39 +183,16 @@ Uses Celery for background tasks:
 - `common/`: Shared models and utilities (timestamped, deletable, etc.)
 
 ### Environment Configuration
+- Single `.env` file (plain `KEY=value`, no `export` prefix), read by Docker Compose and shell (`set -a && source .env && set +a`)
 - Development requires GDAL/GEOS library paths for macOS
-- PostGIS database required (Docker setup available)
-- Environment variables managed through .env files
+- PostGIS database required (Docker setup via `make db`)
 - Test database uses separate environment variables (SQL_*_TEST)
 
 ## Testing
 
 ### Test Database Setup
 
-Tests use a **separate PostgreSQL database** to avoid interfering with development data.
-
-**Required environment variables** (add to `.env`):
-```bash
-SQL_ENGINE_TEST=django.contrib.gis.db.backends.postgis
-SQL_DATABASE_TEST=aigle_test_db
-SQL_USER_TEST=aigle_user
-SQL_PASSWORD_TEST=password
-SQL_HOST_TEST=localhost
-SQL_PORT_TEST=5432
-```
-
-**Create test database**:
-```bash
-# Create database
-psql -U postgres -c "CREATE DATABASE aigle_test_db;"
-
-# Enable PostGIS
-psql -U postgres -d aigle_test_db -c "CREATE EXTENSION postgis;"
-
-# Grant permissions
-psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE aigle_test_db TO aigle_user;"
-psql -U postgres -c "ALTER USER aigle_user CREATEDB;"
-```
+Tests use a **separate PostgreSQL database** to avoid interfering with development data. Set `SQL_DATABASE_TEST` in `.env` (already in the template). The test settings fall back to the main `SQL_*` connection vars for host, port, user, and password.
 
 ### Test Structure
 
