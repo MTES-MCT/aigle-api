@@ -1,5 +1,5 @@
 from collections import defaultdict
-from django.utils import timezone
+from datetime import date as date_type
 from typing import List, Optional, TypedDict, Tuple
 from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.geo_zone import GeoZone, GeoZoneType
@@ -385,8 +385,8 @@ def get_tile_set_years_ago(
     tile_sets: List[TileSet], relative_years: int
 ) -> Optional[TileSet]:
     tile_set_years_ago = None
-    date_years_ago = timezone.now()
-    date_years_ago = date_years_ago.replace(year=date_years_ago.year - relative_years)
+    today = date_type.today()
+    date_years_ago = today.replace(year=today.year - relative_years)
 
     for tile_set in tile_sets:
         if tile_set.date <= date_years_ago:

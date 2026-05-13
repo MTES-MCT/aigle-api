@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import date
 from typing import List, Optional
 from core.models.geo_zone import GeoZone
 from core.models.object_type_category import ObjectTypeCategory
@@ -198,21 +198,21 @@ class TileSetBulkCreateInputSerializer(
         name_template = validated_data.pop("name")
         url_template = validated_data.pop("url")
 
-        dates = [datetime(int(year), 1, 1) for year in years]
+        dates = [date(int(year), 1, 1) for year in years]
 
-        for date in dates:
-            check_tileset_uniqueness(date=date, collectivities=collectivities)
+        for tile_date in dates:
+            check_tileset_uniqueness(date=tile_date, collectivities=collectivities)
 
         for year in years:
             check_tileset_url_uniqueness(url=url_template.replace("{year}", year))
 
         instances = []
-        for year, date in zip(years, dates):
+        for year, tile_date in zip(years, dates):
             instance = TileSet(
                 **validated_data,
                 name=name_template.replace("{year}", year),
                 url=url_template.replace("{year}", year),
-                date=date,
+                date=tile_date,
             )
             instance.save()
 
@@ -231,7 +231,7 @@ class TileSetBulkCreateInputSerializer(
 
 
 def check_tileset_uniqueness(
-    date: datetime,
+    date: date,
     collectivities: List[GeoZone],
     exclude_tileset_id: Optional[int] = None,
 ):

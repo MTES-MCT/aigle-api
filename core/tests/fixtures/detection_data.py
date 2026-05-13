@@ -1,5 +1,5 @@
 from django.contrib.gis.geos import Point
-from django.utils import timezone
+import datetime
 from core.models import (
     TileSet,
     TileSetStatus,
@@ -21,7 +21,7 @@ from core.models.object_type_category import (
 
 def create_tile_set(name="Test TileSet", date=None, **kwargs):
     if date is None:
-        date = timezone.now()
+        date = datetime.date.today()
 
     try:
         return TileSet.objects.get(name=name)
