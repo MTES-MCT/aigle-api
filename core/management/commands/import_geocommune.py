@@ -10,6 +10,7 @@ from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from django.contrib.gis.geos import GEOSGeometry
 
+from core.constants.geo import SRID
 from core.utils.logs_helpers import log_command_event
 
 FILE_JSON_URL = (
@@ -54,7 +55,9 @@ class Command(BaseCommand):
         for data_commune in data_communes:
             name = data_commune["com_name"][0]
             iso_code = data_commune["com_code"][0]
-            geometry = GEOSGeometry(json.dumps(data_commune["geo_shape"]["geometry"]))
+            geometry = GEOSGeometry(
+                json.dumps(data_commune["geo_shape"]["geometry"]), srid=SRID
+            )
 
             department_code = data_commune["dep_code"][0]
             department = department_code_department_map.get(department_code)

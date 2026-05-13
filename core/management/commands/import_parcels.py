@@ -12,6 +12,7 @@ from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from django.contrib.gis.geos import GEOSGeometry
 
+from core.constants.geo import SRID
 from core.models.parcel import Parcel
 from core.utils.logs_helpers import log_command_event
 
@@ -105,7 +106,7 @@ class Command(BaseCommand):
                 prefix = properties["prefixe"]
                 contenance = properties.get("contenance", 0)
                 arpente = properties.get("arpente", False)
-                geometry = GEOSGeometry(json.dumps(feature["geometry"]))
+                geometry = GEOSGeometry(json.dumps(feature["geometry"]), srid=SRID)
                 refreshed_at = datetime.strptime(
                     properties["updated"], "%Y-%m-%d"
                 ).date()

@@ -9,16 +9,16 @@ from core.constants.geo import SRID
 def ST_TileEnvelope(z: int, x: int, y: int):
     with connection.cursor() as cursor:
         cursor.execute(
-            f"""
-            SELECT 
+            """
+            SELECT
                 ST_AsText(
                     ST_Transform(
-                       ST_TileEnvelope(%s, %s, %s), 
-                       {SRID}
+                       ST_TileEnvelope(%s, %s, %s),
+                       %s
                     )
                 )
         """,
-            [z, x, y],
+            [z, x, y, SRID],
         )
         row = cursor.fetchone()
         return row[0] if row else None

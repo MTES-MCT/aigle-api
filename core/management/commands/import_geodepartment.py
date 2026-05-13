@@ -12,6 +12,7 @@ from core.models import GeoRegion
 from core.models.geo_department import GeoDepartment
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
+from core.constants.geo import SRID
 from django.contrib.gis.geos import GEOSGeometry
 
 SHP_ZIP_URL = (
@@ -98,7 +99,9 @@ class Command(BaseCommand):
             if insee_codes and insee_code not in insee_codes:
                 continue
 
-            geometry = GEOSGeometry(json.dumps(feature.__geo_interface__["geometry"]))
+            geometry = GEOSGeometry(
+                json.dumps(feature.__geo_interface__["geometry"]), srid=SRID
+            )
 
             code_insee_simplified = process_code_insee(properties["code_insee"])
 

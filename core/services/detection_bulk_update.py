@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 from django.contrib.gis.geos import MultiPolygon
+from django.db import transaction
 
 from core.models.detection import Detection
 from core.models.object_type import ObjectType
@@ -13,6 +14,7 @@ class DetectionBulkUpdateService:
     def __init__(self, user):
         self.user = user
 
+    @transaction.atomic
     def update_multiple_detections(
         self, detections: List[Detection], update_data: Dict[str, Any]
     ) -> List[Detection]:
