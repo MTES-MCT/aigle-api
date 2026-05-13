@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date
 from typing import Any, Dict, List, Tuple
 
 from common.views.base import BaseViewSetMixin
@@ -263,7 +263,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                 continue
 
             try:
-                date = datetime(int(year_raw), 1, 1)
+                tile_date = date(int(year_raw), 1, 1)
             except ValueError as exc:
                 errors.append(
                     bulk_error(f"année invalide '{year_raw}': {exc}", line=index)
@@ -296,7 +296,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                 {
                     "name": name,
                     "url": url,
-                    "date": date.isoformat(),
+                    "date": tile_date.isoformat(),
                     "tile_set_status": TileSetStatus.VISIBLE,
                     "tile_set_scheme": TileSetScheme.xyz,
                     "tile_set_type": TileSetType.BACKGROUND,
