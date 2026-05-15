@@ -8,6 +8,8 @@ from core.tests.fixtures.users import (
     create_super_admin,
     create_admin,
     create_regular_user,
+    create_user_group,
+    add_user_to_group,
 )
 from core.models.geo_custom_zone import (
     GeoCustomZone,
@@ -100,6 +102,42 @@ class GeoCustomZoneViewSetTests(BaseAPITestCase):
         data = {"name": "New Zone", "color": "#AABBCC"}
         response = self.client.post(url, data, format="json")
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_list_admin_with_user_group(self):
+        group = create_user_group(name="Admin Group")
+        group.geo_custom_zones.add(self.zone_1)
+        add_user_to_group(self.admin, group)
+
+        self.authenticate_user(self.admin)
+        url = reverse("GeoCustomZoneViewSet-list")
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(response.data, list)
+        names = [r["name"] for r in response.data]
+        self.assertIn("Zone Alpha", names)
+        self.assertNotIn("Zone Beta", names)
+
+    def test_list_admin_without_user_group(self):
+        self.authenticate_user(self.admin)
+        url = reverse("GeoCustomZoneViewSet-list")
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
+    def test_create_admin(self):
+        group = create_user_group(name="Admin Create Group")
+        add_user_to_group(self.admin, group)
+
+        self.authenticate_user(self.admin)
+        url = reverse("GeoCustomZoneViewSet-list")
+        data = {"name": "Admin Zone", "color": "#CCDDEE"}
+        response = self.client.post(url, data, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["name"], "Admin Zone")
+        self.assertTrue(group.geo_custom_zones.filter(name="Admin Zone").exists())
 
     def test_delete_unauthenticated(self):
         url = reverse(
