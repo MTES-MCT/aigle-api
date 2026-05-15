@@ -1,11 +1,10 @@
 from collections import defaultdict
-from django.utils import timezone
+from datetime import date as date_type
 from typing import List, Optional, TypedDict, Tuple
 from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.tile_set import TileSet, TileSetType, TileSetStatus
 from core.models.user import User, UserRole
-from core.models.user_group import UserUserGroup
 from core.permissions.base import BasePermission
 from core.utils.postgis import GeometryType, GetGeometryType
 from django.db.models import QuerySet, Count, Case, When, F, FloatField
@@ -363,54 +362,31 @@ class TileSetPermission(
         self, filter_tile_set_intersects_geometry: Optional[MultiPolygon] = None
     ) -> Optional[MultiPolygon]:
         """Get union of user's accessible geo zones."""
-        user_user_groups_with_geo_union = UserUserGroup.objects.filter(
-            user=self.user
-        ).prefetch_related("user_group__object_type_categories__object_types")
+        geo_zones = GeoZone.objects.filter(
+            user_groups__user_user_groups__user=self.user
+        )
 
-        user_user_groups_with_geo_union = user_user_groups_with_geo_union.annotate(
-            geo_zone_count=Count("user_group__geo_zones")
-        ).filter(geo_zone_count__gt=0)
-
-        # Collect all geometries from user groups
-        all_geometries = []
-        for user_user_group in user_user_groups_with_geo_union:
-            geo_zones = user_user_group.user_group.geo_zones.all()
-            if len(geo_zones) == 1:
-                geometry = geo_zones[0].geometry
-            elif len(geo_zones) > 1:
-                # Use Union aggregate on the related geo zones
-                union_result = user_user_group.user_group.geo_zones.aggregate(
-                    union_geom=Union("geometry")
+        if filter_tile_set_intersects_geometry:
+            result = geo_zones.aggregate(
+                union_geom=Intersection(
+                    Union("geometry"), filter_tile_set_intersects_geometry
                 )
-                geometry = union_result["union_geom"]
-            else:
-                continue  # Skip if no geo zones
-
-            if filter_tile_set_intersects_geometry and geometry:
-                geometry = geometry.intersection(filter_tile_set_intersects_geometry)
-
-            if geometry:
-                all_geometries.append(geometry)
-
-        # Final union of all collected geometries
-        if not all_geometries:
-            return None
-        elif len(all_geometries) == 1:
-            return all_geometries[0]
+            )["union_geom"]
         else:
-            # Manually union all geometries
-            result = all_geometries[0]
-            for geom in all_geometries[1:]:
-                result = result.union(geom)
-            return result
+            result = geo_zones.aggregate(union_geom=Union("geometry"))["union_geom"]
+
+        if result is None or result.empty:
+            return None
+
+        return result
 
 
 def get_tile_set_years_ago(
     tile_sets: List[TileSet], relative_years: int
 ) -> Optional[TileSet]:
     tile_set_years_ago = None
-    date_years_ago = timezone.now()
-    date_years_ago = date_years_ago.replace(year=date_years_ago.year - relative_years)
+    today = date_type.today()
+    date_years_ago = today.replace(year=today.year - relative_years)
 
     for tile_set in tile_sets:
         if tile_set.date <= date_years_ago:

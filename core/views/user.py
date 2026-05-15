@@ -18,17 +18,19 @@ from core.services.user import UserService
 from core.utils.bulk_csv import (
     LIST_SEP,
     attachment_response,
+    bulk_error,
     bulk_import_preview_response,
     join_list,
     parse_csv,
     write_csv,
 )
-from core.utils.filters import ChoiceInFilter
+from core.utils.filters import ChoiceInFilter, UuidInFilter
 from core.utils.permissions import (
     MODIFY_ACTIONS,
     AdminRolePermission,
     SuperAdminRolePermission,
 )
+from core.utils.user_action_log import UserActionLogMixin
 
 UserModel = get_user_model()
 
@@ -47,6 +49,9 @@ USER_RIGHTS_READ_VALUES = [UserGroupRight.READ]
 class UserFilter(FilterSet):
     email = CharFilter(lookup_expr="icontains")
     roles = ChoiceInFilter(field_name="user_role", choices=UserRole.choices)
+    user_group_uuids = UuidInFilter(
+        field_name="user_user_groups__user_group__uuid", distinct=True
+    )
     ordering = OrderingFilter(fields=("email", "created_at", "updated_at"))
 
     class Meta:
@@ -55,6 +60,7 @@ class UserFilter(FilterSet):
 
 
 class UserViewSet(
+    UserActionLogMixin,
     BaseViewSetMixin[UserModel],
 ):
     lookup_field = "uuid"
@@ -182,10 +188,10 @@ class UserViewSet(
 
     def _validate_user_csv(
         self, request
-    ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         uploaded = request.FILES.get("file")
         if not uploaded:
-            return [], ["Aucun fichier fourni"], []
+            return [], [bulk_error("Aucun fichier fourni")], []
 
         rows, errors = parse_csv(uploaded)
         if errors:
@@ -202,45 +208,58 @@ class UserViewSet(
         preview: List[Dict[str, Any]] = []
         resolved: List[Dict[str, Any]] = []
 
-        for index, row in enumerate(rows, start=2):  # +2: header + 1-indexed
+        for index, row in enumerate(rows, start=2):
             email = row.get("email", "")
             role = row.get("role", "")
             group_name = row.get("nom du groupe", "")
             rights_label = row.get("droits du groupe", "")
 
             if not email:
-                errors.append(f"Ligne {index}: email manquant")
+                errors.append(bulk_error("email manquant", line=index))
                 continue
             if email in seen_emails:
-                errors.append(f"Ligne {index}: email en doublon dans le CSV ({email})")
+                errors.append(
+                    bulk_error(f"email en doublon dans le CSV ({email})", line=index)
+                )
                 continue
             seen_emails.add(email)
             if email in existing_emails:
                 errors.append(
-                    f"Ligne {index}: un utilisateur avec l'email {email} existe déjà"
+                    bulk_error(
+                        f"un utilisateur avec l'email {email} existe déjà",
+                        line=index,
+                    )
                 )
                 continue
 
             if role not in valid_roles:
                 errors.append(
-                    f"Ligne {index}: rôle invalide '{role}'. Valeurs attendues: "
-                    + ", ".join(sorted(valid_roles))
+                    bulk_error(
+                        f"rôle invalide '{role}'. Valeurs attendues: "
+                        + ", ".join(sorted(valid_roles)),
+                        line=index,
+                    )
                 )
                 continue
 
             if LIST_SEP in group_name:
                 errors.append(
-                    f"Ligne {index}: l'import ne supporte qu'un seul groupe par "
-                    f"utilisateur (trouvé: '{group_name}')"
+                    bulk_error(
+                        f"l'import ne supporte qu'un seul groupe par "
+                        f"utilisateur (trouvé: '{group_name}')",
+                        line=index,
+                    )
                 )
                 continue
             if not group_name:
-                errors.append(f"Ligne {index}: nom du groupe manquant")
+                errors.append(bulk_error("nom du groupe manquant", line=index))
                 continue
 
             user_group = UserGroup.objects.filter(name=group_name).first()
             if not user_group:
-                errors.append(f"Ligne {index}: groupe introuvable '{group_name}'")
+                errors.append(
+                    bulk_error(f"groupe introuvable '{group_name}'", line=index)
+                )
                 continue
 
             if rights_label == USER_RIGHTS_WRITE_LABEL:
@@ -249,9 +268,12 @@ class UserViewSet(
                 rights = USER_RIGHTS_READ_VALUES
             else:
                 errors.append(
-                    f"Ligne {index}: droits invalides '{rights_label}'. "
-                    f"Valeurs attendues: '{USER_RIGHTS_WRITE_LABEL}' ou "
-                    f"'{USER_RIGHTS_READ_LABEL}'"
+                    bulk_error(
+                        f"droits invalides '{rights_label}'. "
+                        f"Valeurs attendues: '{USER_RIGHTS_WRITE_LABEL}' ou "
+                        f"'{USER_RIGHTS_READ_LABEL}'",
+                        line=index,
+                    )
                 )
                 continue
 

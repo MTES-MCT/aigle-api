@@ -19,7 +19,11 @@ from core.serializers.geo_custom_zone import (
     GeoCustomZoneWithCollectivitiesSerializer,
 )
 from core.utils.bulk_csv import (
+    COL_COMMUNES,
+    COL_DEPARTMENTS,
+    COL_REGIONS,
     attachment_response,
+    bulk_error,
     bulk_import_preview_response,
     bulk_import_run,
     join_list,
@@ -30,15 +34,17 @@ from core.utils.bulk_csv import (
     write_csv,
 )
 from core.utils.permissions import AdminRolePermission, SuperAdminRolePermission
+from core.utils.user_action_log import UserActionLogMixin
 
 
 CUSTOM_ZONE_CSV_HEADERS = [
     "catégorie",
     "nom de la zone",
     "nom court de la zone",
-    "régions",
-    "départements",
-    "communes",
+    "couleur",
+    COL_REGIONS,
+    COL_DEPARTMENTS,
+    COL_COMMUNES,
 ]
 
 
@@ -62,7 +68,7 @@ class GeoCustomZoneFilter(FilterSet):
         return queryset.filter(name__icontains=value)
 
 
-class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
+class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
     filterset_class = GeoCustomZoneFilter
     permission_classes = [AdminRolePermission]
 
@@ -141,9 +147,10 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
                     else "",
                     "nom de la zone": zone.name or "",
                     "nom court de la zone": zone.name_short or "",
-                    "régions": join_list(zones_by_type[GeoZoneType.REGION]),
-                    "départements": join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
-                    "communes": join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                    "couleur": zone.color or "",
+                    COL_REGIONS: join_list(zones_by_type[GeoZoneType.REGION]),
+                    COL_DEPARTMENTS: join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
+                    COL_COMMUNES: join_list(zones_by_type[GeoZoneType.COMMUNE]),
                 }
             )
 
@@ -176,16 +183,16 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
 
     def _validate_custom_zone_csv(
         self, request
-    ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         uploaded = request.FILES.get("file")
         if not uploaded:
-            return [], ["Aucun fichier fourni"], []
+            return [], [bulk_error("Aucun fichier fourni")], []
 
         rows, parse_errors = parse_csv(uploaded)
         if parse_errors:
             return [], parse_errors, []
 
-        errors: List[str] = []
+        errors: List[Dict[str, Any]] = []
         preview: List[Dict[str, Any]] = []
         payloads: List[Dict[str, Any]] = []
 
@@ -202,47 +209,67 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
             category_name = row.get("catégorie", "")
             name = row.get("nom de la zone", "")
             name_short = row.get("nom court de la zone", "")
-            regions_raw = parse_list(row.get("régions", ""))
-            departments_raw = parse_list(row.get("départements", ""))
-            communes_raw = parse_list(row.get("communes", ""))
+            color = row.get("couleur", "")
+            regions_raw = parse_list(row.get(COL_REGIONS.lower(), ""))
+            departments_raw = parse_list(row.get(COL_DEPARTMENTS.lower(), ""))
+            communes_raw = parse_list(row.get(COL_COMMUNES.lower(), ""))
 
             if not name:
-                errors.append(f"Ligne {index}: nom de la zone manquant")
+                errors.append(bulk_error("nom de la zone manquant", line=index))
                 continue
             if name in seen_names:
                 errors.append(
-                    f"Ligne {index}: nom de zone en doublon dans le CSV ({name})"
+                    bulk_error(
+                        f"nom de zone en doublon dans le CSV ({name})", line=index
+                    )
                 )
                 continue
             seen_names.add(name)
             if name in existing_names:
                 errors.append(
-                    f"Ligne {index}: une zone avec le nom '{name}' existe déjà"
+                    bulk_error(f"une zone avec le nom '{name}' existe déjà", line=index)
                 )
                 continue
 
             if name_short:
                 if name_short in seen_short_names:
                     errors.append(
-                        f"Ligne {index}: nom court en doublon dans le CSV "
-                        f"({name_short})"
+                        bulk_error(
+                            f"nom court en doublon dans le CSV ({name_short})",
+                            line=index,
+                        )
                     )
                     continue
                 seen_short_names.add(name_short)
                 if name_short in existing_short_names:
                     errors.append(
-                        f"Ligne {index}: une zone avec le nom court "
-                        f"'{name_short}' existe déjà"
+                        bulk_error(
+                            f"une zone avec le nom court '{name_short}' existe déjà",
+                            line=index,
+                        )
                     )
                     continue
 
-            if not category_name:
-                errors.append(f"Ligne {index}: catégorie manquante")
-                continue
+            category = None
+            if category_name:
+                category = GeoCustomZoneCategory.objects.filter(
+                    name=category_name
+                ).first()
+                if not category:
+                    errors.append(
+                        bulk_error(
+                            f"catégorie introuvable '{category_name}'", line=index
+                        )
+                    )
+                    continue
 
-            category = GeoCustomZoneCategory.objects.filter(name=category_name).first()
-            if not category:
-                errors.append(f"Ligne {index}: catégorie introuvable '{category_name}'")
+            if not category and not color:
+                errors.append(
+                    bulk_error(
+                        "couleur requise lorsqu'aucune catégorie n'est assignée",
+                        line=index,
+                    )
+                )
                 continue
 
             (
@@ -262,23 +289,29 @@ class GeoCustomZoneViewSet(BaseViewSetMixin[GeoCustomZone]):
                     "catégorie": category_name,
                     "nom de la zone": name,
                     "nom court de la zone": name_short,
-                    "régions": join_list(regions_raw),
-                    "départements": join_list(departments_raw),
-                    "communes": join_list(communes_raw),
+                    "couleur": color,
+                    COL_REGIONS: join_list(regions_raw),
+                    COL_DEPARTMENTS: join_list(departments_raw),
+                    COL_COMMUNES: join_list(communes_raw),
                 }
             )
-            payloads.append(
-                {
-                    "name": name,
-                    "name_short": name_short or None,
-                    "geo_custom_zone_status": GeoCustomZoneStatus.ACTIVE,
-                    "geo_custom_zone_type": GeoCustomZoneType.COMMON,
-                    "geo_custom_zone_category_uuid": str(category.uuid),
-                    "regions_uuids": regions_uuids,
-                    "departments_uuids": departments_uuids,
-                    "communes_uuids": communes_uuids,
-                    "geo_custom_zones_uuids": [],
-                }
-            )
+
+            payload: Dict[str, Any] = {
+                "name": name,
+                "name_short": name_short or None,
+                "geo_custom_zone_status": GeoCustomZoneStatus.ACTIVE,
+                "geo_custom_zone_type": GeoCustomZoneType.COMMON,
+                "regions_uuids": regions_uuids,
+                "departments_uuids": departments_uuids,
+                "communes_uuids": communes_uuids,
+                "geo_custom_zones_uuids": [],
+            }
+
+            if category:
+                payload["geo_custom_zone_category_uuid"] = str(category.uuid)
+            else:
+                payload["color"] = color
+
+            payloads.append(payload)
 
         return preview, errors, payloads

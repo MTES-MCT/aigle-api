@@ -1,15 +1,19 @@
 name: Deploy to Scaleway
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
+    types:
+      - completed
     branches:
       - develop
       - main
 
 jobs:
   deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name }}
+    environment: ${{ github.event.workflow_run.head_branch }}
 
     steps:
       - name: Checkout code
@@ -35,8 +39,8 @@ jobs:
             sudo systemctl stop gunicorn_aigle || true
 
             # Fetch latest code
-            git fetch origin ${{ github.ref_name }} || exit 1
-            git reset --hard origin/${{ github.ref_name }} || exit 1
+            git fetch origin ${{ github.event.workflow_run.head_branch }} || exit 1
+            git reset --hard origin/${{ github.event.workflow_run.head_branch }} || exit 1
 
             # Export env vars
             set -a

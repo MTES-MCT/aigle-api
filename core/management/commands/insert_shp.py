@@ -3,6 +3,7 @@ from django.contrib.gis.geos import GEOSGeometry
 from django.db import connection
 from django.contrib.gis.db.models.functions import Intersection
 
+import re
 import uuid
 import json
 import shapefile
@@ -10,6 +11,8 @@ import shapefile
 from core.constants.geo import SRID
 
 BATCH_SIZE = 10000
+
+IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class Command(BaseCommand):
@@ -22,28 +25,34 @@ class Command(BaseCommand):
         parser.add_argument("--name", type=str)
 
     def handle(self, *args, **options):
-        name = options.get("name") or uuid.uuid4()
+        name = options.get("name") or str(uuid.uuid4())
+
+        table_schema = options["table_schema"]
+        table_name = options["table_name"]
+
+        if not IDENTIFIER_RE.match(table_schema):
+            raise ValueError(f"Invalid table schema: {table_schema}")
+        if not IDENTIFIER_RE.match(table_name):
+            raise ValueError(f"Invalid table name: {table_name}")
+
         shape = shapefile.Reader(options["shp_path"])
 
         geometries = []
 
         for feature in shape.shapeRecords():
             geometries.append(
-                GEOSGeometry(json.dumps(feature.__geo_interface__["geometry"]))
+                GEOSGeometry(
+                    json.dumps(feature.__geo_interface__["geometry"]), srid=SRID
+                )
             )
-
-        cursor = connection.cursor()
 
         if len(geometries) == 1:
             geometry_to_insert = geometries[0]
         else:
             geometry_to_insert = Intersection(*geometries)
 
-        geometry_to_insert.transform(2154, SRID)
+        cursor = connection.cursor()
         cursor.execute(
-            f"""
-            INSERT INTO {options["table_schema"]}.{options["table_name"]} (name, geometry)
-            VALUES  
-                ('{name}', '{geometry_to_insert}')
-        """
+            f"INSERT INTO {table_schema}.{table_name} (name, geometry) VALUES (%s, %s)",
+            [name, geometry_to_insert.wkt],
         )

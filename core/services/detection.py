@@ -1,5 +1,5 @@
 from typing import List, Optional, Iterable, Dict, Any
-from django.contrib.gis.geos import GEOSGeometry, Point
+from django.contrib.gis.geos import GEOSGeometry
 from django.contrib.gis.db.models.functions import Intersection, Area, Centroid
 from django.db.models import Value, Q
 from django.db import transaction
@@ -210,30 +210,22 @@ class DetectionService:
         detection_object.commune_id = commune.id
         detection_object.save()
 
-        geometry_points = [Point(*coord) for coord in geometry.coords[0][:-1]]
-
-        # Update geo_custom_zones
+        # Update geo_custom_zones — find zones that fully cover the detection geometry
         geo_custom_zones = GeoCustomZone.objects.filter(
-            Q(
-                geo_zones__id__in=[
-                    commune.id,
-                    commune.department.id,
-                    commune.department.region.id,
-                ]
-            )
+            geo_zones__id__in=[
+                commune.id,
+                commune.department.id,
+                commune.department.region.id,
+            ],
+            geometry__covers=geometry,
         )
-        for point in geometry_points:
-            geo_custom_zones = geo_custom_zones.filter(geometry__contains=point)
-
-        geo_custom_zones = geo_custom_zones.all()
+        geo_custom_zones = list(geo_custom_zones)
         detection_object.geo_custom_zones.add(*geo_custom_zones)
 
         geo_sub_custom_zones = GeoSubCustomZone.objects.filter(
-            custom_zone__id__in=[gcz.id for gcz in geo_custom_zones]
+            custom_zone__id__in=[gcz.id for gcz in geo_custom_zones],
+            geometry__covers=geometry,
         )
-        for point in geometry_points:
-            geo_sub_custom_zones = geo_sub_custom_zones.filter(geometry__contains=point)
-
         detection_object.geo_sub_custom_zones.add(*geo_sub_custom_zones)
 
         return detection_object

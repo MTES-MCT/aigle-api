@@ -11,9 +11,8 @@ from core.repository.user import UserRepository
 
 from django.contrib.gis.geos import Point
 from django.contrib.gis.geos.collections import MultiPolygon
-from django.db.models import QuerySet, Count, Case, When, F
+from django.db.models import QuerySet
 from django.contrib.gis.db.models.aggregates import Union
-from django.contrib.gis.db.models.fields import GeometryField
 from django.contrib.gis.db.models.functions import Intersection, Envelope
 from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
@@ -90,7 +89,6 @@ class UserPermission(
         intersects_geometry: Optional[MultiPolygon] = None,
         bbox: Optional[bool] = False,
     ) -> Optional[MultiPolygon]:
-        # super admins have access to all zones
         if self.user.user_role == UserRole.SUPER_ADMIN:
             return intersects_geometry
 
@@ -98,50 +96,22 @@ class UserPermission(
             user_groups__user_user_groups__user=self.user
         )
 
-        geo_zones_accessibles = geo_zones_accessibles.annotate(
-            geo_zone_count=Count("id"),
-            geometry_union=Case(
-                When(geo_zone_count=1, then=F("geometry")),
-                default=Union("geometry"),
-                output_field=GeometryField(),
-            ),
+        if intersects_geometry:
+            agg_expr = Intersection(Union("geometry"), intersects_geometry)
+        else:
+            agg_expr = Union("geometry")
+
+        if bbox:
+            agg_expr = Envelope(agg_expr)
+
+        accessible_geometry = geo_zones_accessibles.aggregate(result=agg_expr).get(
+            "result"
         )
 
-        if intersects_geometry:
-            geo_zones_accessibles = geo_zones_accessibles.annotate(
-                geometry_union_filtered=Intersection(
-                    "geometry_union", intersects_geometry
-                )
-            )
-            union_field = "geometry_union_filtered"
-        else:
-            union_field = "geometry_union"
-
-        # Handle the case where there might be only one zone
-        zones = geo_zones_accessibles.values_list(union_field, flat=True)
-        zones_list = list(zones)
-
-        if not zones_list:
-            accessible_geometry = None
-        elif len(zones_list) == 1:
-            accessible_geometry = zones_list[0]
-            if bbox:
-                accessible_geometry = (
-                    accessible_geometry.envelope if accessible_geometry else None
-                )
-        else:
-            total_geometry = Union(union_field)
-            if bbox:
-                total_geometry = Envelope(total_geometry)
-
-            accessible_geometry = geo_zones_accessibles.aggregate(
-                total_geo_union=total_geometry
-            ).get("total_geo_union")
-
-        if accessible_geometry is None:
+        if accessible_geometry is None or accessible_geometry.empty:
             return None
 
-        return None if accessible_geometry.empty else accessible_geometry
+        return accessible_geometry
 
     def _has_rights(
         self,
@@ -159,14 +129,11 @@ class UserPermission(
             ],
         )
         geo_zones_editables = geo_zones_editables.annotate(
-            geo_zone_count=Count("id"),
-            geometry_union=Case(
-                When(geo_zone_count=1, then=F("geometry")),
-                default=Union("geometry"),
-                output_field=GeometryField(),
-            ),
+            geometry_union=Union("geometry"),
         )
-        geo_zones_editables.filter(geometry_union__contains=geometry)
+        geo_zones_editables = geo_zones_editables.filter(
+            geometry_union__contains=geometry
+        )
 
         can_edit = geo_zones_editables.exists()
 
@@ -245,39 +212,24 @@ class UserPermission(
                 UserGroupRight.READ,
             ]
 
-        # First, get user groups with geo zones
-        user_user_groups = self.user.user_user_groups.annotate(
-            geo_zone_count=Count("user_group__geo_zones")
-        ).filter(geo_zone_count__gt=0)
+        from django.db.models import Q
+        from functools import reduce
+        from operator import or_
 
-        # Handle union differently based on count per user group
-        user_user_groups_with_geometry = []
-        for user_user_group in user_user_groups:
-            geo_zones = user_user_group.user_group.geo_zones.all()
-            if len(geo_zones) == 1:
-                union_geometry = geo_zones[0].geometry
-            elif len(geo_zones) > 1:
-                # Use Union aggregate on the related geo zones
-                union_result = user_user_group.user_group.geo_zones.aggregate(
-                    union_geom=Union("geometry")
-                )
-                union_geometry = union_result["union_geom"]
-            else:
-                continue  # Skip if no geo zones
+        point_filters = reduce(
+            or_,
+            [Q(user_group__geo_zones__geometry__contains=point) for point in points],
+        )
 
-            # Check if any point is contained in the union geometry
-            contains_point = False
-            for point in points:
-                if union_geometry and union_geometry.contains(point):
-                    contains_point = True
-                    break
-
-            if contains_point:
-                user_user_groups_with_geometry.append(user_user_group)
+        matching_groups = (
+            self.user.user_user_groups.filter(point_filters)
+            .values_list("user_group_rights", flat=True)
+            .distinct()
+        )
 
         user_group_rights = set()
-        for user_user_group in user_user_groups_with_geometry:
-            user_group_rights.update(user_user_group.user_group_rights)
+        for rights in matching_groups:
+            user_group_rights.update(rights)
 
         res = list(user_group_rights)
 

@@ -35,7 +35,7 @@ class TileSet(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         max_length=DEFAULT_MAX_LENGTH,
         choices=TileSetStatus.choices,
     )
-    date = models.DateTimeField()
+    date = models.DateField()
     tile_set_scheme = models.CharField(
         max_length=DEFAULT_MAX_LENGTH, choices=TileSetScheme.choices
     )

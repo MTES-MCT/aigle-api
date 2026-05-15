@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   db:
     shm_size: 1g
@@ -9,13 +7,19 @@ services:
     environment:
       POSTGRES_USER: ${SQL_USER}
       POSTGRES_PASSWORD: ${SQL_PASSWORD}
+      POSTGRES_DB: ${SQL_DATABASE:-aigle}
     ports:
       - "${SQL_PORT}:5432"
     networks:
       - db
     volumes:
       - aigle_data:/var/lib/postgresql/data:delegated
-  
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SQL_USER} -d ${SQL_DATABASE:-aigle}"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
   redis:
     container_name: aigle_api_redis_container
     image: redis:7-alpine

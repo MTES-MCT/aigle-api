@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date
 from typing import Any, Dict, List, Tuple
 
 from common.views.base import BaseViewSetMixin
@@ -23,7 +23,11 @@ from core.serializers.tile_set import (
 )
 from rest_framework.decorators import action
 from core.utils.bulk_csv import (
+    COL_COMMUNES,
+    COL_DEPARTMENTS,
+    COL_REGIONS,
     attachment_response,
+    bulk_error,
     bulk_import_preview_response,
     bulk_import_run,
     join_list,
@@ -45,9 +49,9 @@ TILE_SET_CSV_HEADERS = [
     "année",
     "nom du fond de carte",
     "url",
-    "régions",
-    "départements",
-    "communes",
+    COL_REGIONS,
+    COL_DEPARTMENTS,
+    COL_COMMUNES,
 ]
 
 
@@ -154,9 +158,9 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "année": str(tile_set.date.year) if tile_set.date else "",
                     "nom du fond de carte": tile_set.name,
                     "url": tile_set.url,
-                    "régions": join_list(zones_by_type[GeoZoneType.REGION]),
-                    "départements": join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
-                    "communes": join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                    COL_REGIONS: join_list(zones_by_type[GeoZoneType.REGION]),
+                    COL_DEPARTMENTS: join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
+                    COL_COMMUNES: join_list(zones_by_type[GeoZoneType.COMMUNE]),
                 }
             )
 
@@ -189,16 +193,16 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
 
     def _validate_tile_set_csv(
         self, request
-    ) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]]]:
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         uploaded = request.FILES.get("file")
         if not uploaded:
-            return [], ["Aucun fichier fourni"], []
+            return [], [bulk_error("Aucun fichier fourni")], []
 
         rows, parse_errors = parse_csv(uploaded)
         if parse_errors:
             return [], parse_errors, []
 
-        errors: List[str] = []
+        errors: List[Dict[str, Any]] = []
         preview: List[Dict[str, Any]] = []
         payloads: List[Dict[str, Any]] = []
 
@@ -211,51 +215,59 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
             year_raw = row.get("année", "")
             name = row.get("nom du fond de carte", "")
             url = row.get("url", "")
-            regions_raw = parse_list(row.get("régions", ""))
-            departments_raw = parse_list(row.get("départements", ""))
-            communes_raw = parse_list(row.get("communes", ""))
+            regions_raw = parse_list(row.get(COL_REGIONS.lower(), ""))
+            departments_raw = parse_list(row.get(COL_DEPARTMENTS.lower(), ""))
+            communes_raw = parse_list(row.get(COL_COMMUNES.lower(), ""))
 
             if not name:
-                errors.append(f"Ligne {index}: nom du fond de carte manquant")
+                errors.append(bulk_error("nom du fond de carte manquant", line=index))
                 continue
             if name in seen_names:
                 errors.append(
-                    f"Ligne {index}: nom de fond de carte en doublon ({name})"
+                    bulk_error(f"nom de fond de carte en doublon ({name})", line=index)
                 )
                 continue
             seen_names.add(name)
             if name in existing_names:
                 errors.append(
-                    f"Ligne {index}: un fond de carte avec le nom '{name}' "
-                    f"existe déjà"
+                    bulk_error(
+                        f"un fond de carte avec le nom '{name}' existe déjà",
+                        line=index,
+                    )
                 )
                 continue
 
             if not url:
-                errors.append(f"Ligne {index}: URL manquante")
+                errors.append(bulk_error("URL manquante", line=index))
                 continue
             if url in seen_urls:
-                errors.append(f"Ligne {index}: URL en doublon ({url})")
+                errors.append(bulk_error(f"URL en doublon ({url})", line=index))
                 continue
             seen_urls.add(url)
             if url in existing_urls:
                 errors.append(
-                    f"Ligne {index}: un fond de carte avec l'URL '{url}' "
-                    f"existe déjà"
+                    bulk_error(
+                        f"un fond de carte avec l'URL '{url}' existe déjà",
+                        line=index,
+                    )
                 )
                 continue
 
             if not year_raw or not year_raw.isdigit() or len(year_raw) != 4:
                 errors.append(
-                    f"Ligne {index}: année invalide '{year_raw}'. "
-                    f"Format attendu: 'YYYY'"
+                    bulk_error(
+                        f"année invalide '{year_raw}'. Format attendu: 'YYYY'",
+                        line=index,
+                    )
                 )
                 continue
 
             try:
-                date = datetime(int(year_raw), 1, 1)
+                tile_date = date(int(year_raw), 1, 1)
             except ValueError as exc:
-                errors.append(f"Ligne {index}: année invalide '{year_raw}': {exc}")
+                errors.append(
+                    bulk_error(f"année invalide '{year_raw}': {exc}", line=index)
+                )
                 continue
 
             (
@@ -275,16 +287,16 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "année": year_raw,
                     "nom du fond de carte": name,
                     "url": url,
-                    "régions": join_list(regions_raw),
-                    "départements": join_list(departments_raw),
-                    "communes": join_list(communes_raw),
+                    COL_REGIONS: join_list(regions_raw),
+                    COL_DEPARTMENTS: join_list(departments_raw),
+                    COL_COMMUNES: join_list(communes_raw),
                 }
             )
             payloads.append(
                 {
                     "name": name,
                     "url": url,
-                    "date": date.isoformat(),
+                    "date": tile_date.isoformat(),
                     "tile_set_status": TileSetStatus.VISIBLE,
                     "tile_set_scheme": TileSetScheme.xyz,
                     "tile_set_type": TileSetType.BACKGROUND,

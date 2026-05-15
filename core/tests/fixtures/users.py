@@ -6,6 +6,7 @@ user groups, and API keys for testing.
 """
 
 from core.models import User, UserRole, UserGroup, UserUserGroup
+from core.models.user_group import UserGroupRight
 from rest_framework_api_key.models import APIKey
 
 
@@ -40,7 +41,7 @@ def create_user(
     return user
 
 
-def create_super_admin(email="admin@example.com", password="adminpass123"):
+def create_super_admin(email="superadmin@example.com", password="adminpass123"):
     """
     Create a super admin user.
 
@@ -136,7 +137,9 @@ def add_user_to_group(user, user_group):
         UserUserGroup object
     """
     user_user_group, _ = UserUserGroup.objects.get_or_create(
-        user=user, user_group=user_group
+        user=user,
+        user_group=user_group,
+        defaults={"user_group_rights": [UserGroupRight.READ, UserGroupRight.WRITE]},
     )
     return user_user_group
 

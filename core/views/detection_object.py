@@ -2,6 +2,7 @@ from common.views.base import BaseViewSetMixin
 
 from rest_framework.response import Response
 from rest_framework import serializers
+from core.models.detection import Detection
 from core.models.detection_object import DetectionObject
 from core.models.tile_set import TileSetType
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
@@ -18,6 +19,7 @@ from rest_framework.decorators import action
 from core.utils.filters import UuidInFilter
 from core.services.detection_object import DetectionObjectService
 from core.services.tile_set import TileSetService
+from django.contrib.gis.db.models.functions import Centroid
 from django_filters import FilterSet
 
 
@@ -111,14 +113,20 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         instance = self.get_object()
         serializer = self.get_serializer(instance)
 
-        # Business logic moved to service
         try:
-            last_position = instance.detections.all()[0].geometry.centroid
-            DetectionObjectService.save_user_position(
-                user=request.user, x=last_position.x, y=last_position.y
+            last_detection = (
+                Detection.objects.filter(detection_object=instance)
+                .annotate(centroid=Centroid("geometry"))
+                .values_list("centroid", flat=True)
+                .first()
             )
-        except (IndexError, AttributeError):
-            # No detections or geometry available
+            if last_detection:
+                DetectionObjectService.save_user_position(
+                    user=request.user,
+                    x=last_detection.x,
+                    y=last_detection.y,
+                )
+        except AttributeError:
             pass
 
         return Response(serializer.data)

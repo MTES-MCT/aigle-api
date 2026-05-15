@@ -6,6 +6,7 @@ from core.models.detection import Detection, DetectionSource
 
 from core.models.detection_data import (
     DetectionControlStatus,
+    DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
 from django.http import HttpResponse
@@ -45,7 +46,7 @@ class DetectionGeoFilter(FilterSet):
     )
     detectionPrescriptionStatuses = ChoiceInFilter(
         field_name="detection_data__detection_prescription_status",
-        choices=DetectionControlStatus.choices,
+        choices=DetectionPrescriptionStatus.choices,
     )
 
     neLat = NumberFilter(method="pass_")
