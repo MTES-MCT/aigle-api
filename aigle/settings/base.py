@@ -182,6 +182,16 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": True,
 }
 
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "authorization",
+    "content-type",
+    "origin",
+    "x-csrftoken",
+    "x-requested-with",
+    "x-user-group-uuid",
+]
+
 CORS_EXPOSE_HEADERS = [
     "content-disposition",
 ]

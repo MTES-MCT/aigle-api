@@ -24,9 +24,16 @@ from core.serializers.tile_set import TileSetMinimalSerializer
 class MapSettingsService:
     """Service for assembling map configuration and settings data."""
 
-    def __init__(self, user):
+    def __init__(self, user, scoped_user_group=None):
         self.user = user
-        self.user_permission = UserPermission(user)
+        self.scoped_user_group = scoped_user_group
+        self.user_permission = UserPermission(user, scoped_user_group=scoped_user_group)
+
+    def _is_unrestricted(self) -> bool:
+        return (
+            self.user.user_role == UserRole.SUPER_ADMIN
+            and self.scoped_user_group is None
+        )
 
     def build_settings(self) -> Dict[str, Any]:
         """Build complete map settings configuration."""
@@ -66,7 +73,7 @@ class MapSettingsService:
 
     def _get_tile_sets_data(self) -> tuple[List[Dict], Optional[Any]]:
         """Get tile sets data based on user role and permissions."""
-        if self.user.user_role == UserRole.SUPER_ADMIN:
+        if self._is_unrestricted():
             return self._get_super_admin_tile_sets(), None
         else:
             return self._get_regular_user_tile_sets()
@@ -95,7 +102,9 @@ class MapSettingsService:
 
     def _get_regular_user_tile_sets(self) -> tuple[List[Dict], Optional[Any]]:
         """Get tile sets for regular users with permission filtering."""
-        tile_sets = TileSetPermission(user=self.user).list_(with_bbox=True)
+        tile_sets = TileSetPermission(
+            user=self.user, scoped_user_group=self.scoped_user_group
+        ).list_(with_bbox=True)
         global_geometry_bbox = self.user_permission.get_accessible_geometry(bbox=True)
 
         setting_tile_sets = []
@@ -140,7 +149,11 @@ class MapSettingsService:
             *GEO_CUSTOM_ZONES_ORDER_BYS
         ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
 
-        if self.user.user_role != UserRole.SUPER_ADMIN:
+        if self.scoped_user_group:
+            geo_custom_zones_data = geo_custom_zones_data.filter(
+                user_groups_custom_geo_zones=self.scoped_user_group
+            )
+        elif not self._is_unrestricted():
             geo_custom_zones_data = geo_custom_zones_data.filter(
                 user_groups_custom_geo_zones__user_user_groups__user=self.user
             )

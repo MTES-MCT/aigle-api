@@ -78,10 +78,14 @@ class DetectionGeoFilter(FilterSet):
 
     def filter_queryset(self, queryset):
         from core.services.detection_geo_filter import DetectionGeoFilterService
+        from core.utils.super_admin_scope import get_super_admin_scoped_user_group
 
         queryset = super().filter_queryset(queryset)
 
-        filter_service = DetectionGeoFilterService(user=self.request.user)
+        scoped_user_group = get_super_admin_scoped_user_group(self.request)
+        filter_service = DetectionGeoFilterService(
+            user=self.request.user, scoped_user_group=scoped_user_group
+        )
         return filter_service.apply_filters(queryset, self.data)
 
 

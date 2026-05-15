@@ -16,8 +16,9 @@ from core.repository.detection import (
 class DetectionGeoFilterService:
     """Service for handling complex geographic detection filtering logic."""
 
-    def __init__(self, user):
+    def __init__(self, user, scoped_user_group=None):
         self.user = user
+        self.scoped_user_group = scoped_user_group
 
     def apply_filters(self, queryset: QuerySet, filter_params: dict) -> QuerySet:
         """Apply geographic filtering logic to detection queryset."""
@@ -48,7 +49,9 @@ class DetectionGeoFilterService:
         )
 
         if not object_types_uuids:
-            user_permission = UserPermission(self.user)
+            user_permission = UserPermission(
+                self.user, scoped_user_group=self.scoped_user_group
+            )
             object_types_with_status = (
                 user_permission.get_user_object_types_with_status()
             )
@@ -73,17 +76,16 @@ class DetectionGeoFilterService:
         # Build polygon from bounding box parameters
         polygon_requested = self._build_polygon_from_bbox(filter_params)
 
-        # Check user permissions for the requested geometry
-        geometry_accessible = UserPermission(user=self.user).get_accessible_geometry(
-            intersects_geometry=polygon_requested
-        )
+        geometry_accessible = UserPermission(
+            user=self.user, scoped_user_group=self.scoped_user_group
+        ).get_accessible_geometry(intersects_geometry=polygon_requested)
 
         if not geometry_accessible:
             return queryset.none()
 
-        # Get detection tile sets filter based on permissions
         detection_tilesets_filter = TileSetPermission(
             user=self.user,
+            scoped_user_group=self.scoped_user_group,
         ).get_last_detections_filters_detections(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
