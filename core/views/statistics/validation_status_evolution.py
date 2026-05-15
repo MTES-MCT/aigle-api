@@ -12,6 +12,7 @@ from core.repository.detection import (
     RepoFilterCustomZone,
     RepoFilterInterfaceDrawn,
 )
+from core.utils.super_admin_scope import get_super_admin_scoped_user_group
 from rest_framework.views import APIView
 
 from django.db.models import F
@@ -37,7 +38,12 @@ class StatisticsValidationStatusEvolutionView(APIView):
         endpoint_serializer.is_valid(raise_exception=True)
 
         repo = DetectionRepository()
-        collectivity_filter = UserPermission(user=request.user).get_collectivity_filter(
+        scoped_user_group = get_super_admin_scoped_user_group(request)
+
+        collectivity_filter = UserPermission(
+            user=request.user,
+            scoped_user_group=scoped_user_group,
+        ).get_collectivity_filter(
             communes_uuids=endpoint_serializer.validated_data.get("communesUuids"),
             departments_uuids=endpoint_serializer.validated_data.get(
                 "departmentsUuids"
@@ -47,6 +53,7 @@ class StatisticsValidationStatusEvolutionView(APIView):
 
         tile_sets = TileSetPermission(
             user=self.request.user,
+            scoped_user_group=scoped_user_group,
         ).list_(
             filter_uuid_in=endpoint_serializer.validated_data.get("tileSetsUuids"),
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],

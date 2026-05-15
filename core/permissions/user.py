@@ -24,9 +24,21 @@ if TYPE_CHECKING:
 class UserPermission(
     BasePermission[User],
 ):
-    def __init__(self, user: User, initial_queryset: Optional[QuerySet[User]] = None):
+    def __init__(
+        self,
+        user: User,
+        initial_queryset: Optional[QuerySet[User]] = None,
+        scoped_user_group: Optional[UserGroup] = None,
+    ):
         self.repository = UserRepository(initial_queryset=initial_queryset)
         self.user = user
+        self.scoped_user_group = scoped_user_group
+
+    def _is_unrestricted(self) -> bool:
+        return (
+            self.user.user_role == UserRole.SUPER_ADMIN
+            and self.scoped_user_group is None
+        )
 
     def get_collectivity_filter(
         self,
@@ -34,7 +46,7 @@ class UserPermission(
         departments_uuids: Optional[List[str]] = None,
         regions_uuids: Optional[List[str]] = None,
     ) -> Optional[CollectivityRepoFilter]:
-        if self.user.user_role == UserRole.SUPER_ADMIN and (
+        if self._is_unrestricted() and (
             communes_uuids is None
             and departments_uuids is None
             and regions_uuids is None
@@ -59,7 +71,11 @@ class UserPermission(
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
                 uuid__in=geozone_uuids
             )
-        elif self.user.user_role != UserRole.SUPER_ADMIN:
+        elif self.scoped_user_group:
+            geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
+                user_groups=self.scoped_user_group
+            )
+        elif not self._is_unrestricted():
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
                 user_groups__user_user_groups__user=self.user
             )
@@ -76,10 +92,7 @@ class UserPermission(
             region_ids=collectivity_repo_filter_dict.get(GeoZoneType.REGION),
         )
 
-        if (
-            self.user.user_role != UserRole.SUPER_ADMIN
-            and collectivity_filter.is_empty()
-        ):
+        if not self._is_unrestricted() and collectivity_filter.is_empty():
             raise BadRequest("User do not have access to any collectivity")
 
         return collectivity_filter
@@ -89,12 +102,17 @@ class UserPermission(
         intersects_geometry: Optional[MultiPolygon] = None,
         bbox: Optional[bool] = False,
     ) -> Optional[MultiPolygon]:
-        if self.user.user_role == UserRole.SUPER_ADMIN:
+        if self._is_unrestricted():
             return intersects_geometry
 
-        geo_zones_accessibles = GeoZone.objects.filter(
-            user_groups__user_user_groups__user=self.user
-        )
+        if self.scoped_user_group:
+            geo_zones_accessibles = GeoZone.objects.filter(
+                user_groups=self.scoped_user_group
+            )
+        else:
+            geo_zones_accessibles = GeoZone.objects.filter(
+                user_groups__user_user_groups__user=self.user
+            )
 
         if intersects_geometry:
             agg_expr = Intersection(Union("geometry"), intersects_geometry)
@@ -119,15 +137,20 @@ class UserPermission(
         user_group_right: UserGroupRight,
         raise_exception: bool = False,
     ):
-        if self.user.user_role == UserRole.SUPER_ADMIN:
+        if self._is_unrestricted():
             return True
 
-        geo_zones_editables = GeoZone.objects.filter(
-            user_groups__user_user_groups__user=self.user,
-            user_groups__user_user_groups__user_group_rights__contains=[
-                user_group_right
-            ],
-        )
+        if self.scoped_user_group:
+            geo_zones_editables = GeoZone.objects.filter(
+                user_groups=self.scoped_user_group,
+            )
+        else:
+            geo_zones_editables = GeoZone.objects.filter(
+                user_groups__user_user_groups__user=self.user,
+                user_groups__user_user_groups__user_group_rights__contains=[
+                    user_group_right
+                ],
+            )
         geo_zones_editables = geo_zones_editables.annotate(
             geometry_union=Union("geometry"),
         )
@@ -148,25 +171,33 @@ class UserPermission(
         self,
     ) -> List[Tuple[ObjectType, ObjectTypeCategoryObjectTypeStatus]]:
         """Get object types accessible by user with their status."""
-        if self.user.user_role == UserRole.SUPER_ADMIN:
+        if self._is_unrestricted():
             object_types = ObjectType.objects.order_by("name").all()
             return [
                 (object_type, ObjectTypeCategoryObjectTypeStatus.VISIBLE)
                 for object_type in object_types
             ]
 
-        user_user_groups = self.user.user_user_groups.prefetch_related(
-            "user_group",
-            "user_group__object_type_categories",
-            "user_group__object_type_categories__object_type_category_object_types",
-            "user_group__object_type_categories__object_type_category_object_types__object_type",
-        ).all()
-
-        object_type_categories = []
-        for user_user_group in user_user_groups:
-            object_type_categories.extend(
-                user_user_group.user_group.object_type_categories.all()
+        if self.scoped_user_group:
+            object_type_categories = list(
+                self.scoped_user_group.object_type_categories.prefetch_related(
+                    "object_type_category_object_types",
+                    "object_type_category_object_types__object_type",
+                ).all()
             )
+        else:
+            user_user_groups = self.user.user_user_groups.prefetch_related(
+                "user_group",
+                "user_group__object_type_categories",
+                "user_group__object_type_categories__object_type_category_object_types",
+                "user_group__object_type_categories__object_type_category_object_types__object_type",
+            ).all()
+
+            object_type_categories = []
+            for user_user_group in user_user_groups:
+                object_type_categories.extend(
+                    user_user_group.user_group.object_type_categories.all()
+                )
 
         object_type_uuids_statuses_map = {}
         object_type_category_object_type_status_priorities = {
@@ -205,12 +236,42 @@ class UserPermission(
         raise_if_has_no_right: Optional[UserGroupRight] = None,
     ) -> List[UserGroupRight]:
         """Get user group rights for given points."""
-        if self.user.user_role == UserRole.SUPER_ADMIN:
+        if self._is_unrestricted():
             return [
                 UserGroupRight.WRITE,
                 UserGroupRight.ANNOTATE,
                 UserGroupRight.READ,
             ]
+
+        if self.scoped_user_group:
+            from django.db.models import Q
+            from functools import reduce
+            from operator import or_
+
+            point_filters = reduce(
+                or_,
+                [Q(geometry__contains=point) for point in points],
+            )
+            has_coverage = GeoZone.objects.filter(
+                point_filters,
+                user_groups=self.scoped_user_group,
+            ).exists()
+
+            if has_coverage:
+                res = [
+                    UserGroupRight.WRITE,
+                    UserGroupRight.ANNOTATE,
+                    UserGroupRight.READ,
+                ]
+            else:
+                res = []
+
+            if raise_if_has_no_right and raise_if_has_no_right not in res:
+                raise PermissionDenied(
+                    "Vous n'avez pas les droits pour éditer cette zone"
+                )
+
+            return res
 
         from django.db.models import Q
         from functools import reduce

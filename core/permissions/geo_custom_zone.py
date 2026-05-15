@@ -12,13 +12,23 @@ class GeoCustomZonePermission(
     BasePermission[GeoCustomZone],
 ):
     def __init__(
-        self, user: User, initial_queryset: Optional[QuerySet[GeoCustomZone]] = None
+        self,
+        user: User,
+        initial_queryset: Optional[QuerySet[GeoCustomZone]] = None,
+        scoped_user_group=None,
     ):
         self.repository = GeoCustomZoneRepository(initial_queryset=initial_queryset)
         self.user = user
+        self.scoped_user_group = scoped_user_group
+
+    def _is_unrestricted(self) -> bool:
+        return (
+            self.user.user_role == UserRole.SUPER_ADMIN
+            and self.scoped_user_group is None
+        )
 
     def _get_prefetch(self, lookup_root: str = ""):
-        if self.user.user_role == UserRole.SUPER_ADMIN:
+        if self._is_unrestricted():
             geo_custom_zones_prefetch = Prefetch(
                 f"{lookup_root}geo_custom_zones",
                 queryset=GeoCustomZone.objects.filter(
@@ -29,6 +39,21 @@ class GeoCustomZonePermission(
                 f"{lookup_root}geo_custom_zones__geo_custom_zone_category",
                 queryset=GeoCustomZoneCategory.objects.filter(
                     geo_custom_zones__geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+                ),
+            )
+        elif self.scoped_user_group:
+            geo_custom_zones_prefetch = Prefetch(
+                f"{lookup_root}geo_custom_zones",
+                queryset=GeoCustomZone.objects.filter(
+                    geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+                    user_groups_custom_geo_zones=self.scoped_user_group,
+                ),
+            )
+            geo_custom_zones_category_prefetch = Prefetch(
+                f"{lookup_root}geo_custom_zones__geo_custom_zone_category",
+                queryset=GeoCustomZoneCategory.objects.filter(
+                    geo_custom_zones__geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+                    geo_custom_zones__user_groups_custom_geo_zones=self.scoped_user_group,
                 ),
             )
         else:
@@ -65,7 +90,13 @@ class GeoCustomZonePermission(
             }
         )
 
-        if self.user.user_role != UserRole.SUPER_ADMIN:
+        if self.scoped_user_group:
+            q &= Q(
+                **{
+                    f"{lookup_root}geo_custom_zones__user_groups_custom_geo_zones": self.scoped_user_group
+                }
+            )
+        elif not self._is_unrestricted():
             q &= Q(
                 **{
                     f"{lookup_root}geo_custom_zones__user_groups_custom_geo_zones__user_user_groups__user": self.user.id
