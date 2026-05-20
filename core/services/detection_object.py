@@ -5,7 +5,8 @@ from django.contrib.gis.geos import Point
 from core.models.detection_object import DetectionObject
 from core.models.detection_data import DetectionValidationStatus
 from core.models.tile_set import TileSet, TileSetType
-from core.permissions.tile_set import TileSetPermission
+from core.models.user_group import UserGroup
+from core.permissions.tile_set import TileSetPermission, TileSetPreview
 from core.services.prescription import PrescriptionService
 from core.permissions.user import UserPermission
 
@@ -76,12 +77,15 @@ class DetectionObjectService:
     def get_filtered_detections_queryset(
         detection_object: DetectionObject,
         user,
-        tile_set_previews: Optional[List[Dict]] = None,
+        tile_set_previews: Optional[List[TileSetPreview]] = None,
+        scoped_user_group: Optional[UserGroup] = None,
     ):
         """Get filtered detections queryset for a detection object."""
         # Get tile set previews if not provided
         if tile_set_previews is None:
-            tile_set_previews = TileSetPermission(user=user).get_previews(
+            tile_set_previews = TileSetPermission(
+                user=user, scoped_user_group=scoped_user_group
+            ).get_previews(
                 filter_tile_set_intersects_geometry=detection_object.detections.first().geometry,
             )
 
@@ -91,17 +95,27 @@ class DetectionObjectService:
         )
 
     @staticmethod
-    def get_tile_set_previews_data(detection_object: DetectionObject, user):
+    def get_tile_set_previews_data(
+        detection_object: DetectionObject,
+        user,
+        scoped_user_group: Optional[UserGroup] = None,
+    ):
         """Get tile set previews data for a detection object."""
         if not detection_object.detections.exists():
             return []
 
-        return TileSetPermission(user=user).get_previews(
+        return TileSetPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).get_previews(
             filter_tile_set_intersects_geometry=detection_object.detections.first().geometry,
         )
 
     @staticmethod
-    def get_user_group_rights(detection_object: DetectionObject, user) -> List[str]:
+    def get_user_group_rights(
+        detection_object: DetectionObject,
+        user,
+        scoped_user_group: Optional[UserGroup] = None,
+    ) -> List[str]:
         """Get user group rights for a detection object."""
         if not detection_object.detections.exists():
             return []
@@ -110,7 +124,7 @@ class DetectionObjectService:
             detection_object.detections.order_by("-tile_set__date").first().geometry
         )
         point = detection_geometry.centroid
-        user_permission = UserPermission(user)
+        user_permission = UserPermission(user, scoped_user_group=scoped_user_group)
         return user_permission.get_user_group_rights(points=[point])
 
     @staticmethod
@@ -136,7 +150,9 @@ class DetectionObjectService:
 
     @staticmethod
     def get_detection_history_data(
-        detection_object: DetectionObject, user
+        detection_object: DetectionObject,
+        user,
+        scoped_user_group: Optional[UserGroup] = None,
     ) -> List[Dict[str, Any]]:
         """Get detection history data for serialization."""
         detections = detection_object.detections.order_by("-tile_set__date").all()
@@ -144,7 +160,9 @@ class DetectionObjectService:
         if not detections:
             return []
 
-        tile_sets = TileSetPermission(user=user).list_(
+        tile_sets = TileSetPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).list_(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             order_bys=["-date"],
             filter_tile_set_intersects_geometry=detections[0].geometry,
@@ -172,6 +190,7 @@ class DetectionObjectService:
         address: Optional[str] = None,
         comment: Optional[str] = None,
         object_type_uuid: Optional[str] = None,
+        scoped_user_group: Optional[UserGroup] = None,
     ) -> DetectionObject:
         """Comprehensive update for detection object including business rules."""
         from core.services.detection import DetectionService
@@ -183,7 +202,7 @@ class DetectionObjectService:
         )
 
         if latest_detection:
-            UserPermission(user=user).can_edit(
+            UserPermission(user=user, scoped_user_group=scoped_user_group).can_edit(
                 geometry=latest_detection.geometry, raise_exception=True
             )
 

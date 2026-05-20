@@ -52,8 +52,11 @@ class DetectionObjectHistorySerializer(DetectionObjectSerializer):
 
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
+        scoped_user_group = self.context.get("scoped_user_group")
         detection_history_data = DetectionObjectService.get_detection_history_data(
-            detection_object=obj, user=user
+            detection_object=obj,
+            user=user,
+            scoped_user_group=scoped_user_group,
         )
 
         from core.serializers.detection import DetectionWithTileMinimalSerializer
@@ -111,17 +114,23 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
 
     def get_detections(self, obj: DetectionObject):
         user = self.context["request"].user
+        scoped_user_group = self.context.get("scoped_user_group")
 
         if self.context.get("tile_set_previews"):
             tile_set_previews = self.context["tile_set_previews"]
         else:
             tile_set_previews = DetectionObjectService.get_tile_set_previews_data(
-                detection_object=obj, user=user
+                detection_object=obj,
+                user=user,
+                scoped_user_group=scoped_user_group,
             )
             self.context["tile_set_previews"] = tile_set_previews
 
         detections = DetectionObjectService.get_filtered_detections_queryset(
-            detection_object=obj, user=user, tile_set_previews=tile_set_previews
+            detection_object=obj,
+            user=user,
+            tile_set_previews=tile_set_previews,
+            scoped_user_group=scoped_user_group,
         )
 
         from core.serializers.detection import DetectionWithTileSerializer
@@ -131,12 +140,15 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
 
     def get_tile_sets(self, obj: DetectionObject):
         user = self.context["request"].user
+        scoped_user_group = self.context.get("scoped_user_group")
 
         if self.context.get("tile_set_previews"):
             tile_set_previews = self.context["tile_set_previews"]
         else:
             tile_set_previews = DetectionObjectService.get_tile_set_previews_data(
-                detection_object=obj, user=user
+                detection_object=obj,
+                user=user,
+                scoped_user_group=scoped_user_group,
             )
             self.context["tile_set_previews"] = tile_set_previews
 
@@ -160,9 +172,12 @@ class DetectionObjectDetailSerializer(DetectionObjectSerializer):
 
     def get_user_group_rights(self, obj: DetectionObject):
         user = self.context["request"].user
+        scoped_user_group = self.context.get("scoped_user_group")
 
         return DetectionObjectService.get_user_group_rights(
-            detection_object=obj, user=user
+            detection_object=obj,
+            user=user,
+            scoped_user_group=scoped_user_group,
         )
 
 
@@ -174,6 +189,7 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
 
     def update(self, instance: DetectionObject, validated_data):
         user = self.context["request"].user
+        scoped_user_group = self.context.get("scoped_user_group")
         object_type_uuid = validated_data.pop("object_type_uuid", None)
 
         try:
@@ -183,6 +199,7 @@ class DetectionObjectInputSerializer(DetectionObjectSerializer):
                 address=validated_data.get("address"),
                 comment=validated_data.get("comment"),
                 object_type_uuid=str(object_type_uuid) if object_type_uuid else None,
+                scoped_user_group=scoped_user_group,
             )
         except ValueError as e:
             raise serializers.ValidationError(str(e))

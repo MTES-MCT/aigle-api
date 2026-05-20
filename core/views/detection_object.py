@@ -1,3 +1,5 @@
+from typing import Any, Dict
+
 from common.views.base import BaseViewSetMixin
 
 from rest_framework.response import Response
@@ -17,6 +19,7 @@ from rest_framework_gis.fields import GeometryField
 from rest_framework.decorators import action
 
 from core.utils.filters import UuidInFilter
+from core.utils.super_admin_scope import get_super_admin_scoped_user_group
 from core.services.detection_object import DetectionObjectService
 from core.services.tile_set import TileSetService
 from django.contrib.gis.db.models.functions import Centroid
@@ -59,6 +62,11 @@ class DetectionObjectFilter(FilterSet):
 class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
     filterset_class = DetectionObjectFilter
 
+    def get_serializer_context(self) -> Dict[str, Any]:
+        context: Dict[str, Any] = super().get_serializer_context()
+        context["scoped_user_group"] = get_super_admin_scoped_user_group(self.request)
+        return context
+
     def get_serializer_class(self):
         detail = bool(self.request.query_params.get("detail"))
 
@@ -75,6 +83,8 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
     def get_queryset(self):
         detail = bool(self.request.query_params.get("detail"))
+        scoped_user_group = get_super_admin_scoped_user_group(self.request)
+
         queryset = DetectionObject.objects.order_by("-detections__tile_set__date")
         queryset = queryset.select_related(
             "object_type", "parcel", "parcel__commune"
@@ -94,7 +104,8 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         if self.action == "retrieve" or detail:
             geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
                 GeoCustomZonePermission(
-                    user=self.request.user
+                    user=self.request.user,
+                    scoped_user_group=scoped_user_group,
                 ).get_detection_object_prefetch()
             )
 
@@ -133,6 +144,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
     @action(methods=["get"], detail=False, url_path="from-coordinates")
     def get_from_coordinates(self, request):
+        scoped_user_group = get_super_admin_scoped_user_group(request)
         params_serializer = GetFromCoordinatesParamsSerializer(data=request.GET)
         params_serializer.is_valid(raise_exception=True)
 
@@ -145,6 +157,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             y=y,
             user=request.user,
             tile_set_types=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            scoped_user_group=scoped_user_group,
         )
 
         if not tile_set:
@@ -190,5 +203,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
             queryset.prefetch_related("detections").filter(uuid=uuid).first()
         )
         SerializerClass = self.get_serializer_class()
-        serializer = SerializerClass(detection_object, context={"request": request})
+        serializer = SerializerClass(
+            detection_object, context=self.get_serializer_context()
+        )
         return Response(serializer.data)

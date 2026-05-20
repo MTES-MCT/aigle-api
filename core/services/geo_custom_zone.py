@@ -8,7 +8,6 @@ from core.models.geo_custom_zone import (
     GeoCustomZone,
     GeoCustomZoneCategory,
     GeoCustomZoneStatus,
-    GeoCustomZoneType,
 )
 from core.models.user import UserRole
 from core.models.user_group import UserGroup
@@ -199,9 +198,6 @@ class GeoCustomZoneService:
         queryset = queryset.select_related("geo_custom_zone_category")
 
         if user.user_role == UserRole.ADMIN:
-            queryset = queryset.filter(
-                geo_custom_zone_type=GeoCustomZoneType.COLLECTIVITY_MANAGED
-            )
             queryset = queryset.filter(
                 id__in=user.user_user_groups.values_list(
                     "user_group__geo_custom_zones__id", flat=True
