@@ -4,12 +4,14 @@ from typing import Any, Dict, List, Tuple
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Case, CharField, F, Prefetch, When
 from django_filters import CharFilter, FilterSet, OrderingFilter
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from common.views.base import BaseViewSetMixin
+from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user import UserRole
 from core.models.user_action_log import UserActionLog, UserActionLogAction
 from core.models.user_group import UserGroup, UserGroupRight
@@ -33,6 +35,30 @@ from core.utils.permissions import (
 from core.utils.user_action_log import UserActionLogMixin
 
 UserModel = get_user_model()
+
+
+def _geo_zones_with_code():
+    return GeoZone.objects.annotate(
+        code=Case(
+            When(
+                geo_zone_type=GeoZoneType.COMMUNE,
+                then=F("geocommune__iso_code"),
+            ),
+            When(
+                geo_zone_type=GeoZoneType.DEPARTMENT,
+                then=F("geodepartment__insee_code"),
+            ),
+            When(
+                geo_zone_type=GeoZoneType.REGION,
+                then=F("georegion__insee_code"),
+            ),
+            When(
+                geo_zone_type=GeoZoneType.EPCI,
+                then=F("geoepci__siren_code"),
+            ),
+            output_field=CharField(),
+        )
+    )
 
 
 USER_CSV_HEADERS = ["email", "role", "nom du groupe", "droits du groupe"]
@@ -77,7 +103,18 @@ class UserViewSet(
         if request.user.user_role == UserRole.DEACTIVATED:
             raise PermissionDenied("Votre compte est désactivé")
 
-        user = UserModel.objects.filter(id=request.user.id).first()
+        user = (
+            UserModel.objects.filter(id=request.user.id)
+            .prefetch_related(
+                "user_user_groups",
+                "user_user_groups__user_group",
+                Prefetch(
+                    "user_user_groups__user_group__geo_zones",
+                    queryset=_geo_zones_with_code(),
+                ),
+            )
+            .first()
+        )
 
         user = UserService.get_user_profile_with_logging(user=user)
         serializer = UserSerializer(user, context={"request": request})
@@ -94,7 +131,10 @@ class UserViewSet(
         queryset = queryset.prefetch_related(
             "user_user_groups",
             "user_user_groups__user_group",
-            "user_user_groups__user_group__geo_zones",
+            Prefetch(
+                "user_user_groups__user_group__geo_zones",
+                queryset=_geo_zones_with_code(),
+            ),
         )
 
         return UserService.get_filtered_users_queryset(
