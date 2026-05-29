@@ -5,6 +5,7 @@ from django.db import transaction
 from core.models.detection import Detection
 from core.models.object_type import ObjectType
 from core.permissions.user import UserPermission
+from core.utils.cache import invalidate_count_caches
 from django.core.exceptions import BadRequest
 
 
@@ -131,3 +132,9 @@ class DetectionBulkUpdateService:
             bulk_update_with_history(
                 detection_objects_to_update, DetectionObject, ["object_type"]
             )
+
+        if detection_datas_to_update or detection_objects_to_update:
+            # bulk_update bypasses post_save; list/parcel counts are filtered by
+            # these fields, so invalidate explicitly. on_commit because this runs
+            # inside the service's @transaction.atomic.
+            transaction.on_commit(invalidate_count_caches)

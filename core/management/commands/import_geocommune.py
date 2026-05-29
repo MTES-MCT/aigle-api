@@ -11,6 +11,7 @@ from core.models.geo_department import GeoDepartment
 from django.contrib.gis.geos import GEOSGeometry
 
 from core.constants.geo import SRID
+from core.utils.cache import invalidate_user_geo_caches
 from core.utils.logs_helpers import log_command_event
 
 FILE_JSON_URL = (
@@ -75,3 +76,6 @@ class Command(BaseCommand):
                 commune.save()
             except IntegrityError:
                 pass
+
+        invalidate_user_geo_caches()
+        log_event("Invalidated user geo caches after commune import")

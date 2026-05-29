@@ -10,6 +10,7 @@ from core.management.commands._common.file import (
 )
 from core.models import GeoRegion
 from core.models.geo_department import GeoDepartment
+from core.utils.cache import invalidate_user_geo_caches
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
 from core.constants.geo import SRID
@@ -114,6 +115,9 @@ class Command(BaseCommand):
             )
 
             department.save()
+
+        invalidate_user_geo_caches()
+        log_event("Invalidated user geo caches after department import")
 
         temp_dir.cleanup()
 

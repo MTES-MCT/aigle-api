@@ -34,6 +34,7 @@ from core.services.detection_process import DetectionProcessService
 from core.services.prescription import PrescriptionService
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
+from core.utils.cache import invalidate_count_caches
 from simple_history.utils import bulk_create_with_history
 
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
@@ -500,6 +501,10 @@ class Command(BaseCommand):
         bulk_create_with_history(self.detection_objects_to_insert, DetectionObject)
         bulk_create_with_history(self.detection_datas_to_insert, DetectionData)
         bulk_create_with_history(self.detections_to_insert, Detection)
+
+        # bulk_create bypasses post_save, so the count-cache signals never fire for
+        # imported rows — invalidate explicitly so list/parcel counts stay correct.
+        invalidate_count_caches()
 
         detection_objects = [
             detection.detection_object for detection in self.detections_to_insert

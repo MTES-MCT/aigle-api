@@ -8,6 +8,7 @@ from core.management.commands._common.file import download_file, extract_zip
 from core.models import GeoRegion
 from django.contrib.gis.geos import GEOSGeometry
 
+from core.utils.cache import invalidate_user_geo_caches
 from core.utils.logs_helpers import log_command_event
 
 SHP_ZIP_URL = (
@@ -71,5 +72,8 @@ class Command(BaseCommand):
                 geometry=geometry,
             )
             region.save()
+
+        invalidate_user_geo_caches()
+        log_event("Invalidated user geo caches after region import")
 
         temp_dir.cleanup()

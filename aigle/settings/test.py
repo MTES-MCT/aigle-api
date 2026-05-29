@@ -71,6 +71,15 @@ LOGGING = {
 CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 
+# Use an in-process cache for tests: CI has no Redis, and this keeps the cache
+# independent of the dev Redis. A conftest autouse fixture clears it between tests
+# (LocMemCache is not rolled back with the DB transaction).
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    }
+}
+
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles_test")

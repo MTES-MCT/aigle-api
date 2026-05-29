@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from typing import List, Optional, Tuple, TYPE_CHECKING
 from core.models.geo_zone import GeoZone, GeoZoneType
@@ -8,17 +9,24 @@ from core.models.user_group import UserGroupRight, UserGroup
 from core.permissions.base import BasePermission
 from core.repository.base import CollectivityRepoFilter
 from core.repository.user import UserRepository
+from core.utils.cache import (
+    get_user_geo_cache_key,
+    safe_cache_get,
+    safe_cache_set,
+    USER_GEO_CACHE_TTL,
+)
 
 from django.contrib.gis.geos import Point
 from django.contrib.gis.geos.collections import MultiPolygon
 from django.db.models import QuerySet
 from django.contrib.gis.db.models.aggregates import Union
-from django.contrib.gis.db.models.functions import Intersection, Envelope
 from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
 
 if TYPE_CHECKING:
     from django.contrib.gis.geos import GEOSGeometry
+
+logger = logging.getLogger(__name__)
 
 
 class UserPermission(
@@ -105,31 +113,41 @@ class UserPermission(
         if self._is_unrestricted():
             return intersects_geometry
 
-        if self.scoped_user_group:
-            geo_zones_accessibles = GeoZone.objects.filter(
-                user_groups=self.scoped_user_group
+        scoped_group_id = self.scoped_user_group.id if self.scoped_user_group else None
+        cache_key = get_user_geo_cache_key(self.user.id, scoped_group_id)
+        base_union = safe_cache_get(cache_key)
+
+        if base_union is None:
+            if self.scoped_user_group:
+                geo_zones_accessibles = GeoZone.objects.filter(
+                    user_groups=self.scoped_user_group
+                )
+            else:
+                geo_zones_accessibles = GeoZone.objects.filter(
+                    user_groups__user_user_groups__user=self.user
+                )
+
+            base_union = geo_zones_accessibles.aggregate(result=Union("geometry")).get(
+                "result"
             )
-        else:
-            geo_zones_accessibles = GeoZone.objects.filter(
-                user_groups__user_user_groups__user=self.user
-            )
+
+            if base_union is None or base_union.empty:
+                return None
+
+            safe_cache_set(cache_key, base_union, timeout=USER_GEO_CACHE_TTL)
+
+        result = base_union
 
         if intersects_geometry:
-            agg_expr = Intersection(Union("geometry"), intersects_geometry)
-        else:
-            agg_expr = Union("geometry")
+            result = result.intersection(intersects_geometry)
 
         if bbox:
-            agg_expr = Envelope(agg_expr)
+            result = result.envelope
 
-        accessible_geometry = geo_zones_accessibles.aggregate(result=agg_expr).get(
-            "result"
-        )
-
-        if accessible_geometry is None or accessible_geometry.empty:
+        if result.empty:
             return None
 
-        return accessible_geometry
+        return result
 
     def _has_rights(
         self,
