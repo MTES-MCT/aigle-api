@@ -4,11 +4,13 @@ from datetime import datetime
 from typing import Dict, Any
 from django.http import HttpResponse, JsonResponse
 from django.conf import settings
+from django.db import transaction
 
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus
 from core.models.detection_object import DetectionObject
 from core.utils.analytic_log import create_log
+from core.utils.cache import invalidate_count_caches
 from core.utils.odt_processor import ODTTemplateProcessor
 from core.permissions.user import UserPermission
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
@@ -83,6 +85,8 @@ class PriorLetterService:
             DetectionData.objects.bulk_update(
                 detections_to_update, ["detection_control_status", "user_last_update"]
             )
+            # bulk_update bypasses post_save; invalidate the count cache explicitly.
+            transaction.on_commit(invalidate_count_caches)
 
     def _create_analytics_log(
         self, detection_object: DetectionObject, detection_object_uuid: str

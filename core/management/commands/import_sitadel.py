@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
 from django.core.management.base import BaseCommand
+from django.db import transaction
 
 from core.models.detection_authorization import DetectionAuthorization
 from core.models.detection_data import (
@@ -14,6 +15,7 @@ from core.models.detection_data import (
 )
 from core.models.parcel import Parcel
 from core.utils.logs_helpers import log_command_event
+from core.utils.cache import invalidate_count_caches
 from operator import or_
 from django.db.models import Q, Count, Prefetch
 from core.models.detection_object import DetectionObject
@@ -289,6 +291,8 @@ class Command(BaseCommand):
         DetectionAuthorization.objects.bulk_create(
             objs=detection_authorization_to_insert
         )
+        # bulk_update / bulk_create bypass post_save; invalidate counts explicitly.
+        transaction.on_commit(invalidate_count_caches)
 
     def log(self):
         departments = list(

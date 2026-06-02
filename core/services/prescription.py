@@ -84,7 +84,16 @@ class PrescriptionService:
         detections_to_update: List[Detection],
         detections_data_to_update: List[DetectionData],
     ):
-        """Bulk update prescriptions with history tracking."""
+        """Bulk update prescriptions with history tracking.
+
+        NOTE: detection_prescription_status is a pagination-count filter dimension,
+        and bulk_update_with_history bypasses post_save — so it does NOT invalidate
+        the count cache here (invalidating per detection_object would thrash the
+        cache during large imports). Every caller MUST ensure the count cache is
+        invalidated once after its run: import_detections and the compute_prescription
+        command call invalidate_count_caches() explicitly; the detection create/update
+        services do so via their own DetectionData/Detection .save().
+        """
         if detections_to_update:
             bulk_update_with_history(
                 detections_to_update, Detection, ["auto_prescribed"]

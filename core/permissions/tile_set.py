@@ -9,9 +9,8 @@ from core.models.tile_set import TileSet, TileSetType, TileSetStatus
 from core.models.user import User, UserRole
 from core.permissions.base import BasePermission
 from core.utils.cache import (
+    get_or_compute,
     get_tileset_filter_cache_key,
-    safe_cache_get,
-    safe_cache_set,
     TILESET_FILTER_CACHE_TTL,
 )
 from core.utils.postgis import GeometryType, GetGeometryType
@@ -181,32 +180,34 @@ class TileSetPermission(
 
     def _get_cached_tilesets(self, *args, **kwargs) -> List[dict]:
         scoped_group_id = self.scoped_user_group.id if self.scoped_user_group else None
-        filter_hash = self._get_tileset_cache_hash(**kwargs)
         cache_key = get_tileset_filter_cache_key(
-            self.user.id, scoped_group_id, filter_hash
+            self.user.id, scoped_group_id, self._get_tileset_cache_hash(**kwargs)
+        )
+        return get_or_compute(
+            cache_key,
+            lambda: self._compute_tilesets(*args, **kwargs),
+            TILESET_FILTER_CACHE_TTL,
         )
 
-        cached = safe_cache_get(cache_key)
-        if cached is not None:
-            return cached
-
+    def _compute_tilesets(self, *args, **kwargs) -> List[dict]:
+        """Most-recent tile set per accessible geo zone, as plain dicts (the cached
+        value). The per-request bbox is intentionally NOT an input here — it is
+        applied later in _build_q_from_tilesets — so the cache is reused across pans."""
         queryset = self.filter_(*args, **kwargs, order_bys=["-date"])
         queryset = queryset.prefetch_related("geo_zones")
         queryset = queryset.annotate(
             row_number=Window(
                 expression=RowNumber(),
                 partition_by=[F("geo_zones__id")],
-                order_by=F("date").desc(),
+                order_by=[F("date").desc(), F("id").desc()],
             )
         )
         queryset = queryset.only(
             "id", "tile_set_type", "geo_zones__id", "geo_zones__geo_zone_type"
         )
 
-        tile_sets = list(queryset.filter(row_number=1))
-
         result = []
-        for tile_set in tile_sets:
+        for tile_set in queryset.filter(row_number=1):
             geo_zones_map = {}
             for gz in tile_set.geo_zones.all():
                 geo_zones_map.setdefault(gz.geo_zone_type, []).append(gz.id)
@@ -218,7 +219,6 @@ class TileSetPermission(
                 }
             )
 
-        safe_cache_set(cache_key, result, timeout=TILESET_FILTER_CACHE_TTL)
         return result
 
     @staticmethod

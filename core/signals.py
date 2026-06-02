@@ -4,6 +4,7 @@ from django.dispatch import receiver
 
 from core.models.detection import Detection
 from core.models.detection_data import DetectionData
+from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
 from core.models.tile_set import TileSet
 from core.models.user_group import UserGroup, UserUserGroup
@@ -73,6 +74,16 @@ def _on_count_relevant_change(sender, **kwargs):  # noqa: ARG001
     transaction.on_commit(invalidate_count_caches)
 
 
-for _count_model in (Detection, DetectionData, Parcel):
+for _count_model in (Detection, DetectionData, DetectionObject, Parcel):
     post_save.connect(_on_count_relevant_change, sender=_count_model)
     post_delete.connect(_on_count_relevant_change, sender=_count_model)
+
+
+# DetectionObject.geo_custom_zones is a count filter dimension (customZonesUuids),
+# so changing the association must invalidate counts. Raw-SQL associations (e.g.
+# import_detections.associate_detections_to_custom_zones) bypass this signal and
+# invalidate explicitly instead.
+@receiver(m2m_changed, sender=DetectionObject.geo_custom_zones.through)
+def on_detection_object_custom_zones_change(sender, action, **kwargs):  # noqa: ARG001
+    if action in ("post_add", "post_remove", "post_clear"):
+        transaction.on_commit(invalidate_count_caches)

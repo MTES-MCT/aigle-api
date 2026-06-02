@@ -10,9 +10,8 @@ from core.permissions.base import BasePermission
 from core.repository.base import CollectivityRepoFilter
 from core.repository.user import UserRepository
 from core.utils.cache import (
+    get_or_compute,
     get_user_geo_cache_key,
-    safe_cache_get,
-    safe_cache_set,
     USER_GEO_CACHE_TTL,
 )
 
@@ -20,6 +19,7 @@ from django.contrib.gis.geos import Point
 from django.contrib.gis.geos.collections import MultiPolygon
 from django.db.models import QuerySet
 from django.contrib.gis.db.models.aggregates import Union
+from django.contrib.gis.db.models.functions import Intersection
 from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
 
@@ -63,8 +63,6 @@ class UserPermission(
 
         geo_zones_accessibles_qs = GeoZone.objects
 
-        geo_zones_accessibles_qs.values("id", "geo_zone_type")
-
         # TODO: rework this to make user user has access to uuids
         if (
             communes_uuids is not None
@@ -94,16 +92,39 @@ class UserPermission(
         for geo_zone in geo_zones_accessibles:
             collectivity_repo_filter_dict[geo_zone.geo_zone_type].append(geo_zone.id)
 
+        # Sort the id lists so the tileset-filter cache hash (which stringifies this
+        # filter) is stable regardless of DB row order, keeping the hit rate up.
+        commune_ids = collectivity_repo_filter_dict.get(GeoZoneType.COMMUNE)
+        department_ids = collectivity_repo_filter_dict.get(GeoZoneType.DEPARTMENT)
+        region_ids = collectivity_repo_filter_dict.get(GeoZoneType.REGION)
         collectivity_filter = CollectivityRepoFilter(
-            commune_ids=collectivity_repo_filter_dict.get(GeoZoneType.COMMUNE),
-            department_ids=collectivity_repo_filter_dict.get(GeoZoneType.DEPARTMENT),
-            region_ids=collectivity_repo_filter_dict.get(GeoZoneType.REGION),
+            commune_ids=sorted(commune_ids) if commune_ids else commune_ids,
+            department_ids=sorted(department_ids) if department_ids else department_ids,
+            region_ids=sorted(region_ids) if region_ids else region_ids,
         )
 
         if not self._is_unrestricted() and collectivity_filter.is_empty():
             raise BadRequest("User do not have access to any collectivity")
 
         return collectivity_filter
+
+    def _accessible_geo_zones(self) -> QuerySet:
+        """Geo zones accessible to the user (or the impersonated group)."""
+        if self.scoped_user_group:
+            return GeoZone.objects.filter(user_groups=self.scoped_user_group)
+        return GeoZone.objects.filter(user_groups__user_user_groups__user=self.user)
+
+    def _compute_accessible_union(self) -> Optional[MultiPolygon]:
+        """Union of the user's accessible geo-zone geometries (the cached value).
+        Returns None for an empty/absent union so it is not cached."""
+        union = (
+            self._accessible_geo_zones()
+            .aggregate(result=Union("geometry"))
+            .get("result")
+        )
+        if union is None or union.empty:
+            return None
+        return union
 
     def get_accessible_geometry(
         self,
@@ -115,31 +136,35 @@ class UserPermission(
 
         scoped_group_id = self.scoped_user_group.id if self.scoped_user_group else None
         cache_key = get_user_geo_cache_key(self.user.id, scoped_group_id)
-        base_union = safe_cache_get(cache_key)
-
+        base_union = get_or_compute(
+            cache_key, self._compute_accessible_union, USER_GEO_CACHE_TTL
+        )
         if base_union is None:
-            if self.scoped_user_group:
-                geo_zones_accessibles = GeoZone.objects.filter(
-                    user_groups=self.scoped_user_group
-                )
-            else:
-                geo_zones_accessibles = GeoZone.objects.filter(
-                    user_groups__user_user_groups__user=self.user
-                )
-
-            base_union = geo_zones_accessibles.aggregate(result=Union("geometry")).get(
-                "result"
-            )
-
-            if base_union is None or base_union.empty:
-                return None
-
-            safe_cache_set(cache_key, base_union, timeout=USER_GEO_CACHE_TTL)
+            return None
 
         result = base_union
-
         if intersects_geometry:
-            result = result.intersection(intersects_geometry)
+            try:
+                result = result.intersection(intersects_geometry)
+            except Exception:
+                # GEOS can raise (e.g. TopologyException) on a self-intersecting IGN
+                # union. This is the only non-PostGIS geometry op in the map hot path
+                # and sits outside the fail-open cache wrappers, so guard it: recompute
+                # the intersection in PostGIS (robust), scoped to the SAME accessible
+                # zones — no isolation impact, just a slower correct answer.
+                logger.exception(
+                    "GEOS intersection failed for user %s; falling back to PostGIS",
+                    self.user.id,
+                )
+                result = (
+                    self._accessible_geo_zones()
+                    .aggregate(
+                        result=Intersection(Union("geometry"), intersects_geometry)
+                    )
+                    .get("result")
+                )
+                if result is None or result.empty:
+                    return None
 
         if bbox:
             result = result.envelope

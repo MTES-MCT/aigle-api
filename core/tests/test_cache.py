@@ -12,9 +12,14 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from core.models import User, UserUserGroup
+from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.geo_region import GeoRegion
 from core.models.user_group import UserGroupRight
 from core.services.user import UserService
+from core.tests.fixtures.detection_data import (
+    create_detection_object,
+    create_object_type,
+)
 from core.tests.fixtures.users import (
     create_regular_user,
     create_super_admin,
@@ -76,6 +81,14 @@ class CacheVersioningTests(TestCase):
         invalidate_count_caches()
         self.assertNotEqual(key1, generate_query_cache_key(queryset))
 
+    def test_count_cache_key_is_user_scoped(self):
+        # Two users must never share a cached count, even for identical SQL.
+        queryset = User.objects.all()
+        self.assertNotEqual(
+            generate_query_cache_key(queryset, scope="u1"),
+            generate_query_cache_key(queryset, scope="u2"),
+        )
+
 
 class CacheFailOpenTests(TestCase):
     """A cache backend outage must degrade to recompute, never raise."""
@@ -96,8 +109,12 @@ class CacheFailOpenTests(TestCase):
     def test_key_building_falls_back_to_version_one_on_outage(self):
         with patch.object(
             cache_utils.cache, "get", side_effect=Exception("down")
-        ), patch.object(cache_utils.cache, "set", side_effect=Exception("down")):
-            self.assertEqual(get_user_geo_cache_key(1, None), "aigle:user_geo:1:1:1:0")
+        ), patch.object(
+            cache_utils.cache, "set", side_effect=Exception("down")
+        ), patch.object(cache_utils.cache, "add", side_effect=Exception("down")):
+            self.assertEqual(
+                get_user_geo_cache_key(1, None), "aigle:v1:user_geo:1:1:1:0"
+            )
 
 
 class CacheSignalTests(TestCase):
@@ -159,3 +176,27 @@ class UserServiceCacheInvalidationTests(TestCase):
             )
 
         self.assertNotEqual(key_before, get_user_geo_cache_key(user.id, None))
+
+
+class CountInvalidationSignalTests(TestCase):
+    """Count-relevant writes beyond Detection/DetectionData/Parcel must also bump
+    the count version: single DetectionObject saves and custom-zone associations."""
+
+    def test_detection_object_save_invalidates_count(self):
+        version_before = get_count_cache_version()
+        with self.captureOnCommitCallbacks(execute=True):
+            create_detection_object(object_type=create_object_type(name="CountSigType"))
+        self.assertNotEqual(version_before, get_count_cache_version())
+
+    def test_custom_zone_association_invalidates_count(self):
+        detection_object = create_detection_object(
+            object_type=create_object_type(name="CountSigType2")
+        )
+        zone = GeoCustomZone.objects.create(
+            name="CountSigZone",
+            geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+        )
+        version_before = get_count_cache_version()
+        with self.captureOnCommitCallbacks(execute=True):
+            detection_object.geo_custom_zones.add(zone)
+        self.assertNotEqual(version_before, get_count_cache_version())

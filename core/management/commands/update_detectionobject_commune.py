@@ -4,6 +4,8 @@ from core.models.geo_zone import GeoZone, GeoZoneType
 from django.contrib.gis.geos import GEOSGeometry
 from django.db import transaction
 
+from core.utils.cache import invalidate_count_caches
+
 from core.utils.logs_helpers import log_command_event
 
 BATCH_SIZE_DEFAULT = 1000
@@ -93,6 +95,8 @@ class Command(BaseCommand):
                     DetectionObject.objects.bulk_update(
                         updated_detection_objects, ["commune_id"]
                     )
+                    # bulk_update bypasses post_save; invalidate counts explicitly.
+                    transaction.on_commit(invalidate_count_caches)
                 updated_count += len(updated_detection_objects)
 
             processed_count += len(batch_ids)

@@ -4,6 +4,7 @@ from core.models.detection import Detection
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_sub_custom_zone import GeoSubCustomZone
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
+from core.utils.cache import invalidate_count_caches
 from core.utils.logs_helpers import log_command_event
 
 
@@ -132,3 +133,8 @@ class Command(BaseCommand):
             """,
                 [zone.id, batch_uuids, tile_set_uuids, zone.id],
             )
+
+        # The raw-SQL inserts above write the geo_custom_zones / geo_sub_custom_zones
+        # M2M directly, bypassing the m2m signal. customZonesUuids is a count filter,
+        # so invalidate the count cache for the whole command run.
+        invalidate_count_caches()

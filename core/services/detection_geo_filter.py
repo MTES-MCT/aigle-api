@@ -90,7 +90,7 @@ class DetectionGeoFilterService:
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
             filter_tile_set_intersects_geometry=geometry_accessible,
-            filter_tile_set_uuid_in=tile_sets_uuids,
+            filter_uuid_in=(tile_sets_uuids or None),
             filter_has_collectivities=True,
         )
 
