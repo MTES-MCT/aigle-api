@@ -145,3 +145,55 @@ class GeoCustomZoneViewSetTests(BaseAPITestCase):
         )
         response = self.client.delete(url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_partial_update_keeps_active_when_geometry_present(self):
+        # Regression: PATCHing a zone that already has a geometry must not load
+        # the (deferred, potentially department-sized) geometry into memory and
+        # must keep the zone ACTIVE. See GeoCustomZoneInputSerializer.update.
+        self.authenticate_user(self.super_admin)
+        url = reverse(
+            "GeoCustomZoneViewSet-detail", kwargs={"uuid": str(self.zone_1.uuid)}
+        )
+        response = self.client.patch(
+            url,
+            {
+                "name": "Zone Alpha renamed",
+                "geoCustomZoneCategoryUuid": str(self.category.uuid),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.zone_1.refresh_from_db()
+        self.assertEqual(self.zone_1.name, "Zone Alpha renamed")
+        self.assertEqual(self.zone_1.geo_custom_zone_status, GeoCustomZoneStatus.ACTIVE)
+        self.assertIsNotNone(self.zone_1.geometry)
+
+    def test_partial_update_sets_inactive_when_geometry_missing(self):
+        # A zone without geometry must be flagged INACTIVE on update.
+        zone_no_geometry = GeoCustomZone.objects.create(
+            name="Zone Without Geometry",
+            geo_custom_zone_type=GeoCustomZoneType.COMMON,
+            geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+            geo_custom_zone_category=self.category,
+            color="#CC5566",
+            geometry=None,
+        )
+        self.authenticate_user(self.super_admin)
+        url = reverse(
+            "GeoCustomZoneViewSet-detail", kwargs={"uuid": str(zone_no_geometry.uuid)}
+        )
+        response = self.client.patch(
+            url,
+            {
+                "name": "Zone Without Geometry renamed",
+                "geoCustomZoneCategoryUuid": str(self.category.uuid),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        zone_no_geometry.refresh_from_db()
+        self.assertEqual(
+            zone_no_geometry.geo_custom_zone_status, GeoCustomZoneStatus.INACTIVE
+        )

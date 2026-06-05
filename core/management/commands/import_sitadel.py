@@ -153,6 +153,7 @@ class Command(BaseCommand):
             for uparcel in unique_parcels
         ]
 
+        # TODO: be sure detection objects are not updated if control status updated by user
         # get parcels with detections but no detections with control status != NOT_CONTROLLED
         parcels = (
             Parcel.objects.annotate(

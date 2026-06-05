@@ -1,9 +1,10 @@
 from collections import defaultdict
 import json
 
-from django.contrib.gis.geos import GEOSGeometry
+from django.contrib.gis.db.models.functions import Envelope
 from rest_framework import serializers
 
+from core.models.geo_commune import GeoCommune
 from core.models.parcel import Parcel
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.detection_object import DetectionObjectMinimalSerializer
@@ -85,7 +86,19 @@ class ParcelDetailSerializer(
     tile_set_previews = serializers.SerializerMethodField()
 
     def get_commune_envelope(self, obj: Parcel):
-        return json.loads(GEOSGeometry(obj.commune.geometry.envelope).geojson)
+        if not obj.commune_id:
+            return None
+
+        envelope = (
+            GeoCommune.objects.filter(pk=obj.commune_id)
+            .annotate(envelope=Envelope("geometry"))
+            .values_list("envelope", flat=True)
+            .first()
+        )
+        if envelope is None:
+            return None
+
+        return json.loads(envelope.geojson)
 
     def get_detections_updated_at(self, obj: Parcel):
         return ParcelService.get_parcel_detections_updated_at(parcel=obj)

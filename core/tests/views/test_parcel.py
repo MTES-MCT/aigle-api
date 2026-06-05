@@ -44,3 +44,22 @@ class ParcelViewSetTests(BaseAPITestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_commune_envelope_is_geojson_bbox(self):
+        # The commune envelope is derived in PostGIS (Envelope) instead of
+        # loading the deferred commune geometry into Python; verify the output
+        # is still a valid GeoJSON bounding box.
+        #
+        # Importing the parcel serializer as an entry point trips a pre-existing
+        # serializer import cycle. Loading the URLconf first imports the whole
+        # view/serializer graph in the same order the running app uses.
+        import core.urls  # noqa: F401
+        from core.serializers.parcel import ParcelDetailSerializer
+
+        parcel = self.parcels[0]
+        self.assertIsNotNone(parcel.commune_id)
+
+        envelope = ParcelDetailSerializer().get_commune_envelope(parcel)
+        self.assertIsNotNone(envelope)
+        self.assertEqual(envelope["type"], "Polygon")
+        self.assertGreater(len(envelope["coordinates"][0]), 0)

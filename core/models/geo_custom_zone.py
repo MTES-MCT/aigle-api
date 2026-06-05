@@ -35,6 +35,11 @@ class GeoCustomZone(GeoZone):
         null=True,
     )
     name_short = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True, null=True)
+    # id of the source row a zone was imported from (e.g. detections.zae_layer.id,
+    # which is int8); null for zones created manually through the app. Same role as
+    # the import_id on Detection / DetectionObject (see common.models.importable),
+    # but BigInteger to match the bigint source column.
+    import_id = models.BigIntegerField(null=True)
 
     class Meta:
         indexes = [
