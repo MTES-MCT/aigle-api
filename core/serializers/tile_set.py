@@ -96,6 +96,7 @@ class TileSetInputSerializer(TileSetSerializer, WithCollectivitiesInputSerialize
         )
         collectivities = extract_collectivities(validated_data)
 
+        check_tileset_has_collectivities(collectivities=collectivities)
         check_tileset_uniqueness(
             date=validated_data.get("date"), collectivities=collectivities
         )
@@ -117,6 +118,7 @@ class TileSetInputSerializer(TileSetSerializer, WithCollectivitiesInputSerialize
     def update(self, instance: TileSet, validated_data):
         collectivities = extract_collectivities(validated_data)
 
+        check_tileset_has_collectivities(collectivities=collectivities)
         check_tileset_uniqueness(
             date=validated_data.get("date", instance.date),
             collectivities=collectivities,
@@ -194,6 +196,8 @@ class TileSetBulkCreateInputSerializer(
         )
         collectivities = extract_collectivities(validated_data)
 
+        check_tileset_has_collectivities(collectivities=collectivities)
+
         years = validated_data.pop("years").split(",")
         name_template = validated_data.pop("name")
         url_template = validated_data.pop("url")
@@ -228,6 +232,18 @@ class TileSetBulkCreateInputSerializer(
 
 
 # utils
+
+
+def check_tileset_has_collectivities(collectivities: List[GeoZone]):
+    if not collectivities:
+        message = "Au moins une commune, un département ou une région doit être associé au fond de carte"
+        raise serializers.ValidationError(
+            {
+                "communes_uuids": message,
+                "departments_uuids": message,
+                "regions_uuids": message,
+            }
+        )
 
 
 def check_tileset_uniqueness(
