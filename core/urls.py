@@ -16,6 +16,10 @@ from core.views.object_type import ObjectTypeViewSet
 from core.views.object_type_category import ObjectTypeCategoryViewSet
 from core.views.parcel import ParcelViewSet
 from core.views.run_command import CommandAsyncViewSet
+from core.views.statistics.deployed_data import (
+    StatisticsDeployedDataDetailView,
+    StatisticsDeployedDataView,
+)
 from core.views.statistics.validation_status_evolution import (
     StatisticsValidationStatusEvolutionView,
 )
@@ -101,6 +105,16 @@ urlpatterns += [
         "statistics/validation-status-object-types-global/",
         StatisticsValidationStatusObjectTypesGlobalView.as_view(),
         name="StatisticsValidationStatusObjectTypesGlobalView",
+    ),
+    path(
+        "statistics/deployed-data/",
+        StatisticsDeployedDataView.as_view(),
+        name="StatisticsDeployedDataView",
+    ),
+    path(
+        "statistics/deployed-data/<uuid:uuid>/",
+        StatisticsDeployedDataDetailView.as_view(),
+        name="StatisticsDeployedDataDetailView",
     ),
 ]
 
