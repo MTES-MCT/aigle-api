@@ -56,6 +56,7 @@ class UserService:
         user_role: UserRole,
         requesting_user: "User",
         user_user_groups: Optional[List[Dict[str, Any]]] = None,
+        is_staff: bool = False,
     ) -> "User":
         """Create a new user with business logic validation."""
         # Check email uniqueness
@@ -74,6 +75,7 @@ class UserService:
             email=email,
             password=password,
             user_role=user_role,
+            is_staff=is_staff,
         )
 
         with transaction.atomic():

@@ -19,6 +19,7 @@ class UserSerializer(UserSerializerBase):
             "email",
             "user_role",
             "deleted",
+            "is_staff",
             "user_user_groups",
         ]
 
@@ -30,7 +31,14 @@ class UserInputSerializer(UserSerializer):
     from core.serializers.user_group import UserUserGroupInputSerializer
 
     class Meta(UserSerializer.Meta):
-        fields = ["email", "user_role", "deleted", "password", "user_user_groups"]
+        fields = [
+            "email",
+            "user_role",
+            "deleted",
+            "is_staff",
+            "password",
+            "user_user_groups",
+        ]
 
     password = serializers.CharField()
     user_user_groups = UserUserGroupInputSerializer(many=True)
@@ -48,6 +56,7 @@ class UserInputSerializer(UserSerializer):
                 user_role=validated_data["user_role"],
                 requesting_user=self.context["request"].user,
                 user_user_groups=user_user_groups,
+                is_staff=validated_data.get("is_staff", False),
             )
         except serializers.ValidationError:
             raise
