@@ -225,22 +225,16 @@ class DetectionListFilter(FilterSet):
         return queryset
 
     def filter_queryset(self, queryset):
-        from core.utils.super_admin_scope import get_super_admin_scoped_user_group
-
-        scoped_user_group = get_super_admin_scoped_user_group(self.request)
-
-        collectivity_filter = UserPermission(
-            user=self.request.user,
-            scoped_user_group=scoped_user_group,
+        collectivity_filter = UserPermission.from_request(
+            self.request
         ).get_collectivity_filter(
             communes_uuids=to_array(self.data.get("communesUuids")),
             departments_uuids=to_array(self.data.get("departmentsUuids")),
             regions_uuids=to_array(self.data.get("regionsUuids")),
         )
 
-        detection_tilesets_filter = TileSetPermission(
-            user=self.request.user,
-            scoped_user_group=scoped_user_group,
+        detection_tilesets_filter = TileSetPermission.from_request(
+            self.request
         ).get_last_detections_filters_detections(
             filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
             filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
@@ -291,10 +285,7 @@ class DetectionListFilter(FilterSet):
         )
 
         geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
-            GeoCustomZonePermission(
-                user=self.request.user,
-                scoped_user_group=scoped_user_group,
-            ).get_detection_prefetch()
+            GeoCustomZonePermission.from_request(self.request).get_detection_prefetch()
         )
 
         queryset = queryset.prefetch_related(

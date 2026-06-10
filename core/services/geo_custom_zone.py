@@ -189,7 +189,11 @@ class GeoCustomZoneService:
         return list(queryset.all())
 
     @staticmethod
-    def get_filtered_queryset(user: "User", search_query: Optional[str] = None):
+    def get_filtered_queryset(
+        user: "User",
+        search_query: Optional[str] = None,
+        scoped_user_group: Optional[UserGroup] = None,
+    ):
         """Get filtered queryset for geo custom zones."""
         from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
 
@@ -197,7 +201,9 @@ class GeoCustomZoneService:
         queryset = queryset.prefetch_related("geo_zones")
         queryset = queryset.select_related("geo_custom_zone_category")
 
-        if user.user_role == UserRole.ADMIN:
+        if scoped_user_group is not None:
+            queryset = queryset.filter(user_groups_custom_geo_zones=scoped_user_group)
+        elif user.user_role == UserRole.ADMIN:
             queryset = queryset.filter(
                 id__in=user.user_user_groups.values_list(
                     "user_group__geo_custom_zones__id", flat=True

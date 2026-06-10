@@ -12,8 +12,9 @@ from django.core.exceptions import BadRequest
 class DetectionBulkUpdateService:
     """Service for handling bulk detection updates."""
 
-    def __init__(self, user):
+    def __init__(self, user, scoped_user_group=None):
         self.user = user
+        self.scoped_user_group = scoped_user_group
 
     @transaction.atomic
     def update_multiple_detections(
@@ -63,9 +64,9 @@ class DetectionBulkUpdateService:
     def _validate_edit_permissions(self, detections: List[Detection]) -> None:
         """Validate user has permission to edit all detections."""
         geometries = [detection.geometry for detection in detections]
-        UserPermission(user=self.user).can_edit(
-            geometry=MultiPolygon(geometries), raise_exception=True
-        )
+        UserPermission(
+            user=self.user, scoped_user_group=self.scoped_user_group
+        ).can_edit(geometry=MultiPolygon(geometries), raise_exception=True)
 
     def _validate_and_get_object_type(
         self, object_type_uuid: Optional[str]

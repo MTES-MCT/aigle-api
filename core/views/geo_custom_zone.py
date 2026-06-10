@@ -86,11 +86,14 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
         return GeoCustomZoneSerializer
 
     def get_queryset(self):
+        from core.permissions.scope import resolve_scoped_user_group
         from core.services.geo_custom_zone import GeoCustomZoneService
 
         search_query = self.request.GET.get("q")
         return GeoCustomZoneService.get_filtered_queryset(
-            user=self.request.user, search_query=search_query
+            user=self.request.user,
+            search_query=search_query,
+            scoped_user_group=resolve_scoped_user_group(self.request),
         )
 
     @action(methods=["get"], detail=False)

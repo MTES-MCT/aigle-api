@@ -67,7 +67,12 @@ class ParcelFilter(FilterSet):
         return queryset
 
     def filter_queryset(self, queryset):
-        filter_service = ParcelFilterService(user=self.request.user)
+        from core.permissions.scope import resolve_scoped_user_group
+
+        filter_service = ParcelFilterService(
+            user=self.request.user,
+            scoped_user_group=resolve_scoped_user_group(self.request),
+        )
         return filter_service.apply_filters(queryset, self.data)
 
 
@@ -86,7 +91,13 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
         return ParcelSerializer
 
     def retrieve(self, request, uuid):
-        instance = ParcelService.get_parcel_detail(uuid=uuid, user=request.user)
+        from core.permissions.scope import resolve_scoped_user_group
+
+        instance = ParcelService.get_parcel_detail(
+            uuid=uuid,
+            user=request.user,
+            scoped_user_group=resolve_scoped_user_group(request),
+        )
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -125,7 +136,12 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
     @action(methods=["get"], detail=False)
     def list_items(self, request):
-        filter_service = ParcelFilterService(user=self.request.user)
+        from core.permissions.scope import resolve_scoped_user_group
+
+        filter_service = ParcelFilterService(
+            user=self.request.user,
+            scoped_user_group=resolve_scoped_user_group(self.request),
+        )
 
         # Create filter instance to get filter parameters
         filter_instance = self.filterset_class(
@@ -141,7 +157,7 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
         )
 
         geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
-            GeoCustomZonePermission(user=self.request.user).get_parcel_prefetch()
+            GeoCustomZonePermission.from_request(self.request).get_parcel_prefetch()
         )
 
         queryset = queryset.prefetch_related(
@@ -162,7 +178,12 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
 
     @action(methods=["get"], detail=False, url_path="overview")
     def get_overview(self, request):
-        filter_service = ParcelFilterService(user=self.request.user)
+        from core.permissions.scope import resolve_scoped_user_group
+
+        filter_service = ParcelFilterService(
+            user=self.request.user,
+            scoped_user_group=resolve_scoped_user_group(self.request),
+        )
 
         # Create filter instance to get filter parameters
         filter_instance = self.filterset_class(

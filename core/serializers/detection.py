@@ -142,7 +142,9 @@ class DetectionInputSerializer(DetectionSerializer):
     detection_object_uuid = serializers.UUIDField(write_only=True, required=False)
 
     def create(self, validated_data):
-        user = self.context["request"].user
+        from core.permissions.scope import resolve_scoped_user_group
+
+        request = self.context["request"]
 
         detection_object_uuid = validated_data.pop("detection_object_uuid", None)
         tile_set_uuid = validated_data.pop("tile_set_uuid")
@@ -152,13 +154,14 @@ class DetectionInputSerializer(DetectionSerializer):
         try:
             return DetectionService.create_detection(
                 geometry=validated_data["geometry"],
-                user=user,
+                user=request.user,
                 tile_set_uuid=str(tile_set_uuid),
                 detection_object_uuid=str(detection_object_uuid)
                 if detection_object_uuid
                 else None,
                 detection_object_data=detection_object_data,
                 detection_data_data=detection_data_data,
+                scoped_user_group=resolve_scoped_user_group(request),
             )
         except ValueError as e:
             raise serializers.ValidationError(str(e))
@@ -171,7 +174,9 @@ class DetectionUpdateSerializer(DetectionSerializer):
     object_type_uuid = serializers.UUIDField(write_only=True)
 
     def update(self, instance: Detection, validated_data):
-        user = self.context["request"].user
+        from core.permissions.scope import resolve_scoped_user_group
+
+        request = self.context["request"]
         object_type_uuid = validated_data.get("object_type_uuid")
 
         if object_type_uuid:
@@ -179,7 +184,8 @@ class DetectionUpdateSerializer(DetectionSerializer):
                 return DetectionService.update_detection_object_type(
                     detection=instance,
                     object_type_uuid=str(object_type_uuid),
-                    user=user,
+                    user=request.user,
+                    scoped_user_group=resolve_scoped_user_group(request),
                 )
             except ValueError as e:
                 raise serializers.ValidationError(str(e))

@@ -104,10 +104,14 @@ class ParcelDetailSerializer(
         return ParcelService.get_parcel_detections_updated_at(parcel=obj)
 
     def get_tile_set_previews(self, obj: Parcel):
-        user = self.context["request"].user
+        from core.permissions.scope import resolve_scoped_user_group
+
+        request = self.context["request"]
 
         tile_set_previews = ParcelService.get_parcel_tile_set_previews_data(
-            parcel=obj, user=user
+            parcel=obj,
+            user=request.user,
+            scoped_user_group=resolve_scoped_user_group(request),
         )
 
         from core.serializers.detection_object import (

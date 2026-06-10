@@ -5,6 +5,7 @@ from django.db.models.query import QuerySet
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
 from core.models.parcel import Parcel
+from core.models.user_group import UserGroup
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
@@ -19,13 +20,17 @@ class ParcelService:
     """Service for handling Parcel business logic."""
 
     @staticmethod
-    def get_parcel_detail(uuid: str, user: "User") -> Optional[Parcel]:
+    def get_parcel_detail(
+        uuid: str,
+        user: "User",
+        scoped_user_group: Optional[UserGroup] = None,
+    ) -> Optional[Parcel]:
         """Get parcel detail with permissions check."""
-        collectivity_filter = UserPermission(user=user).get_collectivity_filter()
-        user_permission = UserPermission(user)
+        user_permission = UserPermission(user, scoped_user_group=scoped_user_group)
+        collectivity_filter = user_permission.get_collectivity_filter()
         object_types_with_status = user_permission.get_user_object_types_with_status()
         filter_geo_custom_zones = GeoCustomZonePermission(
-            user=user
+            user=user, scoped_user_group=scoped_user_group
         ).get_geo_custom_zones_q()
 
         repo = ParcelRepository()
@@ -219,14 +224,16 @@ class ParcelService:
 
     @staticmethod
     def get_parcel_tile_set_previews_data(
-        parcel: Parcel, user: "User"
+        parcel: Parcel,
+        user: "User",
+        scoped_user_group: Optional[UserGroup] = None,
     ) -> List[Dict[str, Any]]:
         """Get tile set previews data for a parcel."""
         from core.permissions.tile_set import TileSetPermission
 
-        return TileSetPermission(user=user).get_previews(
-            filter_tile_set_intersects_geometry=parcel.geometry
-        )
+        return TileSetPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).get_previews(filter_tile_set_intersects_geometry=parcel.geometry)
 
     @staticmethod
     def get_parcel_detections_updated_at(parcel: Parcel) -> Optional[Any]:

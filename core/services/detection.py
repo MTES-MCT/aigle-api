@@ -96,10 +96,13 @@ class DetectionService:
         detection_object_uuid: Optional[str] = None,
         detection_object_data: Optional[Dict[str, Any]] = None,
         detection_data_data: Optional[Dict[str, Any]] = None,
+        scoped_user_group=None,
     ) -> Detection:
         """Create a new detection with full business logic."""
         # Validate permissions
-        UserPermission(user=user).validate_geometry_edit_permission(geometry=geometry)
+        UserPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).validate_geometry_edit_permission(geometry=geometry)
 
         # Get tile set
         tile_set = TileSet.objects.filter(uuid=tile_set_uuid).first()
@@ -267,13 +270,16 @@ class DetectionService:
 
     @staticmethod
     def update_detection_object_type(
-        detection: Detection, object_type_uuid: str, user
+        detection: Detection,
+        object_type_uuid: str,
+        user,
+        scoped_user_group=None,
     ) -> Detection:
         """Update detection object type with business rules."""
         # Validate permissions
-        UserPermission(user=user).validate_geometry_edit_permission(
-            geometry=detection.geometry
-        )
+        UserPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).validate_geometry_edit_permission(geometry=detection.geometry)
 
         object_type = ObjectType.objects.filter(uuid=object_type_uuid).first()
         if not object_type:
