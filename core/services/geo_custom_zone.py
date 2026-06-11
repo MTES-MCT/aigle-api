@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
-from django.db import transaction
+from typing import Callable, Iterable, Optional, List, Dict, Any, TYPE_CHECKING
+from django.db import connection, transaction
 from django.contrib.gis.geos import GEOSGeometry, Polygon
 from django.contrib.gis.db.models.functions import Intersection
 
@@ -14,6 +14,10 @@ from core.models.user_group import UserGroup
 
 if TYPE_CHECKING:
     from core.models.user import User
+
+
+def _noop_log(info: str) -> None:  # noqa: ARG001
+    pass
 
 
 class GeoCustomZoneService:
@@ -187,6 +191,126 @@ class GeoCustomZoneService:
         ).annotate(geometry=Intersection("geometry", polygon))
 
         return list(queryset.all())
+
+    @staticmethod
+    def associate_detections_to_custom_zones(
+        custom_zone_ids: Iterable[int],
+        batch_ids: Optional[List[str]] = None,
+        tile_set_uuids: Optional[List[str]] = None,
+        log_event: Callable[[str], None] = _noop_log,
+    ) -> None:
+        """Populate the DetectionObject ↔ GeoCustomZone (and ↔ GeoSubCustomZone)
+        M2M tables for the given custom zones, based on spatial intersection
+        between each zone geometry and its detections' geometry.
+
+        Filters detections by `batch_ids` (Detection.batch_id values) and
+        `tile_set_uuids` (TileSet.uuid values). Either, when omitted, defaults to
+        the full population: all distinct batches / all non-INDICATIVE-DEACTIVATED
+        tile sets.
+
+        Writes the M2M directly via raw SQL (bypasses the m2m_changed signal), so
+        this helper also schedules a count-cache invalidation on commit — the
+        caller must not invalidate counts itself.
+        """
+        from core.models.detection import Detection
+        from core.models.tile_set import TileSet, TileSetStatus, TileSetType
+        from core.utils.cache import invalidate_count_caches
+
+        custom_zone_id_list = list(custom_zone_ids)
+        if not custom_zone_id_list:
+            log_event("No custom zones to associate")
+            return
+
+        zones = list(
+            GeoCustomZone.objects.filter(
+                id__in=custom_zone_id_list, geometry__isnull=False
+            )
+            .prefetch_related("sub_custom_zones")
+            .defer("geometry", "sub_custom_zones__geometry")
+        )
+        if not zones:
+            log_event("No custom zones to associate (none have a geometry)")
+            return
+
+        if batch_ids is None:
+            batch_ids = list(
+                Detection.objects.exclude(batch_id=None)
+                .values_list("batch_id", flat=True)
+                .distinct()
+            )
+
+        # Detection.tile_set_id is the FK integer column, but callers identify
+        # tile sets by their UUID — resolve to ids here so ANY(%s) gets the
+        # correct type.
+        if tile_set_uuids is None:
+            tile_set_ids = list(
+                TileSet.objects.exclude(
+                    tile_set_type=TileSetType.INDICATIVE,
+                    tile_set_status=TileSetStatus.DEACTIVATED,
+                ).values_list("id", flat=True)
+            )
+        else:
+            tile_set_ids = list(
+                TileSet.objects.filter(uuid__in=tile_set_uuids).values_list(
+                    "id", flat=True
+                )
+            )
+
+        for zone in zones:
+            log_event(f"Associating detections to custom zone: {zone.name}")
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO core_detectionobject_geo_custom_zones (
+                        detectionobject_id, geocustomzone_id
+                    )
+                    SELECT DISTINCT dobj.id, %s
+                    FROM core_detectionobject dobj
+                    JOIN core_detection detec
+                        ON detec.detection_object_id = dobj.id
+                    WHERE
+                        detec.batch_id = ANY(%s)
+                        AND detec.tile_set_id = ANY(%s)
+                        AND ST_Intersects(
+                            detec.geometry,
+                            (SELECT geometry FROM core_geozone WHERE id = %s)
+                        )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [zone.id, batch_ids, tile_set_ids, zone.id],
+                )
+
+        sub_zones = [
+            sub_zone for zone in zones for sub_zone in zone.sub_custom_zones.all()
+        ]
+        for sub_zone in sub_zones:
+            log_event(f"Associating detections to sub-custom zone: {sub_zone.name}")
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO core_detectionobject_geo_sub_custom_zones (
+                        detectionobject_id, geosubcustomzone_id
+                    )
+                    SELECT DISTINCT dobj.id, %s
+                    FROM core_detectionobject dobj
+                    JOIN core_detection detec
+                        ON detec.detection_object_id = dobj.id
+                    WHERE
+                        detec.batch_id = ANY(%s)
+                        AND detec.tile_set_id = ANY(%s)
+                        AND ST_Intersects(
+                            detec.geometry,
+                            (SELECT geometry FROM core_geozone WHERE id = %s)
+                        )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [sub_zone.id, batch_ids, tile_set_ids, sub_zone.id],
+                )
+
+        # Raw-SQL M2M writes bypass m2m_changed; bump the count cache once for
+        # the whole operation. on_commit defers under an open atomic block and
+        # runs synchronously outside one, so it's safe in both contexts.
+        transaction.on_commit(invalidate_count_caches)
 
     @staticmethod
     def get_filtered_queryset(

@@ -5,6 +5,7 @@ test database, so each test provisions that table (DDL is rolled back with the
 surrounding test transaction) and seeds it with rows before invoking the command.
 """
 
+from django.contrib.gis.geos import Point
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
@@ -15,6 +16,12 @@ from core.management.commands.import_custom_zones import (
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_custom_zone_category import GeoCustomZoneCategory
 from core.tests.base import BaseTestCase
+from core.tests.fixtures.detection_data import (
+    create_detection,
+    create_detection_object,
+    create_tile,
+    create_tile_set,
+)
 from core.tests.fixtures.geo_data import (
     create_gard_department,
     create_herault_department,
@@ -199,4 +206,69 @@ class ImportCustomZonesCommandTests(BaseTestCase):
         self.assertEqual(len(zones), 1)
         self.assertIn(
             self.department.id, list(zones[0].geo_zones.values_list("id", flat=True))
+        )
+
+    def test_ignore_categories_creates_uncategorized_zone(self):
+        # No categories seeded — and we don't need any: the flag stores NULL.
+        source_id = _insert_source_row("zfee", "34", layer_name="Uncat ZFEE")
+
+        call_command("import_custom_zones", "--ignore-categories")
+
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertEqual(zone.name, "Uncat ZFEE")
+        self.assertIsNone(zone.geo_custom_zone_category)
+        self.assertIn(
+            self.department.id,
+            list(zone.geo_zones.values_list("id", flat=True)),
+        )
+
+    def test_ignore_categories_accepts_unknown_layer_type(self):
+        # Unknown layer_type would normally be skipped; with --ignore-categories
+        # it must produce a zone (with a NULL category and a synthesized name).
+        source_id = _insert_source_row("totally_unknown", "34")
+
+        call_command("import_custom_zones", "--ignore-categories")
+
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertIsNone(zone.geo_custom_zone_category)
+        # Name falls back to "<layer_type> - <department>" when no layer_name.
+        self.assertIn("totally_unknown", zone.name)
+        self.assertIn(self.department.name, zone.name)
+
+    def test_ignore_categories_skips_duplicate_pair_check(self):
+        # Two rows that would normally trip the (department, category) duplicate
+        # check are imported as two separate zones under --ignore-categories.
+        _insert_source_row("zfee", "34", layer_name="Zone A")
+        _insert_source_row("zfee", "34", layer_name="Zone B")
+
+        call_command("import_custom_zones", "--ignore-categories")
+
+        self.assertEqual(GeoCustomZone.objects.count(), 2)
+        for zone in GeoCustomZone.objects.all():
+            self.assertIsNone(zone.geo_custom_zone_category)
+
+    def test_import_associates_detections_to_new_zones(self):
+        _seed_categories("zfee")
+        source_id = _insert_source_row("zfee", "34")
+
+        # A detection whose geometry falls inside the HERAULT_POLYGON_WKT bbox
+        # so the post-import association picks it up.
+        tile_set = create_tile_set(name="Test TS for import")
+        tile = create_tile(x=1, y=1, z=18)
+        detection_object = create_detection_object()
+        create_detection(
+            detection_object=detection_object,
+            tile=tile,
+            tile_set=tile_set,
+            geometry=Point(3.1, 43.4, srid=4326),
+            batch_id="batch-xyz",
+        )
+
+        call_command("import_custom_zones")
+
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        # The M2M is populated by associate_detections_to_custom_zones.
+        self.assertIn(
+            detection_object.id,
+            list(zone.detection_objects.values_list("id", flat=True)),
         )

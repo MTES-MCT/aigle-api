@@ -14,6 +14,7 @@ from core.models.geo_custom_zone import (
 )
 from core.models.geo_custom_zone_category import GeoCustomZoneCategory
 from core.models.geo_department import GeoDepartment
+from core.services.geo_custom_zone import GeoCustomZoneService
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
 
@@ -78,6 +79,17 @@ class Command(BaseCommand):
                 "still skipped by import_id."
             ),
         )
+        parser.add_argument(
+            "--ignore-categories",
+            action="store_true",
+            default=False,
+            help=(
+                "Import every source row as an uncategorized custom zone "
+                "(geo_custom_zone_category = NULL). Rows with unknown layer_type "
+                "are no longer skipped, the (department, category) duplicate check "
+                "is bypassed, and no GeoCustomZoneCategory rows need to exist."
+            ),
+        )
 
     def handle(self, *args, **options):
         table_name = options["table_name"]
@@ -85,12 +97,17 @@ class Command(BaseCommand):
         source_srid = options["source_srid"]
         department_codes = options["department_codes"]
         force = options["force"]
+        ignore_categories = options["ignore_categories"]
 
         if not IDENTIFIER_RE.match(table_name) or not IDENTIFIER_RE.match(table_schema):
             raise CommandError(f"Invalid table reference: {table_schema}.{table_name}")
 
         start_time = datetime.now()
         log_event(f"Starting custom zones import from {table_schema}.{table_name}")
+        if ignore_categories:
+            log_event(
+                "--ignore-categories enabled: zones will be imported as uncategorized"
+            )
 
         # departments lookup (by insee code)
         department_map = self._get_department_map()
@@ -103,11 +120,18 @@ class Command(BaseCommand):
             department_codes=department_codes,
         )
 
-        # the categories required by the layer types actually present must be seeded
-        category_map = self._get_category_map(rows)
+        # When categories are honored, every layer type actually present must be
+        # seeded as a GeoCustomZoneCategory; the --ignore-categories path skips
+        # this entirely and stores NULL on the category FK.
+        category_map = {} if ignore_categories else self._get_category_map(rows)
 
         # resolve rows to (department, category, geometry)
-        resolved, skipped = self._resolve_rows(rows, category_map, department_map)
+        resolved, skipped = self._resolve_rows(
+            rows,
+            category_map=category_map,
+            department_map=department_map,
+            ignore_categories=ignore_categories,
+        )
 
         # idempotency: never re-create a row that was already imported
         resolved, already_imported = self._filter_already_imported(resolved)
@@ -121,26 +145,34 @@ class Command(BaseCommand):
             log_event("Nothing to import. Done.")
             return
 
-        # duplicate (department, category) guard — before any write
-        if force:
+        # duplicate (department, category) guard — before any write. Meaningless
+        # under --ignore-categories (every row's category is NULL), so skipped.
+        if ignore_categories:
+            log_event(
+                "--ignore-categories enabled: skipping the "
+                "(department, category) duplicate check"
+            )
+        elif force:
             log_event(
                 "--force enabled: skipping the (department, category) duplicate check"
             )
         else:
             self._check_no_duplicate_pairs(resolved)
 
-        created = self._create_zones(resolved)
+        created_zone_ids = self._create_zones(resolved)
 
         log_event(
-            f"Custom zones import finished: {created} created, {skipped} skipped, "
-            f"{already_imported} already imported (elapsed: {datetime.now() - start_time})"
+            f"Custom zones import finished: {len(created_zone_ids)} created, "
+            f"{skipped} skipped, {already_imported} already imported "
+            f"(elapsed: {datetime.now() - start_time})"
         )
-        # Zones are created without detection/parcel associations. Those M2M links
-        # (and their count-cache invalidation) are computed by `update_custom_zones`,
-        # which must be run afterwards for the new zones to appear in detection lists.
-        log_event(
-            "Run `update_custom_zones` to associate detections/parcels with the new zones."
-        )
+
+        if created_zone_ids:
+            log_event(f"Associating detections to {len(created_zone_ids)} new zone(s)")
+            GeoCustomZoneService.associate_detections_to_custom_zones(
+                custom_zone_ids=created_zone_ids,
+                log_event=log_event,
+            )
 
     def _get_category_map(
         self, rows: List[Dict[str, Any]]
@@ -249,6 +281,7 @@ class Command(BaseCommand):
         rows: List[Dict[str, Any]],
         category_map: Dict[str, GeoCustomZoneCategory],
         department_map: Dict[str, GeoDepartment],
+        ignore_categories: bool = False,
     ) -> Tuple[List[Dict[str, Any]], int]:
         resolved: List[Dict[str, Any]] = []
         skipped = 0
@@ -257,14 +290,19 @@ class Command(BaseCommand):
             layer_type = (row.get("layer_type") or "").strip().lower()
             department_code = (row.get("department_code") or "").strip()
 
-            category = category_map.get(layer_type)
-            if not category:
-                log_event(
-                    f"Row id={row['id']}: unknown layer_type "
-                    f"'{row.get('layer_type')}', skipping"
-                )
-                skipped += 1
-                continue
+            # Under --ignore-categories, unknown layer_type is no longer fatal:
+            # the zone is created with a NULL category.
+            if ignore_categories:
+                category = None
+            else:
+                category = category_map.get(layer_type)
+                if not category:
+                    log_event(
+                        f"Row id={row['id']}: unknown layer_type "
+                        f"'{row.get('layer_type')}', skipping"
+                    )
+                    skipped += 1
+                    continue
 
             department = department_map.get(department_code)
             if not department:
@@ -293,6 +331,7 @@ class Command(BaseCommand):
                 {
                     "id": row["id"],
                     "layer_name": row.get("layer_name"),
+                    "layer_type": layer_type,
                     "category": category,
                     "department": department,
                     "geometry": geometry,
@@ -355,13 +394,13 @@ class Command(BaseCommand):
                 f"these department/category pairs: {details}. Use --force to import anyway."
             )
 
-    def _create_zones(self, resolved: List[Dict[str, Any]]) -> int:
-        created = 0
+    def _create_zones(self, resolved: List[Dict[str, Any]]) -> List[int]:
+        created_ids: List[int] = []
         with transaction.atomic():
             for item in resolved:
                 department = item["department"]
                 category = item["category"]
-                name = item["layer_name"] or f"{category.name} - {department.name}"
+                name = item["layer_name"] or self._default_zone_name(item)
 
                 zone = GeoCustomZone(
                     name=name,
@@ -374,7 +413,19 @@ class Command(BaseCommand):
                 # save() (via GeoZone.save) sets geo_zone_type=CUSTOM and name_normalized.
                 zone.save()
                 zone.geo_zones.add(department)
-                created += 1
+                created_ids.append(zone.id)
 
-        log_event(f"Created {created} custom zone(s)")
-        return created
+        log_event(f"Created {len(created_ids)} custom zone(s)")
+        return created_ids
+
+    @staticmethod
+    def _default_zone_name(item: Dict[str, Any]) -> str:
+        """Fallback name when the source row carries no layer_name."""
+        department = item["department"]
+        category = item["category"]
+        if category is not None:
+            return f"{category.name} - {department.name}"
+        layer_type = item.get("layer_type")
+        if layer_type:
+            return f"{layer_type} - {department.name}"
+        return f"Zone - {department.name}"
