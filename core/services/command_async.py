@@ -1,9 +1,9 @@
 import logging
-from typing import Any, Dict, List, Optional, Tuple, Union
-from celery.result import AsyncResult
-from core.models.command_run import CommandRun, CommandRunStatus
-from core.utils.tasks import run_management_command, run_custom_command
 import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
+from core.models.command_run import CommandRun, CommandRunStatus
+from core.utils.tasks import run_management_command
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ class CommandAsyncService:
 
     @staticmethod
     def run_command_async(command_name: str, **kwargs: Any) -> str:
-        """Run Django management command asynchronously."""
+        """Run a Django management command asynchronously via Celery."""
         command_run_uuid = str(uuid.uuid4())
 
         command_run = CommandRun.objects.create(
@@ -38,84 +38,17 @@ class CommandAsyncService:
         return command_run_uuid
 
     @staticmethod
-    def run_custom_command_async(command_name: str, **options: Any) -> str:
-        """Run custom Django command asynchronously."""
-        command_run_uuid = str(uuid.uuid4())
-
-        command_run = CommandRun.objects.create(
-            command_name=command_name,
-            task_id=command_run_uuid,
-            arguments={"kwargs": options},
-            status=CommandRunStatus.PENDING,
-        )
-
-        run_custom_command.apply_async(
-            args=[command_name, str(command_run.uuid), options],
-            task_id=command_run_uuid,
-        )
-
-        return command_run_uuid
-
-    @staticmethod
-    def get_task_status(task_id: str) -> Dict[str, Union[str, Any, None]]:
-        """Get status of a task by ID."""
-        command_run = CommandRun.objects.filter(task_id=task_id).first()
-
-        if command_run:
-            return {
-                "task_id": task_id,
-                "status": command_run.status,
-                "result": {"output": command_run.output, "error": command_run.error}
-                if command_run.is_finished()
-                else None,
-                "traceback": command_run.error
-                if command_run.status == CommandRunStatus.ERROR
-                else None,
-                "command_name": command_run.command_name,
-                "arguments": command_run.arguments,
-                "created_at": command_run.created_at.isoformat(),
-                "updated_at": command_run.updated_at.isoformat(),
-            }
-
-        # Fallback to Celery result if CommandRun not found
-        result = AsyncResult(task_id)
-        return {
-            "task_id": task_id,
-            "status": result.status,
-            "result": result.result if result.ready() else None,
-            "traceback": result.traceback if result.failed() else None,
-        }
-
-    @staticmethod
-    def get_task_result(task_id: str) -> Optional[Any]:
-        """Get result of a completed task."""
-        command_run = CommandRun.objects.filter(task_id=task_id).first()
-
-        if command_run and command_run.is_finished():
-            if command_run.status == CommandRunStatus.SUCCESS:
-                return command_run.output
-            else:
-                return command_run.error
-
-        # Fallback to Celery result if CommandRun not found
-        result = AsyncResult(task_id)
-        if result.ready():
-            return result.result
-        return None
-
-    @staticmethod
     def cancel_task(task_id: str) -> bool:
-        """Cancel a running task."""
-        # Update CommandRun status if exists
+        """Mark a CommandRun as canceled and revoke the Celery task."""
+        from celery.result import AsyncResult
+
         command_run = CommandRun.objects.filter(task_id=task_id).first()
         if command_run and not command_run.is_finished():
             command_run.status = CommandRunStatus.CANCELED
             command_run.error = "Task cancelled by user"
             command_run.save()
 
-        # Cancel the Celery task
-        result = AsyncResult(task_id)
-        result.revoke(terminate=True)
+        AsyncResult(task_id).revoke(terminate=True)
         return True
 
     @staticmethod
@@ -137,11 +70,6 @@ class CommandAsyncService:
         return list(queryset), count
 
     @staticmethod
-    def validate_task_id(task_id: str) -> bool:
-        """Validate if task ID exists."""
-        return CommandRun.objects.filter(task_id=task_id).exists()
-
-    @staticmethod
     def parse_command_parameters(
         command_name: str, parameters: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -152,7 +80,6 @@ class CommandAsyncService:
             command_name=command_name, parameters=parameters
         )
 
-        # Convert CLI parameter names to Django format for call_command
         return {
             key.lstrip("-").replace("-", "_"): value
             for key, value in parsed_parameters.items()
