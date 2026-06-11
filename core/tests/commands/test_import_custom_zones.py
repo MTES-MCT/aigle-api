@@ -208,6 +208,20 @@ class ImportCustomZonesCommandTests(BaseTestCase):
             self.department.id, list(zones[0].geo_zones.values_list("id", flat=True))
         )
 
+    def test_ids_filter_restricts_to_listed_source_rows(self):
+        _seed_categories("zfee", "zi")
+        # Build a second department so each row's (dept, category) pair is unique.
+        gard = create_gard_department(region=self.region)
+        kept_id = _insert_source_row("zfee", "34", layer_name="Keep me")
+        _insert_source_row("zi", gard.insee_code, layer_name="Drop me")
+
+        call_command("import_custom_zones", "--ids", str(kept_id))
+
+        zones = list(GeoCustomZone.objects.all())
+        self.assertEqual(len(zones), 1)
+        self.assertEqual(zones[0].import_id, kept_id)
+        self.assertEqual(zones[0].name, "Keep me")
+
     def test_ignore_categories_creates_uncategorized_zone(self):
         # No categories seeded — and we don't need any: the flag stores NULL.
         source_id = _insert_source_row("zfee", "34", layer_name="Uncat ZFEE")

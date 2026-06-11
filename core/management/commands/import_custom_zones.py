@@ -70,6 +70,16 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--ids",
+            action="append",
+            type=int,
+            required=False,
+            help=(
+                "Restrict the import to these source row ids (matched against "
+                "the source table's primary key). Repeat the flag for several ids."
+            ),
+        )
+        parser.add_argument(
             "--force",
             action="store_true",
             default=False,
@@ -96,6 +106,7 @@ class Command(BaseCommand):
         table_schema = options["table_schema"]
         source_srid = options["source_srid"]
         department_codes = options["department_codes"]
+        ids = options["ids"]
         force = options["force"]
         ignore_categories = options["ignore_categories"]
 
@@ -112,12 +123,13 @@ class Command(BaseCommand):
         # departments lookup (by insee code)
         department_map = self._get_department_map()
 
-        # read the source rows (optionally restricted to some departments)
+        # read the source rows (optionally restricted to some departments / ids)
         rows = self._read_rows(
             table_schema=table_schema,
             table_name=table_name,
             source_srid=source_srid,
             department_codes=department_codes,
+            ids=ids,
         )
 
         # When categories are honored, every layer type actually present must be
@@ -235,6 +247,7 @@ class Command(BaseCommand):
         table_name: str,
         source_srid: int,
         department_codes: List[str],
+        ids: List[int] = None,
     ) -> List[Dict[str, Any]]:
         # ST_MakeValid: zones drive spatial containment downstream, so an invalid
         # source polygon would break those queries — repair on read.
@@ -265,6 +278,10 @@ class Command(BaseCommand):
         if department_codes:
             select_sql += " AND department_code = ANY(%s)"
             params.append(list(department_codes))
+
+        if ids:
+            select_sql += " AND id = ANY(%s)"
+            params.append(list(ids))
 
         select_sql += " ORDER BY id"
 
