@@ -13,9 +13,9 @@ def log_event(info: str):
 class Command(BaseCommand):
     help = (
         "Recompute and cache the SUPER_ADMIN 'deployed data' overview. The aggregation "
-        "scans the whole detection/parcel dataset and takes ~1-2 min; run this after a "
-        "detection/parcel import (which invalidates the cache) so HTTP requests always "
-        "hit a warm cache instead of paying the cold computation cost."
+        "scans the whole detection/parcel dataset (index-only scans, ~10-20s); run this "
+        "after a detection/parcel import (which invalidates the cache) so HTTP requests "
+        "always hit a warm cache instead of paying the cold computation cost."
     )
 
     def handle(self, *args, **options):

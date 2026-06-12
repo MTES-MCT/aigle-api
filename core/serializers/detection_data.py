@@ -101,11 +101,17 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             ).all():
                 existing_tile_set_ids.append(existing_detection.tile_set.id)
 
-            tile_sets = TileSet.objects.filter(
-                date__gte=date_min,
-                date__lt=date_max,
-            ).exclude(
-                tile_set_type=TileSetType.INDICATIVE, id__in=existing_tile_set_ids
+            # Two independent exclusions: a single .exclude(A, B) would only skip
+            # tile sets matching BOTH (it excludes the conjunction), letting
+            # prescription create duplicate detections on tile sets that already
+            # have one, and copies on indicative tile sets.
+            tile_sets = (
+                TileSet.objects.filter(
+                    date__gte=date_min,
+                    date__lt=date_max,
+                )
+                .exclude(tile_set_type=TileSetType.INDICATIVE)
+                .exclude(id__in=existing_tile_set_ids)
             )
 
             if tile_sets:
@@ -133,7 +139,12 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
 
                 bulk_create_with_history(detections_to_insert, Detection)
 
-        # if object get unpresribed, we remove detections for the previous years
+        # if object gets unprescribed, we invalidate the detections of the previously
+        # prescribed years. Detections are NEVER hard-deleted from the database:
+        # invalidating keeps the rows (and their history) so the operation is
+        # reversible by a reviewer, whereas the previous .delete() here destroyed
+        # them — including pre-existing analysis detections in the window — and left
+        # their DetectionData rows orphaned (the FK cascade goes the other way).
         if (
             "detection_prescription_status" in validated_data
             and instance.detection_prescription_status
@@ -145,10 +156,27 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             date_max = instance.detection.tile_set.date
             date_min = date_max - relativedelta(years=prescription_duration_years)
 
-            instance.detection.detection_object.detections.filter(
-                tile_set__date__gte=date_min,
-                tile_set__date__lt=date_max,
-            ).delete()
+            detections_to_invalidate = (
+                instance.detection.detection_object.detections.filter(
+                    tile_set__date__gte=date_min,
+                    tile_set__date__lt=date_max,
+                ).select_related("detection_data")
+            )
+
+            for detection_to_invalidate in detections_to_invalidate:
+                detection_data = detection_to_invalidate.detection_data
+                if detection_data is None:
+                    continue
+
+                detection_data.detection_validation_status = (
+                    DetectionValidationStatus.INVALIDATED
+                )
+                # mirror of the prescribe branch above, which creates them PRESCRIBED
+                detection_data.detection_prescription_status = (
+                    DetectionPrescriptionStatus.NOT_PRESCRIBED
+                )
+                detection_data.user_last_update = request.user
+                detection_data.save()
 
         detection_control_status = (
             validated_data.get("detection_control_status")

@@ -105,4 +105,15 @@ class DetectionData(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
                     "detection_prescription_status",
                 ],
             ),
+            # Partial covering index for counts by change reason (e.g. SITADEL in
+            # DeployedDataService): the reason is set on ~2% of rows, so this stays
+            # tiny and avoids seq-scanning the whole table; `id` is included so the
+            # join to Detection.detection_data_id needs no heap access.
+            models.Index(
+                fields=["detection_validation_status_change_reason", "id"],
+                condition=models.Q(
+                    detection_validation_status_change_reason__isnull=False
+                ),
+                name="detectiondata_reason_idx",
+            ),
         ]
