@@ -2,7 +2,6 @@
 endpoints that previously ignored it (commune/department/region search, parcel
 list, custom-zone list, prior-letter generation, detection-data update)."""
 
-from django.urls import reverse
 from rest_framework import status
 
 from core.models.detection_data import (
