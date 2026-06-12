@@ -136,21 +136,6 @@ class GeoCustomZoneService:
             )
 
     @staticmethod
-    def delete_custom_zone(custom_zone: GeoCustomZone, user: "User") -> bool:
-        """Delete custom zone with business logic validation."""
-        # Validate user permissions
-        user_groups = custom_zone.user_groups.all()
-        user_group_ids = [str(ug.id) for ug in user_groups]
-
-        GeoCustomZoneService._validate_user_permissions(
-            user=user, user_group_ids=user_group_ids
-        )
-
-        with transaction.atomic():
-            custom_zone.delete()
-            return True
-
-    @staticmethod
     def get_zones_by_geometry(
         ne_lat: float,
         ne_lng: float,

@@ -206,33 +206,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
     def test_search_q_no_match_returns_empty(self):
         self.assertEqual(self._get_list({"q": "zzzznomatch"}), [])
 
-    def test_deleted_detections_excluded_from_count(self):
-        # A soft-deleted detection must not inflate the deployed-commune count.
-        extra_object = create_detection_object(
-            object_type=create_object_type(name="Pool"), commune=self.beziers
-        )
-        extra_detection = create_detection(
-            detection_object=extra_object, tile_set=self.tile_set
-        )
-        extra_detection.deleted = True
-        extra_detection.save()
-
-        herault = next(d for d in self._get_list() if d["name"] == "Hérault")
-        # Béziers' only detection is deleted -> still a single deployed commune.
-        self.assertEqual(herault["communesWithDetectionsCount"], 1)
-
-    def test_department_with_only_deleted_detections_excluded(self):
-        gard_object = create_detection_object(
-            object_type=create_object_type(name="Pool"), commune=self.nimes
-        )
-        gard_detection = create_detection(
-            detection_object=gard_object, tile_set=self.tile_set
-        )
-        gard_detection.deleted = True
-        gard_detection.save()
-
-        self.assertNotIn("Gard", {d["name"] for d in self._get_list()})
-
     def test_min_commune_detections_filter(self):
         # Béziers gets a single detection -> Hérault has two deployed communes.
         beziers_object = create_detection_object(
@@ -308,17 +281,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
                 detection_validation_status_change_reason=DetectionValidationStatusChangeReason.EXTERNAL_API
             ),
         )
-
-        # A soft-deleted SITADEL-updated detection -> must NOT be counted.
-        deleted_detection = create_detection(
-            detection_object=montpellier_object,
-            tile_set=self.tile_set,
-            detection_data=create_detection_data(
-                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
-            ),
-        )
-        deleted_detection.deleted = True
-        deleted_detection.save()
 
         herault = self._get_detail(self.herault.uuid)
         self.assertEqual(herault["sitadelUpdatedDetectionsCount"], 2)
@@ -408,34 +370,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         dates = [t["date"] for t in herault["tileSets"]]
         self.assertEqual(dates, sorted(dates, reverse=True))
 
-    def test_detail_soft_deleted_tile_set_excluded(self):
-        deleted_ts = create_tile_set(
-            name="Supprimée 2010", date=datetime.date(2010, 1, 1)
-        )
-        deleted_ts.geo_zones.add(self.herault)
-        deleted_ts.deleted = True
-        deleted_ts.save()
-
-        herault = self._get_detail(self.herault.uuid)
-        names = {t["name"] for t in herault["tileSets"]}
-        self.assertNotIn("Supprimée 2010", names)
-        self.assertIn("Hérault 2024", names)
-
-    def test_detail_soft_deleted_associations_excluded(self):
-        self.custom_zone.deleted = True
-        self.custom_zone.save()
-        self.group_department.deleted = True
-        self.group_department.save()
-        self.tile_set.deleted = True
-        self.tile_set.save()
-
-        herault = self._get_detail(self.herault.uuid)
-        self.assertEqual(herault["customZones"], [])
-        self.assertEqual(herault["tileSets"], [])
-        group_names = {g["name"] for g in herault["userGroups"]}
-        self.assertNotIn("DDTM Hérault", group_names)
-        self.assertIn("Collectivité Montpellier", group_names)
-
     def test_detail_associations_of_other_department_not_leaked(self):
         # Associations attached only to a Gard commune must not surface under Hérault.
         gard_group = create_user_group(name="DDTM Gard", geo_zones=[self.nimes])
@@ -450,36 +384,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
             "DDTM Gard", {group["name"] for group in herault["userGroups"]}
         )
         self.assertNotIn("Gard 2021", {t["name"] for t in herault["tileSets"]})
-
-    def test_detail_deleted_user_excluded_from_group(self):
-        self.member_2.deleted = True
-        self.member_2.save()
-
-        herault = self._get_detail(self.herault.uuid)
-        department_group = next(
-            group for group in herault["userGroups"] if group["name"] == "DDTM Hérault"
-        )
-        emails = {user["email"] for user in department_group["users"]}
-        self.assertEqual(emails, {"member1@test.com"})
-
-    def test_detail_soft_deleted_commune_excluded(self):
-        beziers_object = create_detection_object(
-            object_type=create_object_type(name="Pool"), commune=self.beziers
-        )
-        create_detection(detection_object=beziers_object, tile_set=self.tile_set)
-        # A tile set associated only to Béziers.
-        beziers_ts = create_tile_set(
-            name="Béziers 2030", date=datetime.date(2030, 1, 1)
-        )
-        beziers_ts.geo_zones.add(self.beziers)
-        self.beziers.deleted = True
-        self.beziers.save()
-
-        herault = self._get_detail(self.herault.uuid)
-        # Still deployed via Montpellier; Béziers (and its tile set) fully excluded.
-        self.assertEqual([c["name"] for c in herault["communes"]], ["Montpellier"])
-        self.assertEqual(herault["communesWithDetectionsCount"], 1)
-        self.assertNotIn("Béziers 2030", {t["name"] for t in herault["tileSets"]})
 
     def test_detail_respects_min_commune_detections(self):
         beziers_object = create_detection_object(

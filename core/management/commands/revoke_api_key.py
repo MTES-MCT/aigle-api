@@ -20,17 +20,21 @@ class Command(BaseCommand):
         name = options["name"]
 
         try:
-            # Find the API key by name
-            api_key = APIKey.objects.get(name=name)
+            # Find the (still active) API key by name: revoked keys are kept in the
+            # database for audit, so the name lookup must skip them — also allows
+            # recreating a key under the same name after a revocation.
+            api_key = APIKey.objects.get(name=name, revoked=False)
 
-            # Delete the API key
-            api_key.delete()
+            # Revoke instead of delete: a revoked key fails authentication, and the
+            # row is kept as a record of the key having existed.
+            api_key.revoked = True
+            api_key.save()
 
             log_event(f"API Key revoked successfully - Name: {name}")
 
         except APIKey.DoesNotExist:
-            # List all available API keys
-            api_keys = APIKey.objects.all()
+            # List all active (non-revoked) API keys
+            api_keys = APIKey.objects.filter(revoked=False)
             if api_keys.exists():
                 available_keys = ", ".join(
                     [

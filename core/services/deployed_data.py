@@ -2,7 +2,7 @@ import os
 from collections import defaultdict
 from typing import List, Optional
 
-from django.db.models import Count, Q
+from django.db.models import Count
 
 from core.models.detection import Detection
 from core.models.detection_data import DetectionValidationStatusChangeReason
@@ -16,9 +16,18 @@ from core.utils.cache import get_or_compute, safe_cache_set
 from core.utils.string import normalize
 
 # This endpoint aggregates over the whole detection/parcel dataset (tens of millions
-# of rows): two full-table GROUP BY scans (Detection x DetectionObject by commune, and
-# Parcel by commune) that no index can avoid, so a cold computation takes ~1-2 min. The
-# result is therefore cached, and the cache must actually stay warm in normal operation.
+# of rows): two full-dataset GROUP BY scans (Detection x DetectionObject by commune,
+# and Parcel by commune). Covering indexes let PostgreSQL answer them with index-only
+# scans instead of multi-GB heap scans — a cold computation went from ~100s to
+# ~10-20s — but that is still far too slow for a request/response cycle, so the
+# result is cached and the cache must actually stay warm in normal operation.
+#
+# Two things the queries below deliberately do to stay on index-only scans (each
+# would silently fall back to multi-GB heap scans if undone):
+# - they COUNT() the indexed column, never `id` (a column absent from the index
+#   forces heap fetches);
+# - they do NOT filter on deleted=False: nothing in the app ever soft-deletes these
+#   rows, and `deleted` is in no index, so the filter would only force heap access.
 #
 # Crucially the key is NOT folded with `get_count_cache_version()`. That counter is
 # bumped on every single Detection/DetectionData/DetectionObject/Parcel write (see
@@ -67,24 +76,11 @@ class DeployedDataService:
             if needle and needle not in normalize(department["name"]):
                 continue
 
-            if min_commune_detections > 0:
-                communes = [
-                    commune
-                    for commune in department["communes"]
-                    if commune["detections_count"] >= min_commune_detections
-                ]
-                # A department with no commune above the threshold is no longer
-                # "deployed" at that threshold, so drop it entirely.
-                if not communes:
-                    continue
-                # New dict/list — never mutate the shared cached structure.
-                department = {
-                    **department,
-                    "communes": communes,
-                    "communes_with_detections_count": len(communes),
-                }
-
-            result.append(department)
+            department = DeployedDataService._apply_min_commune_detections(
+                department, min_commune_detections
+            )
+            if department is not None:
+                result.append(department)
 
         return result
 
@@ -114,17 +110,54 @@ class DeployedDataService:
         Returns None when the department is unknown or no longer deployed at the given
         threshold (so the view can answer 404). The threshold mirrors the list so the
         detail's commune count/list stays consistent with the row that was clicked.
+
+        The department is located FIRST and the threshold applied to it alone:
+        applying the threshold to the whole dataset before searching (the previous
+        implementation) copied and filtered every department's commune list just to
+        serve one of them.
         """
-        return next(
+        department = next(
             (
                 department
-                for department in DeployedDataService.get_departments_deployed_data(
-                    min_commune_detections=min_commune_detections
-                )
+                for department in DeployedDataService._get_all_departments_cached()
                 if str(department["uuid"]) == str(uuid)
             ),
             None,
         )
+        if department is None:
+            return None
+
+        return DeployedDataService._apply_min_commune_detections(
+            department, min_commune_detections
+        )
+
+    @staticmethod
+    def _apply_min_commune_detections(
+        department: dict, min_commune_detections: int
+    ) -> Optional[dict]:
+        """Apply the per-commune detection threshold to one cached department dict.
+
+        Returns the department untouched when no threshold is set, a filtered copy
+        when some communes qualify (the cached structure is shared and must never be
+        mutated), or None when no commune qualifies — the department is no longer
+        "deployed" at that threshold.
+        """
+        if min_commune_detections <= 0:
+            return department
+
+        communes = [
+            commune
+            for commune in department["communes"]
+            if commune["detections_count"] >= min_commune_detections
+        ]
+        if not communes:
+            return None
+
+        return {
+            **department,
+            "communes": communes,
+            "communes_with_detections_count": len(communes),
+        }
 
     @staticmethod
     def _summarize_department(department: dict) -> dict:
@@ -158,7 +191,8 @@ class DeployedDataService:
         # v2: tile sets derived from the TileSet.geo_zones association (was Detection.tile_set).
         # v3: key no longer folds in the count cache version.
         # v4: per-department payload gained sitadel_updated_detections_count.
-        return "aigle:deployed_data:departments:v4"
+        # v5: deleted=False filters removed from the computation (never set in the app).
+        return "aigle:deployed_data:departments:v5"
 
     @staticmethod
     def _get_all_departments_cached() -> List[dict]:
@@ -188,48 +222,46 @@ class DeployedDataService:
         #    per-commune "Détections" figure and tells us which communes (hence which
         #    departments) are deployed. No DISTINCT is needed: each Detection belongs to
         #    exactly one DetectionObject -> one commune.
-        #    Soft-deleted communes are intentionally NOT filtered here (which would add
-        #    an extra join to this heavy aggregate): they are excluded downstream — step
-        #    2 only keeps deleted=False communes, and the commune->department map (step
-        #    3) omits them, so their counts never reach the output.
-        #    In the same scan we also count detections whose validation status was last
-        #    changed by the SITADEL import (DetectionData.detection_validation_status_
-        #    change_reason == SITADEL). Detection<->DetectionData is 1-to-1, so the LEFT
-        #    JOIN this conditional Count introduces never multiplies rows — folding it in
-        #    here is far cheaper than a second full-table scan.
+        #    Count("detection_object") (== Count("id"), the FK is non-null) keeps both
+        #    sides of the join answerable from indexes alone (index-only scans on the
+        #    detection_object FK index and detobj_id_commune_idx).
         detections_by_commune = defaultdict(int)
-        sitadel_updated_by_commune = defaultdict(int)
         for row in (
-            Detection.objects.filter(
-                deleted=False,
-                detection_object__deleted=False,
-                detection_object__commune_id__isnull=False,
-            )
+            Detection.objects.filter(detection_object__commune_id__isnull=False)
             .values("detection_object__commune_id")
-            .annotate(
-                detections_count=Count("id"),
-                sitadel_updated_count=Count(
-                    "id",
-                    filter=Q(
-                        detection_data__detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
-                    ),
-                ),
-            )
+            .annotate(detections_count=Count("detection_object"))
         ):
-            commune_id = row["detection_object__commune_id"]
-            detections_by_commune[commune_id] += row["detections_count"]
-            sitadel_updated_by_commune[commune_id] += row["sitadel_updated_count"]
+            detections_by_commune[row["detection_object__commune_id"]] += row[
+                "detections_count"
+            ]
 
         if not detections_by_commune:
             return []
 
-        # 2. Metadata for those communes (skipping soft-deleted ones). This also tells
-        #    us which departments are deployed.
+        # 1b. Detections whose validation status was last changed by the SITADEL import,
+        #     per commune. Computed as its OWN query rather than a conditional Count in
+        #     step 1: only ~2% of detection_data rows carry a change reason, so this is
+        #     a small index-driven query (detectiondata_reason_idx), whereas folding it
+        #     into step 1 LEFT JOINed the whole multi-GB detection_data table into the
+        #     full-dataset aggregate (and its temp spill dominated the runtime).
+        sitadel_updated_by_commune = defaultdict(int)
+        for row in (
+            Detection.objects.filter(
+                detection_object__commune_id__isnull=False,
+                detection_data__detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL,
+            )
+            .values("detection_object__commune_id")
+            .annotate(count=Count("detection_object"))
+        ):
+            sitadel_updated_by_commune[row["detection_object__commune_id"]] += row[
+                "count"
+            ]
+
+        # 2. Metadata for those communes. This also tells us which departments are
+        #    deployed.
         communes_by_department = defaultdict(list)
         for commune in (
-            GeoCommune.objects.filter(
-                deleted=False, id__in=list(detections_by_commune.keys())
-            )
+            GeoCommune.objects.filter(id__in=list(detections_by_commune.keys()))
             .values("id", "uuid", "name", "department_id")
             .order_by("name")
         ):
@@ -244,7 +276,7 @@ class DeployedDataService:
         department_ids = list(communes_by_department.keys())
 
         departments = list(
-            GeoDepartment.objects.filter(deleted=False, id__in=department_ids)
+            GeoDepartment.objects.filter(id__in=department_ids)
             .values("id", "uuid", "name")
             .order_by("name")
         )
@@ -254,14 +286,14 @@ class DeployedDataService:
 
         department_ids = [department["id"] for department in departments]
 
-        # 3. All (non-deleted) communes of the deployed departments, mapped to their
-        #    department. Reused both for the parcel count and for resolving which
-        #    department an association's geo_zone belongs to. We take ALL communes (not
-        #    only those with detections) since associations may target any commune.
+        # 3. All communes of the deployed departments, mapped to their department.
+        #    Reused both for the parcel count and for resolving which department an
+        #    association's geo_zone belongs to. We take ALL communes (not only those
+        #    with detections) since associations may target any commune.
         commune_to_department = {
             row["id"]: row["department_id"]
             for row in GeoCommune.objects.filter(
-                deleted=False, department_id__in=department_ids
+                department_id__in=department_ids
             ).values("id", "department_id")
         }
 
@@ -273,20 +305,21 @@ class DeployedDataService:
             if department_id is not None:
                 sitadel_updated_by_department[department_id] += count
 
-        # 4. Parcel count per department. Grouping by parcel.commune_id uses the
-        #    commune index and lets us aggregate to the department in Python, which is
-        #    ~2.5x faster than joining 16.7M parcels to the commune table.
+        # 4. Parcel count per department. The WHOLE parcel table is grouped by commune
+        #    (a few thousand rows out) and mapped to departments in Python: no join to
+        #    the commune table, and no `commune_id IN (...)` filter — shipping tens of
+        #    thousands of ids bloats the statement for no gain since communes outside
+        #    the deployed departments are simply skipped by the map lookup below.
+        #    Count("commune_id") (== row count, the FK is non-null) makes this an
+        #    index-only scan of the commune FK index instead of a ~7GB heap scan
+        #    (measured 46s -> ~4s).
         parcel_count_by_department = defaultdict(int)
-        for row in (
-            Parcel.objects.filter(
-                deleted=False, commune_id__in=list(commune_to_department.keys())
-            )
-            .values("commune_id")
-            .annotate(count=Count("id"))
+        for row in Parcel.objects.values("commune_id").annotate(
+            count=Count("commune_id")
         ):
-            parcel_count_by_department[commune_to_department[row["commune_id"]]] += row[
-                "count"
-            ]
+            department_id = commune_to_department.get(row["commune_id"])
+            if department_id is not None:
+                parcel_count_by_department[department_id] += row["count"]
 
         # 5. Map every geo_zone id (each department and ALL its communes) back to its
         #    department. A department's pk equals its GeoZone id (multi-table
@@ -298,7 +331,7 @@ class DeployedDataService:
         all_zone_ids = list(department_ids) + list(commune_to_department.keys())
 
         user_groups_by_department = DeployedDataService._group_related_by_department(
-            UserGroup.objects.filter(deleted=False, geo_zones__id__in=all_zone_ids)
+            UserGroup.objects.filter(geo_zones__id__in=all_zone_ids)
             .values("uuid", "name", "geo_zones__id")
             .distinct(),
             zone_to_department,
@@ -313,9 +346,7 @@ class DeployedDataService:
         }
         users_by_user_group = defaultdict(list)
         for row in (
-            UserUserGroup.objects.filter(
-                user_group__uuid__in=user_group_uuids, user__deleted=False
-            )
+            UserUserGroup.objects.filter(user_group__uuid__in=user_group_uuids)
             .values("user_group__uuid", "user__uuid", "user__email")
             .order_by("user__email")
         ):
@@ -324,7 +355,7 @@ class DeployedDataService:
             )
 
         custom_zones_by_department = DeployedDataService._group_related_by_department(
-            GeoCustomZone.objects.filter(deleted=False, geo_zones__id__in=all_zone_ids)
+            GeoCustomZone.objects.filter(geo_zones__id__in=all_zone_ids)
             .values(
                 "uuid",
                 "name",
@@ -349,7 +380,7 @@ class DeployedDataService:
         # zones above. See the class docstring for why this is preferred over
         # Detection.tile_set.
         tile_sets_by_department = DeployedDataService._group_related_by_department(
-            TileSet.objects.filter(deleted=False, geo_zones__id__in=all_zone_ids)
+            TileSet.objects.filter(geo_zones__id__in=all_zone_ids)
             .values("uuid", "name", "date", "geo_zones__id")
             .distinct(),
             zone_to_department,
