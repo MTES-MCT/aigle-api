@@ -21,6 +21,20 @@ class GeoCustomZonePermission(
         self.user = user
         self.scoped_user_group = scoped_user_group
 
+    @classmethod
+    def from_request(
+        cls,
+        request,
+        initial_queryset: Optional[QuerySet[GeoCustomZone]] = None,
+    ) -> "GeoCustomZonePermission":
+        from core.permissions.scope import resolve_scoped_user_group
+
+        return cls(
+            user=request.user,
+            initial_queryset=initial_queryset,
+            scoped_user_group=resolve_scoped_user_group(request),
+        )
+
     def _is_unrestricted(self) -> bool:
         return (
             self.user.user_role == UserRole.SUPER_ADMIN

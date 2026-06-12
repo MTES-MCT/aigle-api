@@ -34,6 +34,7 @@ from core.services.detection_process import DetectionProcessService
 from core.services.prescription import PrescriptionService
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
+from core.utils.cache import invalidate_count_caches
 from simple_history.utils import bulk_create_with_history
 
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
@@ -230,9 +231,9 @@ class Command(BaseCommand):
         log_event(f"Starting importing detections for batch: {self.batch_id}")
 
         self.tile_set = TileSet.objects.get(id=tile_set_id)
-        self.tile_set.last_import_started_at = self.start_time
-        self.tile_set.last_import_ended_at = None
-        self.tile_set.save()
+        TileSet.objects.filter(id=self.tile_set.id).update(
+            last_import_started_at=self.start_time, last_import_ended_at=None
+        )
 
         log_event(f"TileSet found: {self.tile_set.name}")
 
@@ -259,12 +260,17 @@ class Command(BaseCommand):
             self.cursor.close()
 
         self.insert_detections(force=True)
-        self.tile_set.last_import_ended_at = datetime.now()
-        self.tile_set.save()
+        TileSet.objects.filter(id=self.tile_set.id).update(
+            last_import_ended_at=datetime.now()
+        )
 
         DetectionProcessService.merge_double_detections(tile_set_id=self.tile_set.id)
 
         self.associate_detections_to_custom_zones()
+
+        # associate_detections_to_custom_zones writes the geo_custom_zones M2M via raw
+        # SQL (bypasses signals), so invalidate counts once for the whole import.
+        invalidate_count_caches()
 
         log_event(f"Detections import finished for batch: {self.batch_id}")
 
@@ -500,6 +506,10 @@ class Command(BaseCommand):
         bulk_create_with_history(self.detection_objects_to_insert, DetectionObject)
         bulk_create_with_history(self.detection_datas_to_insert, DetectionData)
         bulk_create_with_history(self.detections_to_insert, Detection)
+
+        # bulk_create bypasses post_save, so the count-cache signals never fire for
+        # imported rows — invalidate explicitly so list/parcel counts stay correct.
+        invalidate_count_caches()
 
         detection_objects = [
             detection.detection_object for detection in self.detections_to_insert

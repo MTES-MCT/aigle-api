@@ -11,6 +11,7 @@ from django.contrib.gis.db.models.functions import Area, Intersection
 from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from core.models.geo_epci import GeoEpci
+from core.utils.cache import invalidate_user_geo_caches
 from core.utils.logs_helpers import log_command_event
 
 PERCENTAGE_COMMUNE_INCLUDED_THRESHOLD = 0.6
@@ -115,3 +116,6 @@ class Command(BaseCommand):
             log_event(f"EPCIs inserted: {index+1}/{self.total}")
 
         self.cursor.close()
+
+        invalidate_user_geo_caches()
+        log_event("Invalidated user geo caches after EPCI import")

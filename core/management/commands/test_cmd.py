@@ -1,11 +1,9 @@
-import json
 from time import sleep
-from django.core.management.base import BaseCommand
+
+from django.core.management.base import BaseCommand, CommandError
 
 from core.models.user import User
 from core.utils.logs_helpers import log_command_event
-
-from django.db import connection
 
 
 def log_event(info: str):
@@ -13,58 +11,35 @@ def log_event(info: str):
 
 
 class Command(BaseCommand):
-    help = "Command just for testing purpose"
+    help = "No-op command used to verify the admin run-command flow end-to-end."
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--test-str-required", type=str, required=True, default="default value"
-        )
-        parser.add_argument("--test-str-not-required", type=str, required=False)
-        parser.add_argument("--test-bool-required", type=bool, required=True)
-        parser.add_argument("--test-bool-not-required", type=bool, required=False)
-        parser.add_argument("--test-int-required", type=int, required=True)
-        parser.add_argument("--test-int-not-required", type=int, required=False)
-        parser.add_argument("--test-array", action="append", required=False)
+        parser.add_argument("--sleep-seconds", type=int, required=False, default=5)
+        parser.add_argument("--fail", action="store_true", required=False)
+        parser.add_argument("--crash", action="store_true", required=False)
+        parser.add_argument("--note", type=str, required=False)
 
     def handle(self, *args, **options):
+        sleep_seconds = options["sleep_seconds"]
+        should_fail = options["fail"]
+        should_crash = options["crash"]
+        note = options["note"]
+
         log_event("started")
+        log_event(
+            f"options: sleep_seconds={sleep_seconds}, fail={should_fail}, crash={should_crash}, note={note!r}"
+        )
 
-        test_str_required = options["test_str_required"]
-        test_str_not_required = options["test_str_not_required"]
-        test_bool_required = options["test_bool_required"]
-        test_bool_not_required = options["test_bool_not_required"]
-        test_int_required = options["test_int_required"]
-        test_int_not_required = options["test_int_not_required"]
-        test_array = options["test_array"]
+        user_count = User.objects.count()
+        log_event(f"db reachable: {user_count} users")
 
-        log_event("writing args in temp schema")
+        log_event(f"sleeping for {sleep_seconds}s")
+        sleep(sleep_seconds)
+        log_event("woke up")
 
-        with connection.cursor() as cursor:
-            test_table = "test_cmd"
-            cursor.execute(
-                f"CREATE TABLE IF NOT EXISTS temp.{test_table} (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW(), args JSONB);"
-            )
-            cursor.execute(
-                f"INSERT INTO temp.{test_table} (args) VALUES ('{json.dumps({
-                    "test_str_required": test_str_required,
-                    "test_str_not_required": test_str_not_required,
-                    "test_bool_required": test_bool_required,
-                    "test_bool_not_required": test_bool_not_required,
-                    "test_int_required": test_int_required,
-                    "test_int_not_required": test_int_not_required,
-                    "test_array": test_array,
-                })}');"
-            )
+        if should_fail:
+            raise CommandError("test_cmd failed on purpose (--fail was set)")
+        if should_crash:
+            raise RuntimeError("test_cmd crashed on purpose (--crash was set)")
 
-        user = User.objects.first()
-
-        log_event(f"FIRST USER: {user.email}")
-
-        waiting_sec = 120
-        log_event(f"waiting for {waiting_sec} seconds")
-        sleep(waiting_sec)
-        log_event(f"waited for {waiting_sec} seconds")
-
-        log_event("args retrieved")
-
-        log_event("test_cmd.txt file created and cmd finished")
+        log_event("done")

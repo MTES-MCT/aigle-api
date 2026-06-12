@@ -3,6 +3,7 @@ from django.db.models import QuerySet
 
 from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
 from core.models.tile_set import TileSetType, TileSetStatus
+from core.models.user_group import UserGroup
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.permissions.user import UserPermission
 from core.permissions.tile_set import TileSetPermission
@@ -15,8 +16,9 @@ from core.utils.string import to_array, to_bool, to_enum_array
 class ParcelFilterService:
     """Service for handling complex parcel filtering logic."""
 
-    def __init__(self, user):
+    def __init__(self, user, scoped_user_group: Optional[UserGroup] = None):
         self.user = user
+        self.scoped_user_group = scoped_user_group
 
     def apply_filters(
         self,
@@ -27,7 +29,9 @@ class ParcelFilterService:
     ) -> QuerySet:
         """Apply complex filtering logic to parcel queryset."""
         # Get collectivity filter based on user permissions
-        collectivity_filter = UserPermission(user=self.user).get_collectivity_filter(
+        collectivity_filter = UserPermission(
+            user=self.user, scoped_user_group=self.scoped_user_group
+        ).get_collectivity_filter(
             communes_uuids=to_array(filter_params.get("communesUuids")),
             departments_uuids=to_array(filter_params.get("departmentsUuids")),
             regions_uuids=to_array(filter_params.get("regionsUuids")),
@@ -49,6 +53,7 @@ class ParcelFilterService:
         if filter_has_detections:
             detection_tilesets_filter = TileSetPermission(
                 user=self.user,
+                scoped_user_group=self.scoped_user_group,
             ).get_last_detections_filters_parcels(
                 filter_tile_set_type_in=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
                 filter_tile_set_status_in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN],
@@ -63,7 +68,8 @@ class ParcelFilterService:
         if with_details:
             filter_args["with_zone_names"] = True
             filter_args["filter_geo_custom_zones"] = GeoCustomZonePermission(
-                user=self.user
+                user=self.user,
+                scoped_user_group=self.scoped_user_group,
             ).get_geo_custom_zones_q()
             filter_args["with_detections_count"] = True
             filter_args["with_detections_objects_types"] = True

@@ -220,6 +220,14 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
+# Cache Configuration (Redis DB 1, separate from Celery on DB 0)
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("CACHE_REDIS_URL", "redis://localhost:6379/1"),
+    }
+}
+
 # Celery Configuration
 CELERY_BROKER_URL = "redis://localhost:6379/0"
 CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
@@ -237,7 +245,6 @@ CELERY_TASK_RESULT_EXPIRES = 3600  # Keep task results for 1 hour
 # Task routing for sequential execution
 CELERY_TASK_ROUTES = {
     "core.utils.tasks.run_management_command": {"queue": "sequential_commands"},
-    "core.utils.tasks.run_custom_command": {"queue": "sequential_commands"},
 }
 
 # Worker configuration for sequential processing

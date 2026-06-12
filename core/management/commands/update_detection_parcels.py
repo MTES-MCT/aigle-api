@@ -4,6 +4,8 @@ from core.models.parcel import Parcel
 from django.contrib.gis.geos import GEOSGeometry
 from django.db import transaction
 
+from core.utils.cache import invalidate_count_caches
+
 BATCH_SIZE_DEFAULT = 1000
 
 
@@ -78,6 +80,8 @@ class Command(BaseCommand):
                     DetectionObject.objects.bulk_update(
                         updated_detection_objects, ["parcel_id"]
                     )
+                    # bulk_update bypasses post_save; invalidate counts explicitly.
+                    transaction.on_commit(invalidate_count_caches)
                 updated_count += len(updated_detection_objects)
 
             processed_count += len(batch_ids)

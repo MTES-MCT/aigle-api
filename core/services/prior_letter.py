@@ -1,14 +1,17 @@
 import os
 import tempfile
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from django.http import HttpResponse, JsonResponse
 from django.conf import settings
+from django.db import transaction
 
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus
 from core.models.detection_object import DetectionObject
+from core.models.user_group import UserGroup
 from core.utils.analytic_log import create_log
+from core.utils.cache import invalidate_count_caches
 from core.utils.odt_processor import ODTTemplateProcessor
 from core.permissions.user import UserPermission
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
@@ -20,8 +23,9 @@ class PriorLetterService:
 
     TEMPLATE_PATH = os.path.join(settings.MEDIA_ROOT, "templates", "prior_letter.odt")
 
-    def __init__(self, user):
+    def __init__(self, user, scoped_user_group: Optional[UserGroup] = None):
         self.user = user
+        self.scoped_user_group = scoped_user_group
 
     def generate_document(self, detection_object_uuid: str) -> HttpResponse:
         """Generate prior letter document for detection object."""
@@ -44,7 +48,9 @@ class PriorLetterService:
     ) -> DetectionObject:
         """Retrieve detection object with permission validation."""
         geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
-            GeoCustomZonePermission(user=self.user).get_detection_object_prefetch()
+            GeoCustomZonePermission(
+                user=self.user, scoped_user_group=self.scoped_user_group
+            ).get_detection_object_prefetch()
         )
 
         queryset = DetectionObject.objects.prefetch_related(
@@ -58,7 +64,9 @@ class PriorLetterService:
             raise PermissionError("Detection object not found or access denied")
 
         # Check edit permissions
-        UserPermission(user=self.user).can_edit(
+        UserPermission(
+            user=self.user, scoped_user_group=self.scoped_user_group
+        ).can_edit(
             geometry=detection_object.detections.first().geometry, raise_exception=True
         )
 
@@ -83,6 +91,8 @@ class PriorLetterService:
             DetectionData.objects.bulk_update(
                 detections_to_update, ["detection_control_status", "user_last_update"]
             )
+            # bulk_update bypasses post_save; invalidate the count cache explicitly.
+            transaction.on_commit(invalidate_count_caches)
 
     def _create_analytics_log(
         self, detection_object: DetectionObject, detection_object_uuid: str

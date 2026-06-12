@@ -74,9 +74,9 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
     )
 
     def update(self, instance: DetectionData, validated_data):
-        user = self.context["request"].user
+        request = self.context["request"]
 
-        UserPermission(user=user).can_edit(
+        UserPermission.from_request(request).can_edit(
             geometry=instance.detection.geometry, raise_exception=True
         )
 
@@ -200,7 +200,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
         if detection_control_status:
             instance.set_detection_control_status(detection_control_status)
 
-        instance.user_last_update = user
+        instance.user_last_update = request.user
         instance.save()
 
         return instance

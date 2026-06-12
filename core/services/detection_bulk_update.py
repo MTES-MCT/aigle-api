@@ -5,14 +5,16 @@ from django.db import transaction
 from core.models.detection import Detection
 from core.models.object_type import ObjectType
 from core.permissions.user import UserPermission
+from core.utils.cache import invalidate_count_caches
 from django.core.exceptions import BadRequest
 
 
 class DetectionBulkUpdateService:
     """Service for handling bulk detection updates."""
 
-    def __init__(self, user):
+    def __init__(self, user, scoped_user_group=None):
         self.user = user
+        self.scoped_user_group = scoped_user_group
 
     @transaction.atomic
     def update_multiple_detections(
@@ -62,9 +64,9 @@ class DetectionBulkUpdateService:
     def _validate_edit_permissions(self, detections: List[Detection]) -> None:
         """Validate user has permission to edit all detections."""
         geometries = [detection.geometry for detection in detections]
-        UserPermission(user=self.user).can_edit(
-            geometry=MultiPolygon(geometries), raise_exception=True
-        )
+        UserPermission(
+            user=self.user, scoped_user_group=self.scoped_user_group
+        ).can_edit(geometry=MultiPolygon(geometries), raise_exception=True)
 
     def _validate_and_get_object_type(
         self, object_type_uuid: Optional[str]
@@ -131,3 +133,9 @@ class DetectionBulkUpdateService:
             bulk_update_with_history(
                 detection_objects_to_update, DetectionObject, ["object_type"]
             )
+
+        if detection_datas_to_update or detection_objects_to_update:
+            # bulk_update bypasses post_save; list/parcel counts are filtered by
+            # these fields, so invalidate explicitly. on_commit because this runs
+            # inside the service's @transaction.atomic.
+            transaction.on_commit(invalidate_count_caches)

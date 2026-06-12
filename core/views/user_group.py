@@ -1,6 +1,8 @@
 from typing import Any, Dict, List, Tuple
 
 from django_filters import CharFilter, FilterSet
+
+from core.utils.filters import ChoiceInFilter
 from rest_framework.decorators import action
 
 from common.views.base import BaseViewSetMixin
@@ -55,10 +57,13 @@ USER_GROUP_TYPE_REVERSE = {
 
 class UserGroupFilter(FilterSet):
     q = CharFilter(method="search")
+    userGroupTypes = ChoiceInFilter(
+        field_name="user_group_type", choices=UserGroupType.choices
+    )
 
     class Meta:
         model = UserGroup
-        fields = ["q"]
+        fields = ["q", "userGroupTypes"]
 
     def search(self, queryset, name, value):
         return queryset.filter(name__icontains=value)

@@ -28,55 +28,98 @@ jobs:
         env:
           SCW_HOST: ${{ secrets.SCW_HOST }}
           SCW_USER: ${{ secrets.SCW_USER }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST << 'EOF'
+          ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST BRANCH="$BRANCH" bash -s << 'EOF'
             set -e
 
-            cd /home/ubuntu/aigle-api || exit 1
+            cd /home/ubuntu/aigle-api
 
-            # Stop workers before updating code to avoid running tasks with stale code
-            sudo systemctl stop celery || true
+            # Capture current HEAD before pulling so we can diff against the new ref
+            OLD_SHA=$(git rev-parse HEAD)
+
+            # Fetch but don't apply yet — we need to know what changed before deciding
+            # whether to stop the celery worker.
+            git fetch origin "$BRANCH"
+            NEW_SHA=$(git rev-parse "origin/$BRANCH")
+
+            # Restart the worker only when celery *infrastructure* changes (the task
+            # wrapper, the celery app, settings, the systemd unit, or installed
+            # packages). Management command edits do not trigger a restart — a
+            # task already in flight keeps using the code it started with, and a
+            # new task may use the previous version of the command until the next
+            # celery-infra deploy. We accept that.
+            CELERY_RESTART=0
+            if [ "$OLD_SHA" != "$NEW_SHA" ]; then
+              if git diff --name-only "$OLD_SHA" "$NEW_SHA" -- \
+                  core/utils/tasks.py \
+                  aigle/celery.py \
+                  aigle/settings/ \
+                  requirements.txt \
+                  services/celery.service \
+                  | grep -q .; then
+                CELERY_RESTART=1
+              fi
+            else
+              # Same SHA (re-run of the workflow). No code change, no restart needed.
+              echo "OLD_SHA == NEW_SHA, nothing new to deploy on the API side."
+            fi
+
+            # Stop gunicorn always — restart is cheap and prevents serving mixed code.
             sudo systemctl stop gunicorn_aigle || true
 
-            # Fetch latest code
-            git fetch origin ${{ github.event.workflow_run.head_branch }} || exit 1
-            git reset --hard origin/${{ github.event.workflow_run.head_branch }} || exit 1
+            # Stop celery only if its code or config changed. With KillSignal=SIGTERM +
+            # TimeoutStopSec=3600 on the unit, this waits up to 1h for the current
+            # task to finish before SIGKILL.
+            if [ "$CELERY_RESTART" = "1" ]; then
+              echo "Celery-affecting files changed; stopping worker (graceful, up to 1h)."
+              sudo systemctl stop celery || true
+            else
+              echo "No celery-affecting changes; leaving worker running on existing code."
+            fi
+
+            # Apply code
+            git reset --hard "origin/$BRANCH"
 
             # Export env vars
             set -a
-            source .env || exit 1
+            source .env
             set +a
 
-            # Install packages
-            xargs -a Aptfile sudo apt install -y || exit 1
+            # Install OS packages
+            xargs -a Aptfile sudo apt install -y
 
-            # Start Redis
-            sudo systemctl start redis-server || exit 1
-            sudo systemctl enable redis-server || exit 1
+            # Start Redis (idempotent)
+            sudo systemctl start redis-server
+            sudo systemctl enable redis-server
 
-            # Set up services
-            sudo cp services/celery.service /etc/systemd/system/ || exit 1
-            sudo cp services/gunicorn_aigle.service /etc/systemd/system/ || exit 1
-            sudo systemctl daemon-reload || exit 1
-            sudo systemctl enable celery || exit 1
-            sudo systemctl enable gunicorn_aigle || exit 1
+            # Update systemd unit files
+            sudo cp services/celery.service /etc/systemd/system/
+            sudo cp services/gunicorn_aigle.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable celery
+            sudo systemctl enable gunicorn_aigle
 
-            # Set up emails
-            sudo ufw allow $EMAIL_PORT || exit 1
+            # Email port
+            sudo ufw allow "$EMAIL_PORT"
 
-            # Activate Python env and apply migrations
-            source venv/bin/activate || exit 1
-            python -m pip install -r requirements.txt || exit 1
-            python manage.py migrate || exit 1
+            # Python deps + migrations (additive migrations only — see CLAUDE.md)
+            source venv/bin/activate
+            python -m pip install -r requirements.txt
+            python manage.py migrate
 
-            # Gracefully reload services
-            sudo systemctl restart celery || exit 1
-            sudo systemctl restart gunicorn_aigle || exit 1
+            # Bring services back up
+            if [ "$CELERY_RESTART" = "1" ]; then
+              sudo systemctl restart celery
+            else
+              # Make sure the worker is running (in case it crashed between deploys).
+              sudo systemctl start celery
+            fi
+            sudo systemctl restart gunicorn_aigle
 
-            echo "Deployment completed successfully!"
+            echo "Deployment completed successfully! (celery_restart=$CELERY_RESTART)"
           EOF
 
-          # Check SSH command result
           if [ $? -ne 0 ]; then
             echo "Deployment failed!"
             exit 1

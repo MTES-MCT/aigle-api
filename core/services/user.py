@@ -10,6 +10,7 @@ from core.models.analytic_log import AnalyticLogType
 from core.models.user import UserRole
 from core.models.user_group import UserGroup, UserUserGroup
 from core.utils.analytic_log import create_log
+from core.utils.cache import invalidate_caches_for_user
 
 if TYPE_CHECKING:
     from core.models.user import User
@@ -55,6 +56,7 @@ class UserService:
         user_role: UserRole,
         requesting_user: "User",
         user_user_groups: Optional[List[Dict[str, Any]]] = None,
+        is_staff: bool = False,
     ) -> "User":
         """Create a new user with business logic validation."""
         # Check email uniqueness
@@ -73,6 +75,7 @@ class UserService:
             email=email,
             password=password,
             user_role=user_role,
+            is_staff=is_staff,
         )
 
         with transaction.atomic():
@@ -225,6 +228,12 @@ class UserService:
             )
 
         UserUserGroup.objects.bulk_create(new_user_user_groups)
+
+        # bulk_create / bulk_update do not emit post_save, so the membership
+        # signals never fire for added/updated rows. Invalidate explicitly,
+        # otherwise the user keeps a stale geo-union / tileset-filter cache.
+        user_id = user.id
+        transaction.on_commit(lambda: invalidate_caches_for_user(user_id))
 
     @staticmethod
     def _get_user_group_centroid(user_groups: List[UserGroup]) -> Optional[Point]:

@@ -91,10 +91,6 @@ def parse_parameters(
 
     for parameter_name, param_config in command_parameters_map.items():
         parameter_value = parsed_parameters.get(parameter_name)
-        if not param_config:
-            raise BadRequest(
-                f"Command with name '{command_name}' does not have parameter '{parameter_name}'"
-            )
 
         if param_config["required"] and parameter_value is None:
             raise BadRequest(

@@ -1,4 +1,3 @@
-import json
 import logging
 
 from rest_framework.request import Request
@@ -20,18 +19,44 @@ _ACTION_NAME_TO_ENUM = {
 }
 
 
+REDACTED_PLACEHOLDER = "[REDACTED]"
+
+# Scalars JSON can represent directly; any other leaf is stored as its str().
+_JSON_SCALARS = (str, int, float, bool)
+
+
+def _is_sensitive_key(key) -> bool:
+    """A field is sensitive if it looks like a password, whatever the naming
+    convention (password, re_password, currentPassword, newPassword, ...)."""
+    return isinstance(key, str) and "password" in key.lower()
+
+
+def _sanitize(value):
+    """Recursively produce a JSON-serializable, password-redacted copy of
+    ``value`` for storage in ``UserActionLog.data``.
+
+    Redaction and serialization happen in a single pass so nested secrets are
+    caught even when the surrounding structure is not natively
+    JSON-serializable (e.g. a multipart ``QueryDict`` carrying an uploaded
+    file): containers are always recursed into, and only non-serializable
+    *leaves* are replaced by their ``str()`` repr. Sensitive keys are replaced
+    by the placeholder at any depth. Never mutates the input."""
+    if value is None or isinstance(value, _JSON_SCALARS):
+        return value
+    if isinstance(value, dict):
+        return {
+            key: REDACTED_PLACEHOLDER if _is_sensitive_key(key) else _sanitize(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize(item) for item in value]
+    return str(value)
+
+
 def _serialize_request_data(data):
-    if data is None:
-        return None
-    try:
-        json.dumps(data)
-        return data
-    except (TypeError, ValueError):
-        pass
-    try:
-        return {key: str(value) for key, value in dict(data).items()}
-    except Exception:
-        return None
+    """Return a JSON-serializable, password-redacted snapshot of the request
+    body, suitable for storing in ``UserActionLog.data``."""
+    return _sanitize(data)
 
 
 class UserActionLogMixin:

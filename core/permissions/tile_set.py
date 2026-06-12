@@ -1,3 +1,5 @@
+import hashlib
+import logging
 from collections import defaultdict
 from datetime import date as date_type
 from typing import List, Optional, TypedDict, Tuple
@@ -6,6 +8,11 @@ from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.tile_set import TileSet, TileSetType, TileSetStatus
 from core.models.user import User, UserRole
 from core.permissions.base import BasePermission
+from core.utils.cache import (
+    get_or_compute,
+    get_tileset_filter_cache_key,
+    TILESET_FILTER_CACHE_TTL,
+)
 from core.utils.postgis import GeometryType, GetGeometryType
 from django.db.models import QuerySet, Count, Case, When, F, FloatField
 from functools import reduce
@@ -20,6 +27,8 @@ from django.contrib.gis.db.models.fields import GeometryField
 
 from core.repository.base import CollectivityRepoFilter
 from core.repository.tile_set import TileSetRepository
+
+logger = logging.getLogger(__name__)
 
 
 class TileSetPreview(TypedDict):
@@ -39,6 +48,20 @@ class TileSetPermission(
         self.repository = TileSetRepository(initial_queryset=initial_queryset)
         self.user = user
         self.scoped_user_group = scoped_user_group
+
+    @classmethod
+    def from_request(
+        cls,
+        request,
+        initial_queryset: Optional[QuerySet[TileSet]] = None,
+    ) -> "TileSetPermission":
+        from core.permissions.scope import resolve_scoped_user_group
+
+        return cls(
+            user=request.user,
+            initial_queryset=initial_queryset,
+            scoped_user_group=resolve_scoped_user_group(request),
+        )
 
     def _is_unrestricted(self) -> bool:
         return (
@@ -156,84 +179,115 @@ class TileSetPermission(
     ) -> Optional[Q]:
         intersects_geometry = kwargs.pop("filter_tile_set_intersects_geometry", None)
 
-        queryset = self.filter_(
-            *args,
-            **kwargs,
-            order_bys=["-date"],
+        cached_tilesets = self._get_cached_tilesets(*args, **kwargs)
+
+        return self._build_q_from_tilesets(
+            cached_tilesets,
+            detection_object_prefix,
+            detection_prefix,
+            intersects_geometry,
         )
+
+    def _get_tileset_cache_hash(self, **kwargs) -> str:
+        parts = sorted(f"{k}={v}" for k, v in kwargs.items())
+        return hashlib.md5(":".join(parts).encode()).hexdigest()[:12]
+
+    def _get_cached_tilesets(self, *args, **kwargs) -> List[dict]:
+        scoped_group_id = self.scoped_user_group.id if self.scoped_user_group else None
+        cache_key = get_tileset_filter_cache_key(
+            self.user.id, scoped_group_id, self._get_tileset_cache_hash(**kwargs)
+        )
+        return get_or_compute(
+            cache_key,
+            lambda: self._compute_tilesets(*args, **kwargs),
+            TILESET_FILTER_CACHE_TTL,
+        )
+
+    def _compute_tilesets(self, *args, **kwargs) -> List[dict]:
+        """Most-recent tile set per accessible geo zone, as plain dicts (the cached
+        value). The per-request bbox is intentionally NOT an input here — it is
+        applied later in _build_q_from_tilesets — so the cache is reused across pans."""
+        queryset = self.filter_(*args, **kwargs, order_bys=["-date"])
         queryset = queryset.prefetch_related("geo_zones")
-        # if tilesets have exactly the same geozones, we only retrieve the most recent
         queryset = queryset.annotate(
             row_number=Window(
                 expression=RowNumber(),
-                partition_by=[F("geo_zones__id")],  # Group by GeoZone
-                order_by=F("date").desc(),
+                partition_by=[F("geo_zones__id")],
+                order_by=[F("date").desc(), F("id").desc()],
             )
         )
         queryset = queryset.only(
             "id", "tile_set_type", "geo_zones__id", "geo_zones__geo_zone_type"
         )
 
-        if intersects_geometry:
-            queryset = queryset.filter(
-                geo_zones__geometry__intersects=intersects_geometry
+        result = []
+        for tile_set in queryset.filter(row_number=1):
+            geo_zones_map = {}
+            for gz in tile_set.geo_zones.all():
+                geo_zones_map.setdefault(gz.geo_zone_type, []).append(gz.id)
+            result.append(
+                {
+                    "id": tile_set.id,
+                    "tile_set_type": tile_set.tile_set_type,
+                    "geo_zones": geo_zones_map,
+                }
             )
 
-        tile_sets = queryset.filter(row_number=1)
+        return result
 
+    @staticmethod
+    def _build_q_from_tilesets(
+        cached_tilesets: List[dict],
+        detection_object_prefix: str,
+        detection_prefix: str,
+        intersects_geometry,
+    ) -> Optional[Q]:
         wheres_zones: List[Q] = []
         wheres: List[Q] = []
 
-        for i in range(len(tile_sets)):
-            tile_set = tile_sets[i]
-            previous_tile_sets = tile_sets[:i]
-            where = Q(**{f"{detection_prefix}tile_set__id": tile_set.id})
+        for i, ts_info in enumerate(cached_tilesets):
+            where = Q(**{f"{detection_prefix}tile_set__id": ts_info["id"]})
 
             if intersects_geometry:
                 where &= Q(
                     **{f"{detection_prefix}geometry__intersects": intersects_geometry}
                 )
 
-            geo_zones_map = defaultdict(list)
-            for geo_zone in tile_set.geo_zones.all():
-                geo_zones_map[geo_zone.geo_zone_type].append(geo_zone.id)
-
             where_zones = Q()
-            if geo_zones_map.get(GeoZoneType.COMMUNE):
+            gz = ts_info["geo_zones"]
+            if gz.get(GeoZoneType.COMMUNE):
                 where_zones &= Q(
                     **{
-                        f"{detection_object_prefix}commune__id__in": geo_zones_map.get(
+                        f"{detection_object_prefix}commune__id__in": gz[
                             GeoZoneType.COMMUNE
-                        )
+                        ]
                     }
                 )
-            if geo_zones_map.get(GeoZoneType.DEPARTMENT):
+            if gz.get(GeoZoneType.DEPARTMENT):
                 where_zones &= Q(
                     **{
-                        f"{detection_object_prefix}commune__department__id__in": geo_zones_map.get(
+                        f"{detection_object_prefix}commune__department__id__in": gz[
                             GeoZoneType.DEPARTMENT
-                        )
+                        ]
                     }
                 )
-            if geo_zones_map.get(GeoZoneType.REGION):
+            if gz.get(GeoZoneType.REGION):
                 where_zones &= Q(
                     **{
-                        f"{detection_object_prefix}commune__department__region__id__in": geo_zones_map.get(
+                        f"{detection_object_prefix}commune__department__region__id__in": gz[
                             GeoZoneType.REGION
-                        )
+                        ]
                     }
                 )
             wheres_zones.append(where_zones)
             where &= where_zones
 
-            for i_previous in range(len(previous_tile_sets)):
-                previous_tile_set = previous_tile_sets[i_previous]
+            for i_previous in range(i):
+                prev = cached_tilesets[i_previous]
 
-                # custom logic here: we want to display the detections on the last tileset
-                # if the last tileset for a zone is partial, we also want to display detections for the last BACKGROUND tileset
                 if (
-                    tile_set.tile_set_type == TileSetType.BACKGROUND
-                    and previous_tile_set.tile_set_type == TileSetType.PARTIAL
+                    ts_info["tile_set_type"] == TileSetType.BACKGROUND
+                    and prev["tile_set_type"] == TileSetType.PARTIAL
                 ):
                     continue
 

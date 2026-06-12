@@ -78,13 +78,13 @@ class DetectionGeoFilter(FilterSet):
 
     def filter_queryset(self, queryset):
         from core.services.detection_geo_filter import DetectionGeoFilterService
-        from core.utils.super_admin_scope import get_super_admin_scoped_user_group
+        from core.permissions.scope import resolve_scoped_user_group
 
         queryset = super().filter_queryset(queryset)
 
-        scoped_user_group = get_super_admin_scoped_user_group(self.request)
         filter_service = DetectionGeoFilterService(
-            user=self.request.user, scoped_user_group=scoped_user_group
+            user=self.request.user,
+            scoped_user_group=resolve_scoped_user_group(self.request),
         )
         return filter_service.apply_filters(queryset, self.data)
 
@@ -104,9 +104,13 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         detections = detections_queryset.all()
 
         # Use bulk update service for business logic
+        from core.permissions.scope import resolve_scoped_user_group
         from core.services.detection_bulk_update import DetectionBulkUpdateService
 
-        bulk_update_service = DetectionBulkUpdateService(user=request.user)
+        bulk_update_service = DetectionBulkUpdateService(
+            user=request.user,
+            scoped_user_group=resolve_scoped_user_group(request),
+        )
         bulk_update_service.update_multiple_detections(
             detections=detections,
             update_data=serializer.validated_data,

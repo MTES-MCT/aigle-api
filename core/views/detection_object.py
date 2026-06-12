@@ -19,7 +19,7 @@ from rest_framework_gis.fields import GeometryField
 from rest_framework.decorators import action
 
 from core.utils.filters import UuidInFilter
-from core.utils.super_admin_scope import get_super_admin_scoped_user_group
+from core.permissions.scope import resolve_scoped_user_group
 from core.services.detection_object import DetectionObjectService
 from core.services.tile_set import TileSetService
 from django.contrib.gis.db.models.functions import Centroid
@@ -64,7 +64,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
     def get_serializer_context(self) -> Dict[str, Any]:
         context: Dict[str, Any] = super().get_serializer_context()
-        context["scoped_user_group"] = get_super_admin_scoped_user_group(self.request)
+        context["scoped_user_group"] = resolve_scoped_user_group(self.request)
         return context
 
     def get_serializer_class(self):
@@ -83,7 +83,6 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
     def get_queryset(self):
         detail = bool(self.request.query_params.get("detail"))
-        scoped_user_group = get_super_admin_scoped_user_group(self.request)
 
         queryset = DetectionObject.objects.order_by("-detections__tile_set__date")
         queryset = queryset.select_related(
@@ -103,9 +102,8 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
         if self.action == "retrieve" or detail:
             geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
-                GeoCustomZonePermission(
-                    user=self.request.user,
-                    scoped_user_group=scoped_user_group,
+                GeoCustomZonePermission.from_request(
+                    self.request
                 ).get_detection_object_prefetch()
             )
 
@@ -144,7 +142,7 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
     @action(methods=["get"], detail=False, url_path="from-coordinates")
     def get_from_coordinates(self, request):
-        scoped_user_group = get_super_admin_scoped_user_group(request)
+        scoped_user_group = resolve_scoped_user_group(request)
         params_serializer = GetFromCoordinatesParamsSerializer(data=request.GET)
         params_serializer.is_valid(raise_exception=True)
 

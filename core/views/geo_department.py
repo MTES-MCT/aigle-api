@@ -27,8 +27,8 @@ class GeoDepartmentFilter(FilterSet):
     def search(self, queryset, name, value):
         value_normalized = normalize(value)
 
-        collectivity_filter = UserPermission(
-            user=self.request.user
+        collectivity_filter = UserPermission.from_request(
+            self.request
         ).get_collectivity_filter()
 
         if collectivity_filter:

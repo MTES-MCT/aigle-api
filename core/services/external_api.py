@@ -8,8 +8,11 @@ from core.models.detection_data import (
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
 from core.models.parcel import Parcel
+from django.db import transaction
 from django.db.models import Prefetch
 from simple_history.utils import bulk_update_with_history
+
+from core.utils.cache import invalidate_count_caches
 from rest_framework.exceptions import ValidationError
 
 
@@ -91,3 +94,5 @@ class ExternalApiService:
                 "detection_validation_status",
             ],
         )
+        # bulk_update_with_history bypasses post_save; invalidate counts explicitly.
+        transaction.on_commit(invalidate_count_caches)

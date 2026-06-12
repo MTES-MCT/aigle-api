@@ -3,6 +3,7 @@ from django.core.management.base import BaseCommand, CommandError
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.services.prescription import PrescriptionService
+from core.utils.cache import invalidate_count_caches
 from core.utils.logs_helpers import log_command_event
 
 BATCH_SIZE = 10000
@@ -52,5 +53,9 @@ class Command(BaseCommand):
 
             log_event(f"Computed prescription for detection objects: {
                   offset}/{total}")
+
+        # PrescriptionService bulk-updates prescription status (bypasses post_save),
+        # which is a count filter dimension — invalidate counts once for the run.
+        invalidate_count_caches()
 
         log_event("Prescription computation done")
