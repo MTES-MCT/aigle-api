@@ -1,6 +1,8 @@
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.pagination import LimitOffsetPagination
+from rest_framework.parsers import JSONParser
+from rest_framework.renderers import JSONRenderer
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
@@ -18,6 +20,13 @@ from core.utils.user_action_log import UserActionLogMixin
 
 class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
     permission_classes = [SuperAdminRoleModifyActionPermission]
+    # Speak raw JSON on these routes: the default camelCase renderer/parser would mangle the
+    # CLI-flag keys inside CommandRun.arguments (e.g. "--table-name"), which the admin UI
+    # replays verbatim into the run-command form. Parameters go in, get stored, and come back
+    # out untouched. (Other fields are returned snake_case here too — the frontend models for
+    # this admin-only feature expect that.)
+    renderer_classes = [JSONRenderer]
+    parser_classes = [JSONParser]
 
     def list(self, request):
         return Response(COMMANDS_AND_PARAMETERS)
@@ -31,12 +40,8 @@ class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
         command_name = validated_data["command"]
         parameters: CommandParameters = validated_data.get("args", {})
 
-        django_parameters = CommandAsyncService.parse_command_parameters(
-            command_name=command_name, parameters=parameters
-        )
-
         task_id: str = CommandAsyncService.run_command_async(
-            command_name, **django_parameters
+            command_name=command_name, parameters=parameters
         )
         return Response(
             {"task_id": task_id, "status": "started"}, status=status.HTTP_201_CREATED

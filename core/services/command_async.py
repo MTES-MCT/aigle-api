@@ -12,26 +12,41 @@ class CommandAsyncService:
     """Service for handling asynchronous command execution."""
 
     @staticmethod
-    def run_command_async(command_name: str, **kwargs: Any) -> str:
-        """Run a Django management command asynchronously via Celery."""
-        command_run_uuid = str(uuid.uuid4())
+    def run_command_async(command_name: str, parameters: Dict[str, Any]) -> str:
+        """Run a Django management command asynchronously via Celery.
 
+        ``parameters`` is exactly what the client sent — keyed by the raw CLI flags
+        ("--table-name"), the same keys the run-command form uses. It is stored verbatim in
+        ``CommandRun.arguments`` and served back untouched so the admin UI can replay a run.
+        call_command() needs validated/coerced values under argparse dests ("table_name"),
+        so that form is derived only for dispatch, never persisted.
+        """
+        from core.utils.run_command import parse_parameters
+
+        # Validates the input (raises BadRequest -> 400) and coerces values to their declared
+        # types — done before creating the row so bad input never leaves a PENDING task.
+        parsed = parse_parameters(command_name=command_name, parameters=parameters)
+        command_kwargs = {
+            key.lstrip("-").replace("-", "_"): value for key, value in parsed.items()
+        }
+
+        command_run_uuid = str(uuid.uuid4())
         command_run = CommandRun.objects.create(
             command_name=command_name,
             task_id=command_run_uuid,
-            arguments={"kwargs": kwargs},
+            arguments={"kwargs": parameters},
             status=CommandRunStatus.PENDING,
         )
 
         logger.info(
             "run_command_async: command_name=%s, kwargs=%s, uuid=%s",
             command_name,
-            kwargs,
+            command_kwargs,
             command_run_uuid,
         )
 
         run_management_command.apply_async(
-            args=[command_name, str(command_run.uuid), kwargs],
+            args=[command_name, str(command_run.uuid), command_kwargs],
             task_id=command_run_uuid,
         )
 
@@ -68,19 +83,3 @@ class CommandAsyncService:
             start = offset or 0
             queryset = queryset[start : start + limit]
         return list(queryset), count
-
-    @staticmethod
-    def parse_command_parameters(
-        command_name: str, parameters: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Parse and convert CLI parameter names to Django format."""
-        from core.utils.run_command import parse_parameters
-
-        parsed_parameters = parse_parameters(
-            command_name=command_name, parameters=parameters
-        )
-
-        return {
-            key.lstrip("-").replace("-", "_"): value
-            for key, value in parsed_parameters.items()
-        }

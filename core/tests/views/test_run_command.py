@@ -5,7 +5,7 @@ from django.test import SimpleTestCase
 from django.urls import reverse
 from rest_framework import status
 
-from core.services.command_async import CommandAsyncService
+from core.models.command_run import CommandRun, CommandRunStatus
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.users import (
     create_super_admin,
@@ -124,13 +124,6 @@ class ParseParametersTests(SimpleTestCase):
         with self.assertRaises(BadRequest):
             parse_parameters("does_not_exist", {})
 
-    def test_parse_command_parameters_maps_cli_names_to_django_kwargs(self):
-        django_kwargs = CommandAsyncService.parse_command_parameters(
-            self.COMMAND, {"--ids": "1,2,3", "--force": True}
-        )
-        self.assertEqual(django_kwargs["ids"], [1, 2, 3])
-        self.assertIs(django_kwargs["force"], True)
-
 
 class RunCommandEndpointTests(BaseAPITestCase):
     def setUp(self):
@@ -152,4 +145,63 @@ class RunCommandEndpointTests(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         mock_run.assert_called_once()
         _, kwargs = mock_run.call_args
-        self.assertEqual(kwargs["ids"], [1, 2, 3])
+        self.assertEqual(kwargs["parameters"]["--ids"], "1,2,3")
+
+    @patch("core.services.command_async.run_management_command.apply_async")
+    def test_run_persists_cli_flags_verbatim_and_dispatches_django_dests(
+        self, mock_apply
+    ):
+        # The admin retry replays CommandRun.arguments through the same form, so it's stored
+        # exactly as received (raw CLI flags, raw values), while call_command() gets the
+        # validated/coerced values under Django dests ("ids").
+        self.authenticate_user(self.super_admin)
+        url = reverse("CommandAsyncViewSet-run")
+
+        response = self.client.post(
+            url,
+            {"command": "import_custom_zones", "args": {"--ids": "1,2,3"}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        command_run = CommandRun.objects.get(task_id=response.data["task_id"])
+        self.assertEqual(command_run.arguments, {"kwargs": {"--ids": "1,2,3"}})
+
+        mock_apply.assert_called_once()
+        dispatched_args = mock_apply.call_args.kwargs["args"]
+        self.assertEqual(dispatched_args[0], "import_custom_zones")
+        self.assertEqual(dispatched_args[2], {"ids": [1, 2, 3]})
+
+    def test_run_with_invalid_parameter_returns_400_and_creates_no_row(self):
+        # Validation happens before the row is created, so bad input never leaves a PENDING
+        # task behind.
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.post(
+            reverse("CommandAsyncViewSet-run"),
+            {"command": "import_custom_zones", "args": {"--ids": "abc"}},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(CommandRun.objects.exists())
+
+    def test_tasks_endpoint_returns_raw_json_without_camelcase(self):
+        # This route opts out of the camelCase renderer so arguments keys round-trip
+        # verbatim. The canary: "--table-name" stays as-is and the model field is served
+        # snake_case ("command_name", not "commandName").
+        CommandRun.objects.create(
+            command_name="import_custom_zones",
+            task_id="11111111-1111-1111-1111-111111111111",
+            arguments={"kwargs": {"--table-name": "inference"}},
+            status=CommandRunStatus.PENDING,
+        )
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.json()["results"][0]
+        self.assertEqual(result["arguments"]["kwargs"], {"--table-name": "inference"})
+        self.assertIn("command_name", result)
+        self.assertNotIn("commandName", result)

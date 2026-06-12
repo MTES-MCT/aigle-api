@@ -6,9 +6,9 @@ from typing import List, Literal, Optional, Set, Tuple, TypedDict
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
+from core.constants.detection import CONTROLLED_DETECTION_STATUSES
 from core.models.detection_authorization import DetectionAuthorization
 from core.models.detection_data import (
-    DetectionControlStatus,
     DetectionData,
     DetectionValidationStatus,
     DetectionValidationStatusChangeReason,
@@ -153,25 +153,27 @@ class Command(BaseCommand):
             for uparcel in unique_parcels
         ]
 
-        # TODO: be sure detection objects are not updated if control status updated by user
-        # get parcels with detections but no detections with control status != NOT_CONTROLLED
+        # Only keep parcels whose detections were never acted on by a user:
+        # parcels that have detections but none with a control status other than
+        # NOT_CONTROLLED. This guards against the Sitadel import overwriting a
+        # user's manual control decision (update_database below touches every
+        # detection of a returned parcel, so a single controlled detection must
+        # exclude the whole parcel).
+        #
+        # .exclude() compiles to a NOT EXISTS subquery: keep the parcel iff none
+        # of its detections is controlled. CONTROLLED_DETECTION_STATUSES is
+        # derived from the enum, so a newly added status can't silently slip past
+        # this guard.
         parcels = (
             Parcel.objects.annotate(
                 nbr_detections=Count("detection_objects__detections"),
             )
             .filter(
                 reduce(or_, wheres),
-                ~Q(
-                    detection_objects__detections__detection_data__detection_control_status__in=[
-                        DetectionControlStatus.CONTROLLED_FIELD,
-                        DetectionControlStatus.PRIOR_LETTER_SENT,
-                        DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
-                        DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
-                        DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
-                        DetectionControlStatus.REHABILITATED,
-                    ]
-                ),
                 nbr_detections__gt=0,
+            )
+            .exclude(
+                detection_objects__detections__detection_data__detection_control_status__in=CONTROLLED_DETECTION_STATUSES
             )
             .prefetch_related(
                 Prefetch(

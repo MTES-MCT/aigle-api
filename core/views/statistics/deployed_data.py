@@ -61,6 +61,7 @@ class DeployedDataDepartmentSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     name = serializers.CharField()
     parcels_count = serializers.IntegerField()
+    sitadel_updated_detections_count = serializers.IntegerField()
     communes_with_detections_count = serializers.IntegerField()
     communes = DeployedDataCommuneSerializer(many=True)
     user_groups = DeployedDataUserGroupSerializer(many=True)
