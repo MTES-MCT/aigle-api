@@ -102,6 +102,17 @@ class ParseParametersTests(SimpleTestCase):
         self.assertEqual(parsed["--source-srid"], 2154)
         self.assertIsInstance(parsed["--source-srid"], int)
 
+    def test_str_param_coerced_from_int(self):
+        # Regression: the admin interface can send a numeric value for a str param (a
+        # batch id typed as a JSON number). It must reach the command as a string, else
+        # raw SQL like `batch_id = %s` fails with "character varying = integer".
+        parsed = parse_parameters(
+            "import_detections", {"--batch-id": 401, "--tile-set-id": 5}
+        )
+        self.assertEqual(parsed["--batch-id"], "401")
+        self.assertIsInstance(parsed["--batch-id"], str)
+        self.assertEqual(parsed["--tile-set-id"], 5)
+
     def test_bool_values_pass_through(self):
         parsed = parse_parameters(
             self.COMMAND, {"--force": True, "--ignore-categories": False}
