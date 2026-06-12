@@ -2,9 +2,10 @@ import os
 from collections import defaultdict
 from typing import List, Optional
 
-from django.db.models import Count
+from django.db.models import Count, Q
 
 from core.models.detection import Detection
+from core.models.detection_data import DetectionValidationStatusChangeReason
 from core.models.geo_commune import GeoCommune
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_department import GeoDepartment
@@ -156,7 +157,8 @@ class DeployedDataService:
         # instead of waiting for the TTL.
         # v2: tile sets derived from the TileSet.geo_zones association (was Detection.tile_set).
         # v3: key no longer folds in the count cache version.
-        return "aigle:deployed_data:departments:v3"
+        # v4: per-department payload gained sitadel_updated_detections_count.
+        return "aigle:deployed_data:departments:v4"
 
     @staticmethod
     def _get_all_departments_cached() -> List[dict]:
@@ -190,7 +192,13 @@ class DeployedDataService:
         #    an extra join to this heavy aggregate): they are excluded downstream — step
         #    2 only keeps deleted=False communes, and the commune->department map (step
         #    3) omits them, so their counts never reach the output.
+        #    In the same scan we also count detections whose validation status was last
+        #    changed by the SITADEL import (DetectionData.detection_validation_status_
+        #    change_reason == SITADEL). Detection<->DetectionData is 1-to-1, so the LEFT
+        #    JOIN this conditional Count introduces never multiplies rows — folding it in
+        #    here is far cheaper than a second full-table scan.
         detections_by_commune = defaultdict(int)
+        sitadel_updated_by_commune = defaultdict(int)
         for row in (
             Detection.objects.filter(
                 deleted=False,
@@ -198,11 +206,19 @@ class DeployedDataService:
                 detection_object__commune_id__isnull=False,
             )
             .values("detection_object__commune_id")
-            .annotate(detections_count=Count("id"))
+            .annotate(
+                detections_count=Count("id"),
+                sitadel_updated_count=Count(
+                    "id",
+                    filter=Q(
+                        detection_data__detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
+                    ),
+                ),
+            )
         ):
-            detections_by_commune[row["detection_object__commune_id"]] += row[
-                "detections_count"
-            ]
+            commune_id = row["detection_object__commune_id"]
+            detections_by_commune[commune_id] += row["detections_count"]
+            sitadel_updated_by_commune[commune_id] += row["sitadel_updated_count"]
 
         if not detections_by_commune:
             return []
@@ -248,6 +264,14 @@ class DeployedDataService:
                 deleted=False, department_id__in=department_ids
             ).values("id", "department_id")
         }
+
+        # Roll the per-commune SITADEL-updated counts (step 1) up to the department,
+        # skipping communes that fell out with the commune->department map above.
+        sitadel_updated_by_department = defaultdict(int)
+        for commune_id, count in sitadel_updated_by_commune.items():
+            department_id = commune_to_department.get(commune_id)
+            if department_id is not None:
+                sitadel_updated_by_department[department_id] += count
 
         # 4. Parcel count per department. Grouping by parcel.commune_id uses the
         #    commune index and lets us aggregate to the department in Python, which is
@@ -368,6 +392,9 @@ class DeployedDataService:
                     "uuid": department["uuid"],
                     "name": department["name"],
                     "parcels_count": parcel_count_by_department.get(department_id, 0),
+                    "sitadel_updated_detections_count": sitadel_updated_by_department.get(
+                        department_id, 0
+                    ),
                     "communes_with_detections_count": len(communes),
                     "communes": communes,
                     "user_groups": user_groups,

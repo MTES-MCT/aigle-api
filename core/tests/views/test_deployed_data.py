@@ -5,6 +5,7 @@ from django.contrib.gis.geos import Polygon
 from django.urls import reverse
 from rest_framework import status
 
+from core.models.detection_data import DetectionValidationStatusChangeReason
 from core.models.geo_custom_zone import (
     GeoCustomZone,
     GeoCustomZoneStatus,
@@ -14,6 +15,7 @@ from core.models.geo_custom_zone_category import GeoCustomZoneCategory
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import (
     create_detection,
+    create_detection_data,
     create_detection_object,
     create_object_type,
     create_tile_set,
@@ -259,12 +261,67 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         self.assertEqual(herault["uuid"], str(self.herault.uuid))
         self.assertEqual(herault["parcelsCount"], 1)
         self.assertEqual(herault["communesWithDetectionsCount"], 1)
+        # No detection was updated via SITADEL in the base setup.
+        self.assertEqual(herault["sitadelUpdatedDetectionsCount"], 0)
 
         self.assertEqual(len(herault["communes"]), 1)
         commune = herault["communes"][0]
         self.assertEqual(commune["name"], "Montpellier")
         self.assertEqual(commune["uuid"], str(self.montpellier.uuid))
         self.assertEqual(commune["detectionsCount"], 2)
+
+    def test_detail_sitadel_updated_detections_count(self):
+        # Two more detections across both communes of the department, only some of which
+        # were last touched by the SITADEL import; deleted ones must not be counted.
+        object_type = create_object_type(name="Pool")
+
+        # Montpellier: one SITADEL-updated detection.
+        montpellier_object = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        create_detection(
+            detection_object=montpellier_object,
+            tile_set=self.tile_set,
+            detection_data=create_detection_data(
+                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
+            ),
+        )
+
+        # Béziers (another commune of Hérault): one SITADEL-updated detection -> the
+        # count must roll up across all the department's communes.
+        beziers_object = create_detection_object(
+            object_type=object_type, commune=self.beziers
+        )
+        create_detection(
+            detection_object=beziers_object,
+            tile_set=self.tile_set,
+            detection_data=create_detection_data(
+                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
+            ),
+        )
+
+        # A detection updated for another reason -> must NOT be counted.
+        create_detection(
+            detection_object=montpellier_object,
+            tile_set=self.tile_set,
+            detection_data=create_detection_data(
+                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.EXTERNAL_API
+            ),
+        )
+
+        # A soft-deleted SITADEL-updated detection -> must NOT be counted.
+        deleted_detection = create_detection(
+            detection_object=montpellier_object,
+            tile_set=self.tile_set,
+            detection_data=create_detection_data(
+                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
+            ),
+        )
+        deleted_detection.deleted = True
+        deleted_detection.save()
+
+        herault = self._get_detail(self.herault.uuid)
+        self.assertEqual(herault["sitadelUpdatedDetectionsCount"], 2)
 
     def test_detail_user_groups_and_members(self):
         herault = self._get_detail(self.herault.uuid)
