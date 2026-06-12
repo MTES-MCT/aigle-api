@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, Optional, TypedDict, Union
 from django.core.management import get_commands, load_command_class
 from django.core.management.base import BaseCommand
 from django.core.exceptions import BadRequest
@@ -31,6 +31,24 @@ class CommandWithParameters(TypedDict):
     parameters: List[CommandParameters]
 
 
+# argparse flag actions (store_true/store_false/BooleanOptionalAction) carry no
+# `type`, so without this they'd be reported as "str" and the admin run-command form
+# would render a free-text input instead of a checkbox.
+BOOLEAN_ACTION_NAMES = {
+    "_StoreTrueAction",
+    "_StoreFalseAction",
+    "BooleanOptionalAction",
+}
+
+
+def _resolve_parameter_type(action) -> str:
+    if type(action).__name__ in BOOLEAN_ACTION_NAMES:
+        return "bool"
+    if action.type is not None:
+        return action.type.__name__
+    return "str"
+
+
 def list_commands_with_parameters() -> List[CommandWithParameters]:
     commands = []
 
@@ -57,7 +75,7 @@ def list_commands_with_parameters() -> List[CommandWithParameters]:
                     )
                     command_parameters = CommandParameters(
                         name=opts,
-                        type=action.type.__name__ if action.type else "str",
+                        type=_resolve_parameter_type(action),
                         default=action.default,
                         required=action.required,
                         multiple=type(action).__name__ == "_AppendAction",
@@ -80,6 +98,38 @@ COMMANDS_AND_PARAMETERS_MAP = {
 CommandParameters = Dict[str, Union[bool, str, int]]
 
 
+def _coerce_scalar(value: Any, type_name: str) -> Any:
+    """Coerce a single value to the parameter's declared type.
+
+    call_command() does NOT run kwargs through argparse, so a value that arrived as a
+    string (JSON editor, or a fragment of a comma-separated list) keeps its string type
+    unless coerced here. An int-typed option compared against an integer column in raw
+    SQL fails if it stays a string, so int coercion matters. `bool` guards against
+    int(True) -> 1, though bool params never reach the "int" branch.
+    """
+    if type_name == "int" and not isinstance(value, bool):
+        return int(value)
+    return value
+
+
+def _parse_multiple(value: Any, type_name: str) -> List[Any]:
+    """Normalize a repeatable parameter to a typed list.
+
+    The admin form sends a single comma-separated string ("1,2,3"); the JSON editor can
+    send a real list; a lone scalar (e.g. an int from a NumberInput) is wrapped. Empty
+    fragments from trailing/double commas are dropped.
+    """
+    if isinstance(value, str):
+        items = [fragment.strip() for fragment in value.split(",")]
+        items = [fragment for fragment in items if fragment]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        items = [value]
+
+    return [_coerce_scalar(item, type_name) for item in items]
+
+
 def parse_parameters(
     command_name: str, parameters: CommandParameters
 ) -> CommandParameters:
@@ -97,9 +147,28 @@ def parse_parameters(
                 f"Parameter with name '{command_name}.{parameter_name}' is required"
             )
 
-        if param_config["multiple"] and parameter_value:
-            parsed_parameters[parameter_name] = parsed_parameters[parameter_name].split(
-                ","
+        if parameter_value is None:
+            continue
+
+        type_name = param_config.get("type", "str")
+
+        try:
+            if param_config["multiple"]:
+                parsed_parameters[parameter_name] = _parse_multiple(
+                    parameter_value, type_name
+                )
+            else:
+                parsed_parameters[parameter_name] = _coerce_scalar(
+                    parameter_value, type_name
+                )
+        except (ValueError, TypeError):
+            expected = (
+                f"a list of {type_name} values"
+                if param_config["multiple"]
+                else f"a {type_name} value"
+            )
+            raise BadRequest(
+                f"Parameter '{command_name}.{parameter_name}' expects {expected}"
             )
 
     return parsed_parameters

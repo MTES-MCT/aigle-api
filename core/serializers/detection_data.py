@@ -116,7 +116,7 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
                         detection_control_status=instance.detection.detection_data.detection_control_status,
                         detection_validation_status=instance.detection.detection_data.detection_validation_status,
                         detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED,
-                        user_last_update=user,
+                        user_last_update=request.user,
                     )
                     detection_data.save()
                     detection = Detection(
