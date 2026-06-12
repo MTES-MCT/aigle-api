@@ -101,14 +101,21 @@ CommandParameters = Dict[str, Union[bool, str, int]]
 def _coerce_scalar(value: Any, type_name: str) -> Any:
     """Coerce a single value to the parameter's declared type.
 
-    call_command() does NOT run kwargs through argparse, so a value that arrived as a
-    string (JSON editor, or a fragment of a comma-separated list) keeps its string type
-    unless coerced here. An int-typed option compared against an integer column in raw
-    SQL fails if it stays a string, so int coercion matters. `bool` guards against
-    int(True) -> 1, though bool params never reach the "int" branch.
+    call_command() does NOT run kwargs through argparse, so a value keeps whatever JSON
+    type it arrived with (the admin form / JSON editor can send a number for a str-typed
+    option, or a string for an int-typed one). Coercing here mirrors what argparse does
+    on the CLI, where ``type=int``/``type=str`` always yield an int/str. It matters: an
+    int-typed option compared against an integer column in raw SQL fails if it stays a
+    string, and a str-typed option (e.g. --batch-id) sent as a number fails the reverse
+    way ("character varying = integer"). ``bool`` guards against int(True) -> 1 / the
+    str cast, though bool params never reach these branches.
     """
-    if type_name == "int" and not isinstance(value, bool):
+    if isinstance(value, bool):
+        return value
+    if type_name == "int":
         return int(value)
+    if type_name == "str":
+        return str(value)
     return value
 
 
