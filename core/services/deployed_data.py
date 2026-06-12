@@ -11,17 +11,24 @@ from core.models.geo_department import GeoDepartment
 from core.models.parcel import Parcel
 from core.models.tile_set import TileSet
 from core.models.user_group import UserGroup, UserUserGroup
-from core.utils.cache import get_count_cache_version, get_or_compute, safe_cache_set
+from core.utils.cache import get_or_compute, safe_cache_set
 from core.utils.string import normalize
 
 # This endpoint aggregates over the whole detection/parcel dataset (tens of millions
-# of rows), so a cold computation takes ~1-2 min and the result is cached. The key is
-# keyed by the global count cache version, which is bumped on every
-# Detection/DetectionObject/DetectionData/Parcel write (see core/utils/cache.py), so
-# detection/parcel imports invalidate it immediately. The (long) TTL is only an upper
-# bound on staleness for the slower-moving associations (user groups, custom zones,
-# tile sets); run `manage.py warm_deployed_data_cache` after an import to recompute the
-# cache out-of-band so requests never pay the cold cost.
+# of rows): two full-table GROUP BY scans (Detection x DetectionObject by commune, and
+# Parcel by commune) that no index can avoid, so a cold computation takes ~1-2 min. The
+# result is therefore cached, and the cache must actually stay warm in normal operation.
+#
+# Crucially the key is NOT folded with `get_count_cache_version()`. That counter is
+# bumped on every single Detection/DetectionData/DetectionObject/Parcel write (see
+# core/signals.py) — i.e. on every interactive validation-status edit anywhere in the
+# country — which would invalidate this heavy aggregate on essentially every edit and
+# force the SUPER_ADMIN dashboard to pay the ~1-2 min cold cost on almost every load
+# (the "very long to load" symptom). The deployed-data overview is a slow-moving
+# deployment-status figure that tolerates bounded staleness, so it is invalidated only
+# by the TTL below (an upper bound on staleness) and refreshed out-of-band by
+# `manage.py warm_deployed_data_cache` — run that after a detection/parcel import (and,
+# ideally, on a schedule) so HTTP requests always hit a warm cache.
 DEPLOYED_DATA_CACHE_TTL = int(os.environ.get("DEPLOYED_DATA_CACHE_TTL", 24 * 60 * 60))
 
 
@@ -141,11 +148,15 @@ class DeployedDataService:
 
     @staticmethod
     def _cache_key() -> str:
-        # Bump the vN prefix whenever the computed shape/semantics change, so a deploy
-        # invalidates stale entries immediately instead of waiting for the TTL or the
-        # next detection write to bump the count version.
+        # Deliberately a STABLE key (no count-cache version): the deployed-data overview
+        # is invalidated only by its TTL and refreshed out-of-band by
+        # `warm_deployed_data_cache` (see the module docstring for why folding in
+        # get_count_cache_version() defeated the cache). Bump the vN prefix whenever the
+        # computed shape/semantics change so a deploy orphans stale entries immediately
+        # instead of waiting for the TTL.
         # v2: tile sets derived from the TileSet.geo_zones association (was Detection.tile_set).
-        return f"aigle:deployed_data:departments:v2:{get_count_cache_version()}"
+        # v3: key no longer folds in the count cache version.
+        return "aigle:deployed_data:departments:v3"
 
     @staticmethod
     def _get_all_departments_cached() -> List[dict]:

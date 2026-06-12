@@ -13,6 +13,7 @@ DETECTION_CONTROL_STATUSES_NAMES_MAP = {
     DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP: "PV dressé",
     DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT: "Astreinte Administrative",
     DetectionControlStatus.OBSERVARTION_REPORT_REDACTED: "Rapport de constatations rédigé",
+    DetectionControlStatus.JUGEMENT: "Jugement",
     DetectionControlStatus.REHABILITATED: "Remis en état",
 }
 

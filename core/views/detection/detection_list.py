@@ -102,6 +102,7 @@ DETECTION_CONTROL_STATUSES_ORDERED = [
     DetectionControlStatus.PRIOR_LETTER_SENT,
     DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
     DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+    DetectionControlStatus.JUGEMENT,
     DetectionControlStatus.REHABILITATED,
     DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
 ]

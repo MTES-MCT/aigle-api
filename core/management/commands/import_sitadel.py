@@ -168,6 +168,7 @@ class Command(BaseCommand):
                         DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
                         DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
                         DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+                        DetectionControlStatus.JUGEMENT,
                         DetectionControlStatus.REHABILITATED,
                     ]
                 ),
