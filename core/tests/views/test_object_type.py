@@ -9,6 +9,7 @@ from core.tests.fixtures.users import (
     create_admin,
     create_regular_user,
 )
+from core.models import ObjectType
 from core.tests.fixtures.detection_data import (
     create_object_type,
     create_object_type_with_category,
@@ -91,3 +92,17 @@ class ObjectTypeViewSetTests(BaseAPITestCase):
         )
         response = self.client.delete(url)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_delete_globally_forbidden_even_for_super_admin(self):
+        # DELETE is disabled for every BaseViewSetMixin ViewSet (see
+        # common/views/base.py): even an authorized super admin gets 405, and the
+        # row is left untouched.
+        self.authenticate_user(self.super_admin)
+        url = reverse(
+            "ObjectTypeViewSet-detail", kwargs={"uuid": str(self.object_type_2.uuid)}
+        )
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+        self.assertTrue(
+            ObjectType.objects.filter(uuid=self.object_type_2.uuid).exists()
+        )

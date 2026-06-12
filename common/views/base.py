@@ -20,5 +20,7 @@ class BaseViewSetMixin(
 ):
     lookup_field = "uuid"
 
+    http_method_names = ["get", "post", "put", "patch", "head", "options", "trace"]
+
     def get_serializer_context(self):
         return {"request": self.request}
