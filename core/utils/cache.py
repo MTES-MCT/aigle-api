@@ -26,6 +26,12 @@ Caches and their invalidation contract
    Invalidated by: the global count version, bumped on any write to Detection,
    DetectionData, DetectionObject or Parcel, or a DetectionObject.geo_custom_zones m2m
    change.
+4. deployed-data overview — DeployedDataService (SUPER_ADMIN dashboard); keys fold in
+   get_deployed_data_cache_version(). Invalidated ONLY by invalidate_deployed_data_cache(),
+   called out-of-band by `warm_deployed_data_cache` after a detection/parcel import — NOT
+   on every write (this is a slow-moving figure that tolerates bounded staleness; folding
+   in the per-write count version would defeat the cache). Unlike 1-3 this is not
+   per-user.
 
 Signal wiring lives in core/signals.py. Bulk writes (bulk_create / bulk_update /
 *_with_history) and raw SQL do NOT emit post_save/post_delete, so every such write
@@ -151,6 +157,7 @@ def _group_version_key(group_id: int) -> str:
 _GEO_VERSION_KEY = f"{_NS}:ver:geo"
 _TILESET_VERSION_KEY = f"{_NS}:ver:tileset"
 _COUNT_VERSION_KEY = f"{_NS}:ver:count"
+_DEPLOYED_DATA_VERSION_KEY = f"{_NS}:ver:deployed_data"
 
 
 # --- Cache-key builders ---------------------------------------------------------
@@ -184,6 +191,10 @@ def get_tileset_filter_cache_key(
 
 def get_count_cache_version() -> int:
     return _get_version(_COUNT_VERSION_KEY)
+
+
+def get_deployed_data_cache_version() -> int:
+    return _get_version(_DEPLOYED_DATA_VERSION_KEY)
 
 
 # --- Invalidation API (call these after the matching write) ---------------------
@@ -240,3 +251,14 @@ def invalidate_count_caches() -> None:
     detection's custom-zone link) changed -> every cached pagination count."""
     _increment_version(_COUNT_VERSION_KEY)
     logger.info("Invalidated all pagination count caches")
+
+
+def invalidate_deployed_data_cache() -> None:
+    """Bump the deployed-data version so the SUPER_ADMIN "deployed data" overview (the
+    summary list AND every per-department detail) is orphaned and recomputed on next
+    access. Called out-of-band by `warm_deployed_data_cache` after a detection/parcel
+    import — deliberately NOT on every write, since this is a slow-moving
+    deployment-status overview that tolerates bounded staleness (the data TTL is the
+    upper bound). See core/services/deployed_data.py."""
+    _increment_version(_DEPLOYED_DATA_VERSION_KEY)
+    logger.info("Invalidated deployed-data cache")

@@ -12,6 +12,7 @@ from core.models.geo_custom_zone import (
     GeoCustomZoneType,
 )
 from core.models.geo_custom_zone_category import GeoCustomZoneCategory
+from core.services.deployed_data import DeployedDataService
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import (
     create_detection,
@@ -37,6 +38,7 @@ from core.tests.fixtures.users import (
     create_user,
     create_user_group,
 )
+from core.utils.cache import safe_cache_get
 
 URL_LIST = "StatisticsDeployedDataView"
 URL_DETAIL = "StatisticsDeployedDataDetailView"
@@ -234,36 +236,57 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         self.assertEqual(herault["uuid"], str(self.herault.uuid))
         self.assertEqual(herault["parcelsCount"], 1)
         self.assertEqual(herault["communesWithDetectionsCount"], 1)
-        # No detection was updated via SITADEL in the base setup.
-        self.assertEqual(herault["sitadelUpdatedDetectionsCount"], 0)
+        # No parcel was updated via SITADEL in the base setup.
+        self.assertEqual(herault["sitadelUpdatedParcelsCount"], 0)
 
         self.assertEqual(len(herault["communes"]), 1)
         commune = herault["communes"][0]
         self.assertEqual(commune["name"], "Montpellier")
         self.assertEqual(commune["uuid"], str(self.montpellier.uuid))
-        self.assertEqual(commune["detectionsCount"], 2)
+        # Per commune we count OBJECTS: two objects in Montpellier, neither in a zone.
+        self.assertEqual(commune["detectionObjectsCount"], 2)
+        self.assertEqual(commune["detectionObjectsInCustomZoneCount"], 0)
 
-    def test_detail_sitadel_updated_detections_count(self):
-        # Two more detections across both communes of the department, only some of which
-        # were last touched by the SITADEL import; deleted ones must not be counted.
+        # The base setup has two detections, both on "Hérault 2024", neither in a zone.
+        self.assertEqual(len(herault["detectionsByTileSet"]), 1)
+        by_tile_set = herault["detectionsByTileSet"][0]
+        self.assertEqual(by_tile_set["name"], "Hérault 2024")
+        self.assertEqual(by_tile_set["uuid"], str(self.tile_set.uuid))
+        self.assertEqual(by_tile_set["detectionsCount"], 2)
+        self.assertEqual(by_tile_set["detectionsInCustomZoneCount"], 0)
+
+    def test_detail_sitadel_updated_parcels_count(self):
+        # A parcel is "updated by SITADEL" when one of its detection objects carries a
+        # detection whose detection_data change reason is SITADEL. The figure counts
+        # DISTINCT parcels and rolls up across the department's communes.
         object_type = create_object_type(name="Pool")
 
-        # Montpellier: one SITADEL-updated detection.
-        montpellier_object = create_detection_object(
-            object_type=object_type, commune=self.montpellier
+        # Montpellier: one parcel updated by SITADEL, reached through TWO detection
+        # objects/detections on the SAME parcel -> still counted once.
+        montpellier_parcel = create_parcel(
+            commune=self.montpellier, id_parcellaire="341720000010"
         )
-        create_detection(
-            detection_object=montpellier_object,
-            tile_set=self.tile_set,
-            detection_data=create_detection_data(
-                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
-            ),
-        )
+        for _ in range(2):
+            obj = create_detection_object(
+                object_type=object_type,
+                commune=self.montpellier,
+                parcel=montpellier_parcel,
+            )
+            create_detection(
+                detection_object=obj,
+                tile_set=self.tile_set,
+                detection_data=create_detection_data(
+                    detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
+                ),
+            )
 
-        # Béziers (another commune of Hérault): one SITADEL-updated detection -> the
-        # count must roll up across all the department's communes.
+        # Béziers (another commune of Hérault): a second parcel updated by SITADEL ->
+        # the count must roll up across all the department's communes.
+        beziers_parcel = create_parcel(
+            commune=self.beziers, id_parcellaire="340320000020"
+        )
         beziers_object = create_detection_object(
-            object_type=object_type, commune=self.beziers
+            object_type=object_type, commune=self.beziers, parcel=beziers_parcel
         )
         create_detection(
             detection_object=beziers_object,
@@ -273,17 +296,153 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
             ),
         )
 
-        # A detection updated for another reason -> must NOT be counted.
+        # A parcel touched for another reason -> must NOT be counted.
+        other_parcel = create_parcel(
+            commune=self.montpellier, id_parcellaire="341720000030"
+        )
+        other_object = create_detection_object(
+            object_type=object_type, commune=self.montpellier, parcel=other_parcel
+        )
         create_detection(
-            detection_object=montpellier_object,
+            detection_object=other_object,
             tile_set=self.tile_set,
             detection_data=create_detection_data(
                 detection_validation_status_change_reason=DetectionValidationStatusChangeReason.EXTERNAL_API
             ),
         )
 
+        # A SITADEL detection whose object has NO parcel -> nothing to count.
+        parcelless_object = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        create_detection(
+            detection_object=parcelless_object,
+            tile_set=self.tile_set,
+            detection_data=create_detection_data(
+                detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
+            ),
+        )
+
         herault = self._get_detail(self.herault.uuid)
-        self.assertEqual(herault["sitadelUpdatedDetectionsCount"], 2)
+        self.assertEqual(herault["sitadelUpdatedParcelsCount"], 2)
+
+    def test_detail_commune_objects_in_custom_zone_count(self):
+        # Per-commune OBJECT counts: total, and the subset inside at least one ZAE.
+        object_type = create_object_type(name="Pool")
+
+        # An object in the existing custom zone AND a second one -> it must be counted
+        # once, not once per zone. (Objects count regardless of how many detections.)
+        in_zone = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        in_zone.geo_custom_zones.add(self.custom_zone)
+        other_zone = GeoCustomZone.objects.create(
+            name="Zone PLU 2",
+            geo_custom_zone_type=GeoCustomZoneType.COMMON,
+            geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+            color="#00FF00",
+            geometry=Polygon(
+                [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)],
+                srid=4326,
+            ),
+        )
+        in_zone.geo_custom_zones.add(other_zone)
+
+        # An object in NO custom zone -> excluded from the in-zae count.
+        create_detection_object(object_type=object_type, commune=self.montpellier)
+
+        herault = self._get_detail(self.herault.uuid)
+        commune = next(c for c in herault["communes"] if c["name"] == "Montpellier")
+        # base setup (2) + the two objects created here = 4 objects total
+        self.assertEqual(commune["detectionObjectsCount"], 4)
+        # only `in_zone` falls inside a custom zone (counted once despite two zones)
+        self.assertEqual(commune["detectionObjectsInCustomZoneCount"], 1)
+
+    def test_detail_detections_by_tile_set(self):
+        # Per-tile-set detection counts, split by whether the detection's object sits in
+        # a custom zone, rolled up across the department's communes.
+        object_type = create_object_type(name="Pool")
+        tile_set_b = create_tile_set(
+            name="Hérault 2023", date=datetime.date(2023, 1, 1)
+        )
+
+        # Montpellier, "Hérault 2024": one object IN a custom zone. Giving it a SECOND
+        # zone must not double-count its single detection (M2M join would multiply it).
+        in_zone_obj = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        in_zone_obj.geo_custom_zones.add(self.custom_zone)
+        second_zone = GeoCustomZone.objects.create(
+            name="Zone PLU bis",
+            geo_custom_zone_type=GeoCustomZoneType.COMMON,
+            geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+            color="#00FF00",
+            geometry=Polygon(
+                [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)],
+                srid=4326,
+            ),
+        )
+        in_zone_obj.geo_custom_zones.add(second_zone)
+        create_detection(detection_object=in_zone_obj, tile_set=self.tile_set)
+
+        # Béziers, "Hérault 2024": one object OUT of any custom zone -> the per-tile-set
+        # count must roll up across all the department's communes.
+        beziers_obj = create_detection_object(
+            object_type=object_type, commune=self.beziers
+        )
+        create_detection(detection_object=beziers_obj, tile_set=self.tile_set)
+
+        # Montpellier, "Hérault 2023": one object IN a custom zone.
+        other_in_zone = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        other_in_zone.geo_custom_zones.add(self.custom_zone)
+        create_detection(detection_object=other_in_zone, tile_set=tile_set_b)
+
+        herault = self._get_detail(self.herault.uuid)
+        by_name = {t["name"]: t for t in herault["detectionsByTileSet"]}
+
+        # "Hérault 2024": base setup added 2 detections (Montpellier, no zone); this test
+        # adds 1 in-zone (Montpellier, counted once despite two zones) + 1 out-of-zone
+        # (Béziers) -> 4 total, 1 in ZAE.
+        self.assertEqual(by_name["Hérault 2024"]["detectionsCount"], 4)
+        self.assertEqual(by_name["Hérault 2024"]["detectionsInCustomZoneCount"], 1)
+
+        # "Hérault 2023": a single in-zone detection.
+        self.assertEqual(by_name["Hérault 2023"]["detectionsCount"], 1)
+        self.assertEqual(by_name["Hérault 2023"]["detectionsInCustomZoneCount"], 1)
+
+        # Sorted by tile-set date, newest first.
+        dates = [t["date"] for t in herault["detectionsByTileSet"]]
+        self.assertEqual(dates, sorted(dates, reverse=True))
+
+    # --- caching contract ---
+
+    def test_list_does_not_compute_department_detail(self):
+        # The list view must serve the lean summary only and never compute/persist a
+        # per-department detail (the whole point of the two-tier cache).
+        self._get_list()
+        self.assertIsNone(
+            safe_cache_get(DeployedDataService._detail_cache_key(self.herault.uuid))
+        )
+
+    def test_detail_cache_is_bounded_and_refreshed_by_warm(self):
+        # First access computes and caches the department detail.
+        herault = self._get_detail(self.herault.uuid)
+        self.assertEqual(herault["communes"][0]["detectionObjectsCount"], 2)
+
+        # A new object lands in Montpellier. This slow-moving cache is intentionally NOT
+        # invalidated per write, so the stale value is still served.
+        create_detection_object(
+            object_type=create_object_type(name="Pool"), commune=self.montpellier
+        )
+        herault = self._get_detail(self.herault.uuid)
+        self.assertEqual(herault["communes"][0]["detectionObjectsCount"], 2)
+
+        # The warm refresh bumps the version, so the detail recomputes on next access.
+        DeployedDataService.refresh_cache()
+        herault = self._get_detail(self.herault.uuid)
+        self.assertEqual(herault["communes"][0]["detectionObjectsCount"], 3)
 
     def test_detail_user_groups_and_members(self):
         herault = self._get_detail(self.herault.uuid)

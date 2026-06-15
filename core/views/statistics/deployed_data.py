@@ -27,9 +27,12 @@ class DeployedDataUserGroupSerializer(serializers.Serializer):
 
 
 class DeployedDataCommuneSerializer(serializers.Serializer):
+    # Per commune we count detection OBJECTS (not Detection rows); the per-tile-set
+    # breakdown below counts detections.
     uuid = serializers.UUIDField()
     name = serializers.CharField()
-    detections_count = serializers.IntegerField()
+    detection_objects_count = serializers.IntegerField()
+    detection_objects_in_custom_zone_count = serializers.IntegerField()
 
 
 class DeployedDataCustomZoneSerializer(serializers.Serializer):
@@ -43,6 +46,18 @@ class DeployedDataTileSetSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     name = serializers.CharField()
     date = serializers.DateField()
+
+
+class DeployedDataDetectionsByTileSetSerializer(serializers.Serializer):
+    """Detection counts for one tile set (Detection.tile_set): total, and the subset
+    whose detection object falls inside at least one custom zone — same criteria as the
+    per-commune counts."""
+
+    uuid = serializers.UUIDField()
+    name = serializers.CharField()
+    date = serializers.DateField()
+    detections_count = serializers.IntegerField()
+    detections_in_custom_zone_count = serializers.IntegerField()
 
 
 class DeployedDataDepartmentSummarySerializer(serializers.Serializer):
@@ -61,12 +76,13 @@ class DeployedDataDepartmentSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     name = serializers.CharField()
     parcels_count = serializers.IntegerField()
-    sitadel_updated_detections_count = serializers.IntegerField()
+    sitadel_updated_parcels_count = serializers.IntegerField()
     communes_with_detections_count = serializers.IntegerField()
     communes = DeployedDataCommuneSerializer(many=True)
     user_groups = DeployedDataUserGroupSerializer(many=True)
     custom_zones = DeployedDataCustomZoneSerializer(many=True)
     tile_sets = DeployedDataTileSetSerializer(many=True)
+    detections_by_tile_set = DeployedDataDetectionsByTileSetSerializer(many=True)
 
 
 class StatisticsDeployedDataView(APIView):
