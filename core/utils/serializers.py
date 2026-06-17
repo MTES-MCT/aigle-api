@@ -11,7 +11,6 @@ class CommaSeparatedUUIDField(serializers.Field):
 
         uuid_list = data.split(",")
 
-        # Validate each UUID
         for value in uuid_list:
             try:
                 uuid.UUID(value)

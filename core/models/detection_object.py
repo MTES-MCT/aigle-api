@@ -52,7 +52,6 @@ class DetectionObject(
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [
-            models.Index(fields=["object_type"]),
             models.Index(fields=["object_type", "parcel"]),
             # Covering index for the Detection->DetectionObject join in full-dataset
             # per-commune aggregates (DeployedDataService): serves the join side as

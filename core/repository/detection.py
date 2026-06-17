@@ -68,8 +68,6 @@ class DetectionRepository(
         *args,
         **kwargs,
     ) -> QuerySet[Detection]:
-        # mixin filters
-
         queryset = self._filter_timestamped(
             queryset=queryset,
             filter_created_at=filter_created_at,
@@ -80,8 +78,6 @@ class DetectionRepository(
             filter_uuid_in=filter_uuid_in,
             filter_uuid_notin=filter_uuid_notin,
         )
-
-        # custom filters
 
         queryset = self._filter_collectivities(
             queryset=queryset,

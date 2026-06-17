@@ -51,12 +51,7 @@ class UserUserGroup(TimestampedModelMixin):
                 fields=["user", "user_group"], name="user_user_group_unique"
             ),
         ]
-        indexes = [
-            models.Index(
-                fields=["user_id", "user_group_id"],
-                name="idx_user_group_id",
-            ),
-        ]
+        indexes = []
 
     user_group_rights = ArrayField(
         models.CharField(

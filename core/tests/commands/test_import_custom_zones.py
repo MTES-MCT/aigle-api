@@ -72,7 +72,6 @@ def _insert_source_row(
 
 
 def _seed_categories(*layer_types):
-    """Create the GeoCustomZoneCategory rows for the given layer types."""
     categories = {}
     for index, layer_type in enumerate(layer_types):
         name = LAYER_TYPE_CATEGORY_NAME_MAP[layer_type]
@@ -122,7 +121,6 @@ class ImportCustomZonesCommandTests(BaseTestCase):
         call_command("import_custom_zones")
         self.assertEqual(GeoCustomZone.objects.count(), 1)
 
-        # Insert a second source row for the same department + layer_type and re-run.
         _insert_source_row("zfee", "34")
         with self.assertRaises(CommandError) as ctx:
             call_command("import_custom_zones")

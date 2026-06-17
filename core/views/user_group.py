@@ -96,10 +96,6 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
 
         return queryset
 
-    # ------------------------------------------------------------------
-    # Bulk CSV: export / preview / import
-    # ------------------------------------------------------------------
-
     @action(
         methods=["get"],
         detail=False,

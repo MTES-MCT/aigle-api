@@ -118,7 +118,6 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         return queryset
 
     def retrieve(self, request, uuid):
-        """Retrieve detection object with position saving logic moved to service."""
         instance = self.get_object()
         serializer = self.get_serializer(instance)
 
@@ -149,7 +148,6 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         x = params_serializer.data["lng"]
         y = params_serializer.data["lat"]
 
-        # Use service to find tile set
         tile_set = TileSetService.find_tile_set_by_coordinates(
             x=x,
             y=y,
@@ -163,7 +161,6 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
                 "Vous n'avez pas les droits pour chercher une détection ici"
             )
 
-        # Use service to find detection objects
         detection_objects = DetectionObjectService.find_detections_by_coordinates(
             x=x,
             y=y,
@@ -172,7 +169,6 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         )
 
         if detection_objects:
-            # Get the first detection object and prepare response data
             detection_object = detection_objects[0]
             most_recent_detection = detection_object.detections.order_by(
                 "-score"

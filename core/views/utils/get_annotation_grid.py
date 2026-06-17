@@ -68,7 +68,6 @@ def endpoint(request):
     # extend polygon to be sure to have all tiles
     polygon_requested = polygon_requested.buffer(0.01)
 
-    # Adjust x and y by GRID_SIZE for grouping
     tiles = (
         Tile.objects.filter(geometry__intersects=polygon_requested)
         .annotate(
@@ -96,7 +95,6 @@ def endpoint(request):
     all_geometries = MultiPolygon([tile["group_geometry"] for tile in grouped_tiles])
     sw_lng, sw_lat, ne_lng, ne_lat = all_geometries.extent
 
-    # we want to get all detections contained in the grid
     data_requested = request.GET.copy()
 
     data_requested["swLng"] = sw_lng
@@ -114,11 +112,9 @@ def endpoint(request):
     )
     detections_raw = queryset.all()
 
-    # Initialize result container
     grid_items_total = defaultdict(int)
     grid_items_reviewed = defaultdict(int)
 
-    # Iterate over detections and count occurrences in each grid cell
     for detection_raw in detections_raw:
         detection_centroid = detection_raw[2].centroid
         for tile in grouped_tiles:
@@ -130,7 +126,6 @@ def endpoint(request):
 
                 break
 
-    # Output results
     grid_with_counts = [
         {
             "geometry": tile["group_geometry"],

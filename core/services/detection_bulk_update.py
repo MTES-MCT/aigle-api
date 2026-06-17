@@ -10,8 +10,6 @@ from django.core.exceptions import BadRequest
 
 
 class DetectionBulkUpdateService:
-    """Service for handling bulk detection updates."""
-
     def __init__(self, user, scoped_user_group=None):
         self.user = user
         self.scoped_user_group = scoped_user_group
@@ -20,24 +18,18 @@ class DetectionBulkUpdateService:
     def update_multiple_detections(
         self, detections: List[Detection], update_data: Dict[str, Any]
     ) -> List[Detection]:
-        """Update multiple detections with business logic validation."""
-        # Check permissions for all geometries
         self._validate_edit_permissions(detections)
 
-        # Validate object type if provided
         object_type = self._validate_and_get_object_type(
             update_data.get("object_type_uuid")
         )
 
-        # Determine fields to update
         detection_data_fields_to_update = self._get_fields_to_update(update_data)
 
-        # Process updates
         detection_datas_to_update = []
         detection_objects_to_update = []
 
         for detection in detections:
-            # Update detection data fields
             if detection_data_fields_to_update:
                 self._update_detection_data_fields(
                     detection, detection_data_fields_to_update, update_data
@@ -46,12 +38,10 @@ class DetectionBulkUpdateService:
                 detection.detection_data.user_last_update = self.user
                 detection_datas_to_update.append(detection.detection_data)
 
-            # Update object type if provided
             if object_type:
                 detection.detection_object.object_type = object_type
                 detection_objects_to_update.append(detection.detection_object)
 
-        # Bulk update database
         if detection_data_fields_to_update or detection_objects_to_update:
             self._perform_bulk_updates(
                 detection_datas_to_update,
@@ -62,7 +52,6 @@ class DetectionBulkUpdateService:
         return detections
 
     def _validate_edit_permissions(self, detections: List[Detection]) -> None:
-        """Validate user has permission to edit all detections."""
         geometries = [detection.geometry for detection in detections]
         UserPermission(
             user=self.user, scoped_user_group=self.scoped_user_group
@@ -71,7 +60,6 @@ class DetectionBulkUpdateService:
     def _validate_and_get_object_type(
         self, object_type_uuid: Optional[str]
     ) -> Optional[ObjectType]:
-        """Validate and retrieve object type if UUID provided."""
         if not object_type_uuid:
             return None
 
@@ -83,7 +71,6 @@ class DetectionBulkUpdateService:
         return object_type
 
     def _get_fields_to_update(self, update_data: Dict[str, Any]) -> List[str]:
-        """Determine which detection data fields need updating."""
         fields = []
         if update_data.get("detection_control_status"):
             fields.append("detection_control_status")
@@ -97,7 +84,6 @@ class DetectionBulkUpdateService:
         fields_to_update: List[str],
         update_data: Dict[str, Any],
     ) -> None:
-        """Update detection data fields with new values."""
         for field in fields_to_update:
             if field == "detection_control_status":
                 detection.detection_data.set_detection_control_status(
@@ -117,7 +103,6 @@ class DetectionBulkUpdateService:
         detection_objects_to_update: List,
         detection_data_fields_to_update: List[str],
     ) -> None:
-        """Perform bulk database updates with history tracking."""
         from core.models.detection_data import DetectionData
         from core.models.detection_object import DetectionObject
         from simple_history.utils import bulk_update_with_history

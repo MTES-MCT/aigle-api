@@ -9,16 +9,13 @@ class RequestLoggingMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        # Generate request ID and start time
         request.id = str(uuid.uuid4())
         start_time = time.time()
 
         response = self.get_response(request)
 
-        # Log response
         duration = time.time() - start_time
 
-        # Log incoming request
         log_api_call(
             endpoint=request.path,
             method=request.method,

@@ -10,7 +10,6 @@ def get_objects(uuids: Optional[List[str]], model: models.Model):
     if uuids is None:
         return None
 
-    # remove potential duplicates
     uuids = list(set(uuids))
     objects = model.objects.filter(uuid__in=uuids).all()
 

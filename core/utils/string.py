@@ -5,15 +5,6 @@ import unicodedata
 
 
 def strip_accents(text: str) -> str:
-    """
-    Strip accents from input String.
-
-    :param text: The input string.
-    :type text: String.
-
-    :returns: The processed String.
-    :rtype: String.
-    """
     text = unicodedata.normalize("NFD", text)
     text = text.encode("ascii", "ignore")
     text = text.decode("utf-8")

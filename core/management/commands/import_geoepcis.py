@@ -71,7 +71,6 @@ class Command(BaseCommand):
 
             epci_serialized = serializer.validated_data
 
-            # get the department that have the biggest surface in common with epci
             department = (
                 GeoDepartment.objects.filter(
                     geometry__intersects=epci_serialized["geometry"]

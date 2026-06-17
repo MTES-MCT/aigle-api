@@ -114,7 +114,6 @@ class LuccaAnalyticsDatabaseConnector:
         self.cursor = self.connection.cursor(buffered=True)
 
     def test_connection(self):
-        # test connection
         self.cursor.execute("SELECT VERSION();")
 
         db_version = self.cursor.fetchone()
@@ -186,9 +185,6 @@ class LuccaAnalyticsDatabaseConnector:
 
         if self.connection:
             self.connection.close()
-
-
-# utils
 
 
 def _generate_sql_filter(filters: Optional[List[RowFilter]] = None) -> str:

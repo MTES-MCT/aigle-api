@@ -16,7 +16,6 @@ def log_api_call(
     duration_ms: Optional[str] = None,
     **kwargs,
 ):
-    """Log API calls"""
     logger = get_app_logger()
     logger.info(
         f"API call: {method} {endpoint}",

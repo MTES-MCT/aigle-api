@@ -12,8 +12,6 @@ from core.permissions.user import UserPermission
 
 
 class DetectionObjectService:
-    """Service for handling DetectionObject business logic."""
-
     @staticmethod
     def find_detections_by_coordinates(
         x: float,
@@ -22,7 +20,6 @@ class DetectionObjectService:
         tile_set: Optional[TileSet] = None,
         tile_set_types: Optional[List[TileSetType]] = None,
     ) -> List[DetectionObject]:
-        """Find detection objects at given coordinates with permission checks."""
         point = Point(x, y)
 
         detection_objects = DetectionObject.objects.filter(
@@ -47,7 +44,6 @@ class DetectionObjectService:
     def get_user_group_last_update(
         detection_object: DetectionObject,
     ) -> Optional[Dict[str, Any]]:
-        """Get the user group of the last user who updated this detection object."""
         from core.services.detection import DetectionService
         from core.serializers.user_group import UserGroupSerializer
 
@@ -80,8 +76,6 @@ class DetectionObjectService:
         tile_set_previews: Optional[List[TileSetPreview]] = None,
         scoped_user_group: Optional[UserGroup] = None,
     ):
-        """Get filtered detections queryset for a detection object."""
-        # Get tile set previews if not provided
         if tile_set_previews is None:
             tile_set_previews = TileSetPermission(
                 user=user, scoped_user_group=scoped_user_group
@@ -89,7 +83,6 @@ class DetectionObjectService:
                 filter_tile_set_intersects_geometry=detection_object.detections.first().geometry,
             )
 
-        # Filter detections by accessible tile sets
         return detection_object.detections.order_by("-tile_set__date").filter(
             tile_set__id__in=[preview["tile_set"].id for preview in tile_set_previews]
         )
@@ -100,7 +93,6 @@ class DetectionObjectService:
         user,
         scoped_user_group: Optional[UserGroup] = None,
     ):
-        """Get tile set previews data for a detection object."""
         if not detection_object.detections.exists():
             return []
 
@@ -116,7 +108,6 @@ class DetectionObjectService:
         user,
         scoped_user_group: Optional[UserGroup] = None,
     ) -> List[str]:
-        """Get user group rights for a detection object."""
         if not detection_object.detections.exists():
             return []
 
@@ -131,7 +122,6 @@ class DetectionObjectService:
     def get_custom_zones_reconciled(
         detection_object: DetectionObject,
     ) -> List[Dict[str, Any]]:
-        """Get reconciled custom zones for a detection object."""
         from core.serializers.utils.custom_zones import (
             reconciliate_custom_zones_with_sub,
         )
@@ -143,7 +133,6 @@ class DetectionObjectService:
 
     @staticmethod
     def save_user_position(user, x: float, y: float) -> None:
-        """Save user's last known position."""
         from core.services.user import UserService
 
         UserService.update_user_position(user=user, x=x, y=y)
@@ -154,7 +143,6 @@ class DetectionObjectService:
         user,
         scoped_user_group: Optional[UserGroup] = None,
     ) -> List[Dict[str, Any]]:
-        """Get detection history data for serialization."""
         detections = detection_object.detections.order_by("-tile_set__date").all()
 
         if not detections:
@@ -192,11 +180,9 @@ class DetectionObjectService:
         object_type_uuid: Optional[str] = None,
         scoped_user_group: Optional[UserGroup] = None,
     ) -> DetectionObject:
-        """Comprehensive update for detection object including business rules."""
         from core.services.detection import DetectionService
         from core.models.object_type import ObjectType
 
-        # Validate permissions
         latest_detection = DetectionService.get_most_recent_detection(
             detection_object=detection_object
         )
@@ -207,13 +193,11 @@ class DetectionObjectService:
             )
 
         with transaction.atomic():
-            # Update basic fields
             if address is not None:
                 detection_object.address = address
             if comment is not None:
                 detection_object.comment = comment
 
-            # Handle object type change
             if (
                 object_type_uuid
                 and str(detection_object.object_type.uuid) != object_type_uuid
@@ -229,7 +213,6 @@ class DetectionObjectService:
                     detection_object=detection_object
                 )
 
-                # Update validation status if needed
                 if (
                     latest_detection
                     and latest_detection.detection_data.detection_validation_status

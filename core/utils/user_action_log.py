@@ -26,8 +26,7 @@ _JSON_SCALARS = (str, int, float, bool)
 
 
 def _is_sensitive_key(key) -> bool:
-    """A field is sensitive if it looks like a password, whatever the naming
-    convention (password, re_password, currentPassword, newPassword, ...)."""
+    """Sensitive whatever the naming convention (re_password, newPassword, ...)."""
     return isinstance(key, str) and "password" in key.lower()
 
 
@@ -54,8 +53,6 @@ def _sanitize(value):
 
 
 def _serialize_request_data(data):
-    """Return a JSON-serializable, password-redacted snapshot of the request
-    body, suitable for storing in ``UserActionLog.data``."""
     return _sanitize(data)
 
 

@@ -73,10 +73,8 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
             )
             create_detection(detection_object=detection_object, tile_set=self.tile_set)
 
-        # A parcel in the department.
         create_parcel(commune=self.montpellier, id_parcellaire="341720000001")
 
-        # A user group associated to the department, with two members.
         self.group_department = create_user_group(
             name="DDTM Hérault", geo_zones=[self.herault]
         )
@@ -92,7 +90,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         )
         add_user_to_group(self.member_1, self.group_commune)
 
-        # A categorized custom zone associated to a commune of the department.
         self.category = GeoCustomZoneCategory.objects.create(
             name="PLU", color="#123456", name_short="PLU"
         )
@@ -109,8 +106,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         )
         self.custom_zone.geo_zones.add(self.montpellier)
 
-    # --- helpers ---
-
     def _detail_url(self, uuid):
         return reverse(URL_DETAIL, kwargs={"uuid": str(uuid)})
 
@@ -125,8 +120,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         response = self.client.get(self._detail_url(uuid), params or {})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         return response.json()
-
-    # --- list: permissions ---
 
     def test_list_unauthenticated_returns_401(self):
         response = self.client.get(reverse(URL_LIST))
@@ -146,8 +139,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         self.authenticate_user(self.super_admin)
         response = self.client.get(reverse(URL_LIST))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    # --- detail: permissions ---
 
     def test_detail_unauthenticated_returns_401(self):
         response = self.client.get(self._detail_url(self.herault.uuid))
@@ -173,8 +164,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         self.authenticate_user(self.super_admin)
         response = self.client.get(self._detail_url(self.gard.uuid))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-
-    # --- list: content ---
 
     def test_only_departments_with_detections_returned(self):
         names = {department["name"] for department in self._get_list()}
@@ -228,8 +217,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
 
         # Threshold 3 -> no commune qualifies -> Hérault dropped entirely.
         self.assertEqual(self._get_list({"minCommuneDetections": 3}), [])
-
-    # --- detail: content ---
 
     def test_detail_aggregated_fields(self):
         herault = self._get_detail(self.herault.uuid)
@@ -415,8 +402,6 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         # Sorted by tile-set date, newest first.
         dates = [t["date"] for t in herault["detectionsByTileSet"]]
         self.assertEqual(dates, sorted(dates, reverse=True))
-
-    # --- caching contract ---
 
     def test_list_does_not_compute_department_detail(self):
         # The list view must serve the lean summary only and never compute/persist a

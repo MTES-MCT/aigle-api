@@ -103,7 +103,6 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
         geometry_serializer = GeometrySerializer(data=request.GET)
         geometry_serializer.is_valid(raise_exception=True)
 
-        # Parse UUIDs if provided
         zone_uuids = None
         if geometry_serializer.data.get("uuids"):
             try:
@@ -112,7 +111,6 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                 # uuids is not a string
                 pass
 
-        # Use service to get zones by geometry
         zones_data = GeoCustomZoneService.get_zones_by_geometry(
             ne_lat=geometry_serializer.data["neLat"],
             ne_lng=geometry_serializer.data["neLng"],
@@ -123,10 +121,6 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
 
         serializer = GeoCustomZoneGeoFeatureSerializer(zones_data, many=True)
         return Response(serializer.data)
-
-    # ------------------------------------------------------------------
-    # Bulk CSV: export / preview / import
-    # ------------------------------------------------------------------
 
     @action(
         methods=["get"],

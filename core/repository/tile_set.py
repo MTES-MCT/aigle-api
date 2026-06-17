@@ -76,8 +76,6 @@ class TileSetRepository(
         if order_bys is None:
             order_bys = DEFAULT_VALUES["order_bys"]
 
-        # mixin filters
-
         queryset = self._filter_timestamped(
             queryset=queryset,
             filter_created_at=filter_created_at,
@@ -88,8 +86,6 @@ class TileSetRepository(
             filter_uuid_in=filter_uuid_in,
             filter_uuid_notin=filter_uuid_notin,
         )
-
-        # annotations
 
         queryset = self._annotate_intersection(
             queryset=queryset,
@@ -109,8 +105,6 @@ class TileSetRepository(
             filter_has_collectivities=filter_has_collectivities,
             filter_collectivities=filter_collectivities,
         )
-
-        # custom filters
 
         queryset = self._filter_tile_set_status_in(
             queryset=queryset,

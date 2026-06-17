@@ -61,8 +61,6 @@ class DeployedDataDetectionsByTileSetSerializer(serializers.Serializer):
 
 
 class DeployedDataDepartmentSummarySerializer(serializers.Serializer):
-    """Lightweight row for the list view."""
-
     uuid = serializers.UUIDField()
     name = serializers.CharField()
     communes_with_detections_count = serializers.IntegerField()
@@ -71,8 +69,6 @@ class DeployedDataDepartmentSummarySerializer(serializers.Serializer):
 
 
 class DeployedDataDepartmentSerializer(serializers.Serializer):
-    """Full per-department detail."""
-
     uuid = serializers.UUIDField()
     name = serializers.CharField()
     parcels_count = serializers.IntegerField()

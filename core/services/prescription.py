@@ -8,14 +8,10 @@ from core.models.detection_object import DetectionObject
 
 
 class PrescriptionService:
-    """Service for handling prescription business logic."""
-
     @staticmethod
     def compute_prescription(detection_object: DetectionObject) -> DetectionObject:
-        """Compute and update prescription status for detection object."""
         object_type = detection_object.object_type
 
-        # If prescription does not apply to this object type, reset all prescriptions
         if not object_type.prescription_duration_years:
             PrescriptionService._reset_prescriptions(detection_object)
             return detection_object
@@ -62,7 +58,6 @@ class PrescriptionService:
 
     @staticmethod
     def _reset_prescriptions(detection_object: DetectionObject) -> None:
-        """Reset all prescriptions for detection object."""
         detections_to_update = []
         detections_data_to_update = []
 

@@ -118,7 +118,6 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
         x = params_serializer.data["lng"]
         y = params_serializer.data["lat"]
 
-        # Use service to find tile set
         tile_set = TileSetService.find_tile_set_by_coordinates(
             x=x,
             y=y,
@@ -133,10 +132,6 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
             output_data = None
 
         return Response(output_data)
-
-    # ------------------------------------------------------------------
-    # Bulk CSV: export / preview / import
-    # ------------------------------------------------------------------
 
     @action(
         methods=["get"],

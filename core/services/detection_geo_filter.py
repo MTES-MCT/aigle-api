@@ -14,34 +14,24 @@ from core.repository.detection import (
 
 
 class DetectionGeoFilterService:
-    """Service for handling complex geographic detection filtering logic."""
-
     def __init__(self, user, scoped_user_group=None):
         self.user = user
         self.scoped_user_group = scoped_user_group
 
     def apply_filters(self, queryset: QuerySet, filter_params: dict) -> QuerySet:
-        """Apply geographic filtering logic to detection queryset."""
-        # Filter by object types
         queryset = self._filter_by_object_types(queryset, filter_params)
-
-        # Apply geographic and tile set filtering
         queryset = self._apply_geographic_filtering(queryset, filter_params)
-
-        # Apply custom zone filtering
         return self._apply_custom_zone_filtering(queryset, filter_params)
 
     def _filter_by_object_types(
         self, queryset: QuerySet, filter_params: dict
     ) -> QuerySet:
-        """Filter queryset by object types."""
         object_types_uuids = self._get_object_types_uuids(filter_params)
         return queryset.filter(
             detection_object__object_type__uuid__in=object_types_uuids
         )
 
     def _get_object_types_uuids(self, filter_params: dict) -> List[str]:
-        """Get object type UUIDs from parameters or user permissions."""
         object_types_uuids = (
             filter_params.get("objectTypesUuids").split(",")
             if filter_params.get("objectTypesUuids")
@@ -65,15 +55,12 @@ class DetectionGeoFilterService:
     def _apply_geographic_filtering(
         self, queryset: QuerySet, filter_params: dict
     ) -> QuerySet:
-        """Apply geographic bounding box and tile set filtering."""
-        # Get tile set UUIDs
         tile_sets_uuids = (
             filter_params.get("tileSetsUuids").split(",")
             if filter_params.get("tileSetsUuids")
             else []
         )
 
-        # Build polygon from bounding box parameters
         polygon_requested = self._build_polygon_from_bbox(filter_params)
 
         geometry_accessible = UserPermission(
@@ -100,7 +87,6 @@ class DetectionGeoFilterService:
         return queryset.filter(detection_tilesets_filter)
 
     def _build_polygon_from_bbox(self, filter_params: dict) -> Optional[Polygon]:
-        """Build polygon from bounding box coordinates."""
         ne_lat = filter_params.get("neLat")
         ne_lng = filter_params.get("neLng")
         sw_lat = filter_params.get("swLat")
@@ -116,7 +102,6 @@ class DetectionGeoFilterService:
     def _apply_custom_zone_filtering(
         self, queryset: QuerySet, filter_params: dict
     ) -> QuerySet:
-        """Apply custom zone filtering logic."""
         filter_custom_zone = RepoFilterCustomZone(
             custom_zone_uuids=(
                 filter_params.get("customZonesUuids").split(",")

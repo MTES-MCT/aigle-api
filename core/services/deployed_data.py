@@ -92,8 +92,6 @@ class DeployedDataService:
     department's own detections, which is meaningful.
     """
 
-    # --- Public API -------------------------------------------------------------
-
     @staticmethod
     def get_departments_summary(
         q: Optional[str] = None, min_commune_detections: int = 0
@@ -184,8 +182,6 @@ class DeployedDataService:
 
         return summary
 
-    # --- Threshold ---------------------------------------------------------------
-
     @staticmethod
     def _apply_min_commune_detections(
         department: dict, min_commune_detections: int
@@ -215,8 +211,6 @@ class DeployedDataService:
             "communes_with_detections_count": len(communes),
         }
 
-    # --- Cache keys --------------------------------------------------------------
-
     @staticmethod
     def _summary_cache_key() -> str:
         return (
@@ -240,16 +234,10 @@ class DeployedDataService:
         )
         return result or []
 
-    # --- Summary computation (all departments, lean) -----------------------------
-
     @staticmethod
     def _compute_summary() -> List[dict]:
-        # 1. Detection-OBJECT count per commune, in a single grouped scan. This tells us
-        #    which communes (hence departments) are deployed and feeds the per-commune
-        #    threshold applied at request time. Counts objects (not Detection rows) to
-        #    match the commune table in the detail. Count("commune_id") (non-null under
-        #    the filter, in the partial detobj_id_commune_idx) keeps it on index-only
-        #    scans (see the module docstring).
+        # Count("commune_id") (non-null under the filter, in the partial
+        # detobj_id_commune_idx) keeps this on an index-only scan (see the module docstring).
         objects_by_commune = defaultdict(int)
         for row in (
             DetectionObject.objects.filter(commune_id__isnull=False)
@@ -261,7 +249,6 @@ class DeployedDataService:
         if not objects_by_commune:
             return []
 
-        # 2. Per-department list of its communes' object counts (the threshold input).
         commune_counts_by_department = defaultdict(list)
         for commune in GeoCommune.objects.filter(
             id__in=list(objects_by_commune.keys())
@@ -280,8 +267,8 @@ class DeployedDataService:
             return []
         department_ids = [department["id"] for department in departments]
 
-        # 3. Map every geo_zone id (each department and ALL its communes) to its
-        #    department, so associations targeting any commune resolve to the department.
+        # Map every geo_zone id (each department and ALL its communes) to its department,
+        # so associations targeting any commune resolve to the department.
         commune_to_department = {
             row["id"]: row["department_id"]
             for row in GeoCommune.objects.filter(
@@ -294,8 +281,8 @@ class DeployedDataService:
         zone_to_department.update(commune_to_department)
         all_zone_ids = list(department_ids) + list(commune_to_department.keys())
 
-        # 4. Distinct users per department, across every group linked to the department
-        #    or one of its communes (a group's geo_zones may span several departments).
+        # Distinct users per department, across every group linked to the department or one
+        # of its communes (a group's geo_zones may span several departments).
         group_departments = defaultdict(set)
         for row in (
             UserGroup.objects.filter(geo_zones__id__in=all_zone_ids)
@@ -319,7 +306,6 @@ class DeployedDataService:
             for department_id in dept_ids:
                 users_by_department[department_id].update(members)
 
-        # 5. Tile-set years per department (from the geo_zones association).
         years_by_department = defaultdict(set)
         for row in (
             TileSet.objects.filter(geo_zones__id__in=all_zone_ids)
@@ -330,7 +316,6 @@ class DeployedDataService:
             if department_id is not None:
                 years_by_department[department_id].add(row["date"].year)
 
-        # 6. Assemble the lean per-department summary.
         result = []
         for department in departments:
             department_id = department["id"]
@@ -350,8 +335,6 @@ class DeployedDataService:
             )
 
         return result
-
-    # --- Detail computation (one department, full) -------------------------------
 
     @staticmethod
     def _compute_department_detail(uuid) -> Optional[dict]:

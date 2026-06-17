@@ -25,15 +25,12 @@ from core.permissions.user import UserPermission
 
 
 class DetectionService:
-    """Service for handling Detection business logic."""
-
     @staticmethod
     def get_linked_detections(
         detection_geometry: GEOSGeometry,
         object_type_id: int,
         exclude_tile_set_ids: Iterable[int],
     ) -> List[Detection]:
-        """Find detections linked to given geometry and object type."""
         linked_detections_queryset = Detection.objects
 
         linked_detections_queryset = linked_detections_queryset.filter(
@@ -56,7 +53,6 @@ class DetectionService:
             "detection_object", "detection_object__object_type", "tile_set"
         )
 
-        # Filter out detections that have too small intersection area
         return list(
             [
                 detection
@@ -72,7 +68,6 @@ class DetectionService:
     def get_most_recent_detection(
         detection_object: DetectionObject,
     ) -> Optional[Detection]:
-        """Get the most recent detection for a detection object."""
         return (
             detection_object.detections.exclude(
                 tile_set__tile_set_status=TileSetStatus.DEACTIVATED
@@ -98,18 +93,14 @@ class DetectionService:
         detection_data_data: Optional[Dict[str, Any]] = None,
         scoped_user_group=None,
     ) -> Detection:
-        """Create a new detection with full business logic."""
-        # Validate permissions
         UserPermission(
             user=user, scoped_user_group=scoped_user_group
         ).validate_geometry_edit_permission(geometry=geometry)
 
-        # Get tile set
         tile_set = TileSet.objects.filter(uuid=tile_set_uuid).first()
         if not tile_set:
             raise ValueError(f"Tile set with uuid {tile_set_uuid} not found")
 
-        # Find tile
         centroid = Centroid(geometry)
         tile = Tile.objects.filter(
             geometry__contains=centroid, z=TILE_DEFAULT_ZOOM
@@ -118,7 +109,6 @@ class DetectionService:
         if not tile:
             raise ValueError("Tile not found for specified geometry")
 
-        # Handle detection object
         detection_object = None
 
         if detection_object_uuid:
@@ -140,14 +130,12 @@ class DetectionService:
                 tile_set=tile_set,
             )
 
-        # Create detection data
         detection_data = DetectionService._create_detection_data(
             detection_data_data=detection_data_data,
             detection_object=detection_object,
             user=user,
         )
 
-        # Create detection
         detection = Detection(
             geometry=geometry,
             detection_object=detection_object,
@@ -157,7 +145,6 @@ class DetectionService:
         )
         detection.save()
 
-        # Update prescription
         PrescriptionService.compute_prescription(detection_object=detection_object)
 
         return detection
@@ -169,14 +156,12 @@ class DetectionService:
         detection_object_data: Dict[str, Any],
         tile_set: TileSet,
     ) -> DetectionObject:
-        """Create or find existing detection object."""
         object_type_uuid = detection_object_data.pop("object_type_uuid")
         object_type = ObjectType.objects.filter(uuid=object_type_uuid).first()
 
         if not object_type:
             raise ValueError(f"Object type with uuid {object_type_uuid} not found")
 
-        # Search for existing detection object
         linked_detections = DetectionService.get_linked_detections(
             detection_geometry=geometry,
             object_type_id=object_type.id,
@@ -186,19 +171,15 @@ class DetectionService:
         if linked_detections:
             return linked_detections[0].detection_object
 
-        # Create new detection object
         detection_object = DetectionObject(**detection_object_data)
         detection_object.object_type = object_type
 
-        # Find parcel
         parcel = (
             Parcel.objects.filter(geometry__contains=centroid)
             .select_related("commune")
             .defer("geometry", "commune__geometry")
             .first()
         )
-
-        # Find commune
 
         commune = (
             GeoCommune.objects.filter(geometry__contains=centroid)
@@ -213,7 +194,7 @@ class DetectionService:
         detection_object.commune_id = commune.id
         detection_object.save()
 
-        # Update geo_custom_zones — find zones that fully cover the detection geometry
+        # only zones fully covering the geometry, not merely intersecting it
         geo_custom_zones = GeoCustomZone.objects.filter(
             geo_zones__id__in=[
                 commune.id,
@@ -239,7 +220,6 @@ class DetectionService:
         detection_object: DetectionObject,
         user,
     ) -> DetectionData:
-        """Create detection data with business rules."""
         if detection_data_data:
             detection_data = DetectionData(**detection_data_data)
         else:
@@ -248,7 +228,6 @@ class DetectionService:
                 detection_validation_status=DetectionValidationStatus.SUSPECT,
             )
 
-        # Handle prescription status based on object type
         if (
             detection_data.detection_prescription_status is None
             and detection_object.object_type.prescription_duration_years
@@ -275,8 +254,6 @@ class DetectionService:
         user,
         scoped_user_group=None,
     ) -> Detection:
-        """Update detection object type with business rules."""
-        # Validate permissions
         UserPermission(
             user=user, scoped_user_group=scoped_user_group
         ).validate_geometry_edit_permission(geometry=detection.geometry)
@@ -289,7 +266,6 @@ class DetectionService:
             detection.detection_object.object_type = object_type
             detection.detection_object.save()
 
-            # Update prescription
             PrescriptionService.compute_prescription(
                 detection_object=detection.detection_object
             )

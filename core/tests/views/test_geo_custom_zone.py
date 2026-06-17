@@ -170,7 +170,6 @@ class GeoCustomZoneViewSetTests(BaseAPITestCase):
         self.assertIsNotNone(self.zone_1.geometry)
 
     def test_partial_update_sets_inactive_when_geometry_missing(self):
-        # A zone without geometry must be flagged INACTIVE on update.
         zone_no_geometry = GeoCustomZone.objects.create(
             name="Zone Without Geometry",
             geo_custom_zone_type=GeoCustomZoneType.COMMON,

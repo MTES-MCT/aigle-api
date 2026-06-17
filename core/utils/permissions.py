@@ -35,7 +35,6 @@ class CustomRolePermission(BasePermission):
         return False
 
 
-# base actions: list, retrieve, create, update, partial_update, destroy
 def get_admin_role_permission(
     restricted_actions: Optional[List[str]] = None,
 ) -> CustomRolePermission:

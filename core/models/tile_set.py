@@ -55,8 +55,5 @@ class TileSet(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [
-            models.Index(fields=["tile_set_status"]),
-            models.Index(fields=["tile_set_type"]),
             models.Index(fields=["date"]),
-            models.Index(fields=["tile_set_status", "date"]),
         ]

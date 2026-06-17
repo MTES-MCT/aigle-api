@@ -25,7 +25,6 @@ def log_event(info: str):
 
 
 def parse_date(date_string: str) -> date:
-    """Parse date string in YYYY-MM-DD format."""
     try:
         return datetime.strptime(date_string, "%Y-%m-%d").date()
     except ValueError:
@@ -88,8 +87,6 @@ class Command(BaseCommand):
         nbr_parcels_not_found = 0
 
         for row in history_rows:
-            # get parcel
-
             try:
                 parcels_from_lucca = extract_parcels(parcels_from_lucca=row["parcelle"])
             except ValueError:
@@ -119,7 +116,6 @@ class Command(BaseCommand):
                 .all()
             )
 
-            # Check which parcels were not found
             found_parcels = {(p.section, p.num_parcel) for p in parcels}
             requested_parcels = set(parcels_from_lucca)
             not_found = requested_parcels - found_parcels
@@ -202,8 +198,6 @@ class Command(BaseCommand):
             f"finished, nbr parcels updated: {nbr_parcels_updated}, nbr not found: {nbr_parcels_not_found}"
         )
 
-
-# utils
 
 PARCEL_LUCCA_SEPARATOR = ","
 

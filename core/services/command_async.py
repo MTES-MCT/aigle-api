@@ -9,8 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class CommandAsyncService:
-    """Service for handling asynchronous command execution."""
-
     @staticmethod
     def run_command_async(command_name: str, parameters: Dict[str, Any]) -> str:
         """Run a Django management command asynchronously via Celery.
@@ -54,7 +52,6 @@ class CommandAsyncService:
 
     @staticmethod
     def cancel_task(task_id: str) -> bool:
-        """Mark a CommandRun as canceled and revoke the Celery task."""
         from celery.result import AsyncResult
 
         command_run = CommandRun.objects.filter(task_id=task_id).first()
@@ -72,7 +69,6 @@ class CommandAsyncService:
         offset: Optional[int] = None,
         statuses: Optional[List[str]] = None,
     ) -> Tuple[List[CommandRun], int]:
-        """Get CommandRun instances with optional filtering and pagination."""
         queryset = CommandRun.objects.all().order_by("-created_at")
 
         if statuses:

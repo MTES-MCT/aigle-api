@@ -153,12 +153,9 @@ class GeoCustomZoneInputSerializer(
 
         instance.save()
 
-        # A custom zone with no geometry can't stay active. We check for the
-        # geometry at the database level: the field is deferred (see
-        # GeoZoneManager) because loading a department-wide multipolygon into
-        # Python is heavy enough to OOM a worker. Reading `instance.geometry`
-        # here would force exactly that load (returning a 502 on large zones),
-        # whereas `geometry__isnull` is evaluated in SQL and never transfers it.
+        # Check geometry via SQL: the field is deferred and reading
+        # instance.geometry loads a department-wide multipolygon that can OOM
+        # the worker (502 on large zones).
         geometry_is_set = GeoCustomZone.objects.filter(
             pk=instance.pk, geometry__isnull=False
         ).exists()

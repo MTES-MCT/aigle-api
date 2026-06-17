@@ -134,7 +134,6 @@ class Command(BaseCommand):
         return self._user_reviewer
 
     def _initialize_object_types_map(self):
-        """Initialize object types map when command is executed."""
         if self.object_types_map is None:
             all_object_types = ObjectType.objects.all()
             self.object_types_map = {
@@ -210,7 +209,6 @@ class Command(BaseCommand):
         return map(lambda row: dict(zip(table_columns, row)), self.cursor)
 
     def handle(self, *args, **options):
-        # Initialize object types map lazily when command is executed
         self._initialize_object_types_map()
 
         self.validate_arguments(options)
@@ -275,8 +273,6 @@ class Command(BaseCommand):
         log_event(f"Detections import finished for batch: {self.batch_id}")
 
     def queue_detection(self, detection_row: Dict[str, Any]):
-        # validate input data
-
         geometry_raw = detection_row.pop("geometry")
 
         if not geometry_raw:
@@ -304,10 +300,6 @@ class Command(BaseCommand):
 
         serialized_detection = serializer.validated_data
 
-        # get linked detections
-
-        # linked detections in the ones to insert
-
         if self.clean_step:
             linked_detections_to_insert = [
                 detection
@@ -327,10 +319,6 @@ class Command(BaseCommand):
                             self.tile_set.name} and is going to be inserted. Skipping...")
                         return
 
-        # linked detections already in the database
-
-        # we filter out detections that have too small intersection area with the detection
-
         if self.clean_step:
             linked_detections = DetectionService.get_linked_detections(
                 detection_geometry=geometry,
@@ -339,8 +327,6 @@ class Command(BaseCommand):
             )
 
             # WE DO NOT FILTER OUT DETECTIONS THAT ARE NOT IN THE SAME TILE SET ANYMORE
-
-            # deal with linked detections
 
             linked_detection_same_tileset = next(
                 (
@@ -361,8 +347,6 @@ class Command(BaseCommand):
                 object_type_id=object_type.id,
                 exclude_tile_set_ids=[self.tile_set.id],
             )
-
-        # create detection
 
         centroid = Centroid(geometry)
         tile = Tile.objects.filter(
@@ -389,8 +373,6 @@ class Command(BaseCommand):
                 log_event("Tile not found for detection, skipping...")
                 return
 
-        # detection data
-
         detection_data = DetectionData(
             detection_control_status=serialized_detection["detection_control_status"],
             detection_validation_status=serialized_detection[
@@ -405,8 +387,6 @@ class Command(BaseCommand):
 
         if serialized_detection["user_reviewed"]:
             detection_data.user_last_update = self.user_reviewer
-
-        # detection object
 
         if linked_detections:
             linked_detection = linked_detections[0]
@@ -469,8 +449,6 @@ class Command(BaseCommand):
                 detection_data.detection_validation_status = (
                     DetectionValidationStatus.DETECTED_NOT_VERIFIED
                 )
-
-        # detection
 
         detection = Detection(
             geometry=geometry,

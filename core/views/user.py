@@ -141,10 +141,6 @@ class UserViewSet(
             user=self.request.user, queryset=queryset
         )
 
-    # ------------------------------------------------------------------
-    # Bulk CSV: export / preview / import
-    # ------------------------------------------------------------------
-
     @action(
         methods=["get"],
         detail=False,

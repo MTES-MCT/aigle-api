@@ -7,6 +7,4 @@ class UuidModelMixin(models.Model):
 
     class Meta:
         abstract = True
-        indexes = [
-            models.Index(fields=["uuid"], name="%(class)s_uuid_idx"),
-        ]
+        indexes = []

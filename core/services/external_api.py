@@ -17,8 +17,6 @@ from rest_framework.exceptions import ValidationError
 
 
 class ExternalApiService:
-    """Service for handling external API business logic."""
-
     @staticmethod
     def update_control_status(
         insee_code: str,

@@ -20,11 +20,8 @@ from core.utils.user_action_log import UserActionLogMixin
 
 class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
     permission_classes = [SuperAdminRoleModifyActionPermission]
-    # Speak raw JSON on these routes: the default camelCase renderer/parser would mangle the
-    # CLI-flag keys inside CommandRun.arguments (e.g. "--table-name"), which the admin UI
-    # replays verbatim into the run-command form. Parameters go in, get stored, and come back
-    # out untouched. (Other fields are returned snake_case here too — the frontend models for
-    # this admin-only feature expect that.)
+    # Raw JSON, not camelCase: the default renderer/parser would mangle CLI-flag keys in
+    # CommandRun.arguments (e.g. "--table-name"). Frontend models for this admin feature expect snake_case.
     renderer_classes = [JSONRenderer]
     parser_classes = [JSONParser]
 

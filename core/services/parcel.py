@@ -17,15 +17,12 @@ if TYPE_CHECKING:
 
 
 class ParcelService:
-    """Service for handling Parcel business logic."""
-
     @staticmethod
     def get_parcel_detail(
         uuid: str,
         user: "User",
         scoped_user_group: Optional[UserGroup] = None,
     ) -> Optional[Parcel]:
-        """Get parcel detail with permissions check."""
         user_permission = UserPermission(user, scoped_user_group=scoped_user_group)
         collectivity_filter = user_permission.get_collectivity_filter()
         object_types_with_status = user_permission.get_user_object_types_with_status()
@@ -68,7 +65,6 @@ class ParcelService:
     def log_parcel_download(
         user: "User", parcel_uuid: str, detection_object_uuid: Optional[str] = None
     ) -> None:
-        """Log parcel download analytics."""
         create_log(
             user,
             AnalyticLogType.REPORT_DOWNLOAD,
@@ -82,7 +78,6 @@ class ParcelService:
     def get_section_suggestions(
         queryset: QuerySet, section_query: str, limit: int = 10
     ) -> List[str]:
-        """Get section suggestions based on search query."""
         from django.db.models import Value, Case, When, IntegerField
 
         queryset = queryset.annotate(
@@ -99,7 +94,6 @@ class ParcelService:
     def get_num_parcel_suggestions(
         queryset: QuerySet, num_parcel_query: str, limit: int = 10
     ) -> List[str]:
-        """Get num_parcel suggestions based on search query."""
         queryset = queryset.annotate(
             starts_with_q=Case(
                 When(num_parcel__startswith=num_parcel_query, then=Value(1)),
@@ -117,8 +111,6 @@ class ParcelService:
 
     @staticmethod
     def get_parcel_overview_statistics(queryset: QuerySet) -> Dict[str, int]:
-        """Calculate parcel overview statistics."""
-        # Annotate each parcel with detection validation status counts
         queryset = queryset.annotate(
             total_detections=Count("detection_objects__detections__detection_data"),
             not_verified_count=Count(
@@ -159,7 +151,6 @@ class ParcelService:
             ),
         )
 
-        # Use conditional aggregation to count both categories in a single query
         result = queryset.aggregate(
             not_verified=Sum(
                 Case(
@@ -202,15 +193,11 @@ class ParcelService:
 
     @staticmethod
     def get_parcel_custom_geo_zones(parcel: Parcel) -> List[Dict[str, Any]]:
-        """Get custom geo zones for a parcel with reconciliation.
-
-        Uses prefetched data from detection_objects when available.
-        """
+        """Relies on prefetched detection_objects when available."""
         from core.serializers.utils.custom_zones import (
             reconciliate_custom_zones_with_sub,
         )
 
-        # Collect geo custom zones and sub custom zones from all detection objects
         geo_custom_zones_set = set()
         sub_custom_zones_set = set()
 
@@ -229,7 +216,6 @@ class ParcelService:
         user: "User",
         scoped_user_group: Optional[UserGroup] = None,
     ) -> List[Dict[str, Any]]:
-        """Get tile set previews data for a parcel."""
         from core.permissions.tile_set import TileSetPermission
 
         return TileSetPermission(
@@ -238,7 +224,6 @@ class ParcelService:
 
     @staticmethod
     def get_parcel_detections_updated_at(parcel: Parcel) -> Optional[Any]:
-        """Get the minimum detection update timestamp for a parcel."""
         updated_at_values = []
 
         for detection_object in parcel.detection_objects.all():

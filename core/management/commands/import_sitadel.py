@@ -138,8 +138,7 @@ class Command(BaseCommand):
 
     @staticmethod
     def get_parcels(data: List[DataOutputRow]):
-        # we extract unique parcels to simplify sql request
-        # structure: Set[(commune, section, num)]
+        # dedup parcels to keep the SQL OR-filter small. structure: Set[(commune, section, num)]
         unique_parcels: Set[Tuple[str, str, int]] = set()
 
         for item in data:
@@ -201,14 +200,11 @@ class Command(BaseCommand):
     def reconcile_parcels(
         data: List[DataOutputRow], parcels: List[Parcel]
     ) -> List[DataOutputRow]:
-        # Create a lookup dictionary for fast parcel matching
-        # Key: (commune_iso_code, section, num_parcel)
         parcel_lookup = {
             (parcel.commune.iso_code, parcel.section, parcel.num_parcel): parcel
             for parcel in parcels
         }
 
-        # Populate each data item's parcels field
         for item in data:
             commune_code = item.data_input["COMM"]
             matched_parcels = []
@@ -252,7 +248,6 @@ class Command(BaseCommand):
                             or detection.detection_data
                         )
 
-                        # if authorization already exists, we skip
                         if any(
                             auth.authorization_id == item.data_input["NUM_DAU"]
                             for auth in detection_data.detection_authorizations.all()
@@ -309,9 +304,6 @@ class Command(BaseCommand):
 {'\n'.join([f'- {dpt}: {len(self.dpt_detection_objects_ids_updated_map.get(dpt, set()))} detection objects, {len(self.dpt_parcels_ids_updated_map.get(dpt, set()))} parcels' for dpt in departments])}
 """
         )
-
-
-# utils
 
 
 def get_num_parcel(num_cadastre: str) -> Optional[int]:

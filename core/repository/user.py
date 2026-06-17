@@ -31,8 +31,6 @@ class UserRepository(
         *args,
         **kwargs,
     ) -> QuerySet[User]:
-        # mixin filters
-
         queryset = self._filter_timestamped(
             queryset=queryset,
             filter_created_at=filter_created_at,

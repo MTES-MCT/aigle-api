@@ -172,9 +172,6 @@ class Command(BaseCommand):
         log_event(f"IMPORT PVS: list of not found saved here={csv_not_found_filename}")
 
 
-# utils
-
-
 def get_and_create_users_last_update(user_group_names: Iterable[str]) -> List[User]:
     emails_user_group_names_map = {
         get_email_user_last_update(user_group_name): user_group_name

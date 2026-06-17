@@ -94,9 +94,7 @@ class ObjectTypeViewSetTests(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_delete_globally_forbidden_even_for_super_admin(self):
-        # DELETE is disabled for every BaseViewSetMixin ViewSet (see
-        # common/views/base.py): even an authorized super admin gets 405, and the
-        # row is left untouched.
+        # BaseViewSetMixin disables DELETE globally (common/views/base.py): 405 even for super admin.
         self.authenticate_user(self.super_admin)
         url = reverse(
             "ObjectTypeViewSet-detail", kwargs={"uuid": str(self.object_type_2.uuid)}

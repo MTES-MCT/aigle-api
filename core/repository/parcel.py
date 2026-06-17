@@ -90,8 +90,6 @@ class ParcelRepository(
         *args,
         **kwargs,
     ) -> QuerySet[Parcel]:
-        # mixin filters
-
         queryset = self._filter_timestamped(
             queryset=queryset,
             filter_created_at=filter_created_at,
@@ -102,8 +100,6 @@ class ParcelRepository(
             filter_uuid_in=filter_uuid_in,
             filter_uuid_notin=filter_uuid_notin,
         )
-
-        # custom filters
 
         queryset = self._filter_collectivities(
             queryset=queryset,
@@ -137,8 +133,6 @@ class ParcelRepository(
             filter_num_parcel=filter_num_parcel,
         )
 
-        # annotations
-
         queryset = self._annotate_commune(
             queryset=queryset,
             with_commune=with_commune,
@@ -167,8 +161,6 @@ class ParcelRepository(
             filter_geo_custom_zones=filter_geo_custom_zones,
         )
 
-        # custom filters
-
         queryset = self._filter_detections_count_gt(
             queryset=queryset,
             filter_detections_count_gt=filter_detections_count_gt,
@@ -185,7 +177,6 @@ class ParcelRepository(
         if not with_commune:
             return queryset
 
-        # Use select_related for ForeignKey relationship for better performance
         queryset = queryset.select_related("commune")
 
         if not with_commune_geometry:
@@ -229,7 +220,6 @@ class ParcelRepository(
 
         q = Q()
 
-        # Score filter
         if filter_detection.filter_score is not None:
             score_q = Q(
                 Q(
@@ -248,7 +238,6 @@ class ParcelRepository(
             )
             q &= score_q
 
-        # Object type filter
         if filter_detection.filter_object_type_uuid_in is not None:
             q &= Q(
                 **{
@@ -256,7 +245,6 @@ class ParcelRepository(
                 }
             )
 
-        # Custom zone filter
         if filter_detection.filter_custom_zone is not None:
             if filter_detection.filter_custom_zone.custom_zone_uuids:
                 if (
@@ -296,7 +284,6 @@ class ParcelRepository(
                     }
                 )
 
-        # Tile set filter
         if filter_detection.filter_tile_set_uuid_in is not None:
             q &= Q(
                 **{
@@ -304,13 +291,11 @@ class ParcelRepository(
                 }
             )
 
-        # Parcel filter
         if filter_detection.filter_parcel_uuid_in is not None:
             q &= Q(
                 **{f"{prefix}parcel__uuid__in": filter_detection.filter_parcel_uuid_in}
             )
 
-        # Detection validation status filter
         if filter_detection.filter_detection_validation_status_in is not None:
             q &= Q(
                 **{
@@ -318,7 +303,6 @@ class ParcelRepository(
                 }
             )
 
-        # Detection control status filter
         if filter_detection.filter_detection_control_status_in is not None:
             q &= Q(
                 **{
@@ -326,7 +310,6 @@ class ParcelRepository(
                 }
             )
 
-        # Prescription filter
         if filter_detection.filter_prescribed is not None:
             if filter_detection.filter_prescribed:
                 q &= Q(
@@ -363,7 +346,6 @@ class ParcelRepository(
         if not with_detections_count and filter_detections_count_gt is None:
             return queryset
 
-        # Apply detection filter to the count annotation using Parcel context (with detection_objects__ prefix)
         detection_filter_q = ParcelRepository._build_detection_filter_q(
             filter_detection, prefix="detection_objects__"
         )
@@ -385,7 +367,6 @@ class ParcelRepository(
         if not with_detections_objects_types:
             return queryset
 
-        # Build detection filter for DetectionObject context and apply to prefetch
         detection_filter_q = ParcelRepository._build_detection_object_filter_q(
             filter_detection
         )
@@ -509,27 +490,13 @@ class ParcelRepository(
     def _build_detection_object_filter_q(
         filter_detection: Optional[DetectionFilter] = None,
     ) -> Q:
-        """
-        Build a Q object for filtering DetectionObject querysets.
-
-        This method converts detection filters from Parcel context to DetectionObject context
-        by using the correct field relationships:
-        - DetectionObject -> Detection (via 'detections' related name)
-        - DetectionObject -> ObjectType (direct foreign key)
-        - DetectionObject -> GeoCustomZone (many-to-many)
-
-        Args:
-            filter_detection: Detection filter with various criteria
-
-        Returns:
-            Q object for filtering DetectionObject querysets
-        """
+        """Q for DetectionObject querysets: detections (related name), object_type (FK), geo_custom_zones (M2M)."""
         if filter_detection is None or filter_detection.is_empty():
             return Q()
 
         q = Q()
 
-        # Score filter: Match detections with score >= threshold OR interface-drawn sources
+        # interface-drawn detections bypass the score threshold
         if filter_detection.filter_score is not None:
             score_q = Q(
                 Q(
@@ -546,14 +513,11 @@ class ParcelRepository(
             )
             q &= score_q
 
-        # Object type filter: Filter by specific object types
         if filter_detection.filter_object_type_uuid_in is not None:
             q &= Q(object_type__uuid__in=filter_detection.filter_object_type_uuid_in)
 
-        # Custom zone filter: Filter by custom geographic zones
         if filter_detection.filter_custom_zone is not None:
             if filter_detection.filter_custom_zone.custom_zone_uuids:
-                # Apply zone filter based on interface drawn preference
                 if (
                     filter_detection.filter_custom_zone.interface_drawn
                     == RepoFilterInterfaceDrawn.ALL
@@ -591,30 +555,25 @@ class ParcelRepository(
                         geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids
                     )
 
-            # Apply interface drawn exclusion filter if specified
             if (
                 filter_detection.filter_custom_zone.interface_drawn
                 == RepoFilterInterfaceDrawn.NONE
             ):
                 q &= ~Q(detections__detection_source=DetectionSource.INTERFACE_DRAWN)
 
-        # Parcel filter: Filter by specific parcels
         if filter_detection.filter_parcel_uuid_in is not None:
             q &= Q(parcel__uuid__in=filter_detection.filter_parcel_uuid_in)
 
-        # Detection validation status filter: Filter by validation status
         if filter_detection.filter_detection_validation_status_in is not None:
             q &= Q(
                 detections__detection_data__detection_validation_status__in=filter_detection.filter_detection_validation_status_in
             )
 
-        # Detection control status filter: Filter by control status
         if filter_detection.filter_detection_control_status_in is not None:
             q &= Q(
                 detections__detection_data__detection_control_status__in=filter_detection.filter_detection_control_status_in
             )
 
-        # Prescription filter: Filter by prescription status
         if filter_detection.filter_prescribed is not None:
             if filter_detection.filter_prescribed:
                 q &= Q(
@@ -630,10 +589,7 @@ class ParcelRepository(
                     )
                 )
 
-        # Additional filter: Apply tile permissions and other complex filters
         if filter_detection.additional_filter is not None:
-            # Transform the additional_filter from Parcel context to DetectionObject context
-            # by removing the "detection_objects__" prefix from field paths
             transformed_q = ParcelRepository._transform_q_for_detection_object(
                 filter_detection.additional_filter
             )
@@ -643,22 +599,7 @@ class ParcelRepository(
 
     @staticmethod
     def _transform_q_for_detection_object(q_obj: Q) -> Q:
-        """
-        Transform a Q object from Parcel context to DetectionObject context.
-
-        This method recursively transforms field lookups by removing the 'detection_objects__'
-        prefix, allowing filters designed for Parcel querysets to be used with DetectionObject querysets.
-
-        Example transformation:
-        - 'detection_objects__detections__score__gte' → 'detections__score__gte'
-        - 'detection_objects__object_type__uuid__in' → 'object_type__uuid__in'
-
-        Args:
-            q_obj: Q object with field paths in Parcel context
-
-        Returns:
-            Q object with field paths adapted for DetectionObject context
-        """
+        """Strip the 'detection_objects__' prefix so Parcel-context filters apply to DetectionObject querysets."""
         if not q_obj:
             return Q()
 
@@ -666,7 +607,6 @@ class ParcelRepository(
 
         for child in q_obj.children:
             if isinstance(child, Q):
-                # Recursively transform nested Q objects
                 transformed_child = ParcelRepository._transform_q_for_detection_object(
                     child
                 )
@@ -675,7 +615,6 @@ class ParcelRepository(
                 else:
                     new_q |= transformed_child
             elif isinstance(child, tuple) and len(child) == 2:
-                # Transform field lookups by removing detection_objects__ prefix
                 field_lookup, value = child
                 if field_lookup.startswith("detection_objects__"):
                     new_field_lookup = field_lookup[len("detection_objects__") :]
@@ -689,7 +628,6 @@ class ParcelRepository(
                 else:
                     new_q |= child_q
 
-        # Preserve negation
         if q_obj.negated:
             new_q.negate()
 
@@ -754,7 +692,6 @@ class ParcelRepository(
         if filter_detection is None or filter_detection.is_empty():
             return queryset
 
-        # Build a combined Q object to apply all filters at once
         q = Q()
 
         if filter_geo_custom_zones is not None:
@@ -762,7 +699,6 @@ class ParcelRepository(
                 filter_geo_custom_zones, "detection_objects__"
             )
 
-        # Score filter
         if filter_detection.filter_score is not None:
             score_q = Q(
                 Q(
@@ -779,13 +715,11 @@ class ParcelRepository(
             )
             q &= score_q
 
-        # Object type filter
         if filter_detection.filter_object_type_uuid_in is not None:
             q &= Q(
                 detection_objects__object_type__uuid__in=filter_detection.filter_object_type_uuid_in
             )
 
-        # Custom zone filter
         if filter_detection.filter_custom_zone is not None:
             if filter_detection.filter_custom_zone.custom_zone_uuids:
                 if (
@@ -817,31 +751,26 @@ class ParcelRepository(
                     detection_objects__detections__detection_source=DetectionSource.INTERFACE_DRAWN
                 )
 
-        # Tile set filter
         if filter_detection.filter_tile_set_uuid_in is not None:
             q &= Q(
                 detection_objects__detections__tile_set__uuid__in=filter_detection.filter_tile_set_uuid_in
             )
 
-        # Parcel filter
         if filter_detection.filter_parcel_uuid_in is not None:
             q &= Q(
                 detection_objects__parcel__uuid__in=filter_detection.filter_parcel_uuid_in
             )
 
-        # Detection validation status filter
         if filter_detection.filter_detection_validation_status_in is not None:
             q &= Q(
                 detection_objects__detections__detection_data__detection_validation_status__in=filter_detection.filter_detection_validation_status_in
             )
 
-        # Detection control status filter
         if filter_detection.filter_detection_control_status_in is not None:
             q &= Q(
                 detection_objects__detections__detection_data__detection_control_status__in=filter_detection.filter_detection_control_status_in
             )
 
-        # Prescription filter
         if filter_detection.filter_prescribed is not None:
             if filter_detection.filter_prescribed:
                 q &= Q(

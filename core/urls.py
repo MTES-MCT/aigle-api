@@ -89,7 +89,6 @@ urlpatterns += [
     ),
 ]
 
-# statistics
 urlpatterns += [
     path(
         "statistics/validation-status-evolution/",

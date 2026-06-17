@@ -4,12 +4,9 @@ import logging_loki
 
 
 def setup_scaleway_logger():
-    """
-    Setup Scaleway Cockpit logger using Loki (only for production/preprod)
-    """
+    """Loki handler is only wired up for production/preprod."""
     environment = os.environ.get("ENVIRONMENT", "development")
 
-    # Only use Scaleway logging in production/preprod
     if environment in ["production", "preprod"]:
         handler = logging_loki.LokiHandler(
             url=os.environ.get("SCW_COCKPIT_URL"),
@@ -27,7 +24,6 @@ def setup_scaleway_logger():
 
         return logger
     else:
-        # For local development, just return a basic logger
         logger = logging.getLogger(f"django-api-{environment}")
         logger.setLevel(logging.DEBUG)
         return logger

@@ -10,14 +10,11 @@ from core.models.object_type_category import (
 
 
 class ObjectTypeCategoryService:
-    """Service for handling ObjectTypeCategory business logic."""
-
     @staticmethod
     def create_object_type_category(
         name: str,
         object_type_category_object_types: Optional[List[Dict[str, Any]]] = None,
     ) -> ObjectTypeCategory:
-        """Create object type category with object type relationships."""
         with transaction.atomic():
             instance = ObjectTypeCategory(name=name)
             instance.save()
@@ -35,7 +32,6 @@ class ObjectTypeCategoryService:
         name: Optional[str] = None,
         object_type_category_object_types: Optional[List[Dict[str, Any]]] = None,
     ) -> ObjectTypeCategory:
-        """Update object type category with object type relationships."""
         with transaction.atomic():
             if name is not None:
                 instance.name = name
@@ -53,11 +49,9 @@ class ObjectTypeCategoryService:
         object_type_category: ObjectTypeCategory,
         object_type_category_object_types_raw: List[Dict[str, Any]],
     ) -> None:
-        """Set object type relationships for category."""
         if not object_type_category_object_types_raw:
             return
 
-        # Validate object types exist
         object_type_uuids_statuses_map = {
             otcot["object_type_uuid"]: otcot["object_type_category_object_type_status"]
             for otcot in object_type_category_object_types_raw
@@ -74,7 +68,6 @@ class ObjectTypeCategoryService:
                 f"Some object types were not found, uuids: {', '.join(uuids_not_found)}"
             )
 
-        # Create new relationships
         object_type_category_object_types = []
         for object_type in object_types:
             object_type_category_object_types.append(
@@ -87,7 +80,6 @@ class ObjectTypeCategoryService:
                 )
             )
 
-        # Remove old relationships and create new ones
         previous_relationships = (
             object_type_category.object_type_category_object_types.all()
         )

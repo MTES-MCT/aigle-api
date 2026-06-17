@@ -14,8 +14,6 @@ from core.utils.string import to_array, to_bool, to_enum_array
 
 
 class ParcelFilterService:
-    """Service for handling complex parcel filtering logic."""
-
     def __init__(self, user, scoped_user_group: Optional[UserGroup] = None):
         self.user = user
         self.scoped_user_group = scoped_user_group
@@ -27,8 +25,6 @@ class ParcelFilterService:
         filter_has_detections: bool = False,
         with_details: bool = False,
     ) -> QuerySet:
-        """Apply complex filtering logic to parcel queryset."""
-        # Get collectivity filter based on user permissions
         collectivity_filter = UserPermission(
             user=self.user, scoped_user_group=self.scoped_user_group
         ).get_collectivity_filter(
@@ -37,7 +33,6 @@ class ParcelFilterService:
             regions_uuids=to_array(filter_params.get("regionsUuids")),
         )
 
-        # Get tile set permissions
         repo = ParcelRepository(initial_queryset=queryset)
 
         filter_args = {
@@ -74,16 +69,13 @@ class ParcelFilterService:
             filter_args["with_detections_count"] = True
             filter_args["with_detections_objects_types"] = True
 
-        # Apply repository filters
         queryset = repo.filter_(**filter_args)
 
-        # Apply ordering
         return self._apply_ordering(queryset, filter_params.get("ordering"))
 
     def _build_detection_filter(
         self, filter_params: dict, additional_filter
     ) -> DetectionFilter:
-        """Build complex detection filter from parameters."""
         return DetectionFilter(
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE,
@@ -117,7 +109,6 @@ class ParcelFilterService:
         )
 
     def _apply_ordering(self, queryset: QuerySet, ordering: Optional[str]) -> QuerySet:
-        """Apply ordering logic to queryset."""
         if not ordering:
             return queryset
 
