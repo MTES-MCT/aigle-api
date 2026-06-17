@@ -14,8 +14,7 @@ from core.models.geo_sub_custom_zone import GeoSubCustomZone
 
 class ParcelManager(models.Manager):
     def get_queryset(self):
-        # by default we defer geometry field as it's heavy to load in memory and not necessary
-        # we prefer to handle geometric operations at database level for better performances
+        # by default we defer geometry field as it's heavy to load in memory; handle geo ops at DB level
         return super().get_queryset().defer("geometry")
 
 
@@ -46,7 +45,6 @@ class Parcel(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [
-            models.Index(fields=["commune"]),
             models.Index(fields=["section", "num_parcel", "commune"]),
             models.Index(fields=["num_parcel"]),
             models.Index(fields=["section"]),

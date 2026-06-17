@@ -101,10 +101,8 @@ class TileSetPermission(
         )
         tile_sets_most_recent_map[tile_set_six_years.id] = tile_set_six_years
 
-        # append most recent
         tile_sets_most_recent_map[tile_sets[0].id] = tile_sets[0]
 
-        # fill with most recent that are not already included
         for tile_set in tile_sets:
             if not tile_sets_most_recent_map.get(tile_set.id):
                 tile_sets_most_recent_map[tile_set.id] = tile_set
@@ -141,7 +139,6 @@ class TileSetPermission(
         for geo_zone in geo_zones_accessibles:
             geo_zones_accessibles_map[geo_zone["geo_zone_type"]].append(geo_zone["id"])
 
-        # we filter initial queryset with the geo zones accessible to the user
         self.repository.initial_queryset = self.repository.filter_(
             queryset=self.repository.initial_queryset,
             filter_collectivities=CollectivityRepoFilter(
@@ -151,7 +148,6 @@ class TileSetPermission(
             ),
         )
 
-        # here, if filter_collectivities is set, we apply second filter with specified filter_collectivities
         self.repository.initial_queryset = self.repository.filter_(
             queryset=self.repository.initial_queryset, *args, **kwargs
         )
@@ -312,7 +308,6 @@ class TileSetPermission(
         filter_tile_set_uuid__in: Optional[List[str]] = None,
         order_bys: Optional[List[str]] = None,
     ) -> Tuple[QuerySet[TileSet], Optional[MultiPolygon]]:
-        """Get tile sets accessible by user with optional filters."""
         if filter_tile_set_status__in is None:
             filter_tile_set_status__in = [TileSetStatus.VISIBLE, TileSetStatus.HIDDEN]
 
@@ -339,7 +334,6 @@ class TileSetPermission(
         ).order_by(*order_bys)
 
         if intersection is not None:
-            # User has restricted access
             tile_sets = tile_sets.annotate(
                 geo_zone_count=Count("geo_zones"),
                 union_geometry=Case(
@@ -352,7 +346,6 @@ class TileSetPermission(
                 intersection_area=Cast(Area("intersection"), FloatField()),
             )
         else:
-            # No user restriction, handle geometry union and optional intersection
             if filter_tile_set_intersects_geometry:
                 tile_sets = tile_sets.annotate(
                     geo_zone_count=Count("geo_zones"),
@@ -429,7 +422,6 @@ class TileSetPermission(
     def _get_user_geo_union(
         self, filter_tile_set_intersects_geometry: Optional[MultiPolygon] = None
     ) -> Optional[MultiPolygon]:
-        """Get union of user's accessible geo zones."""
         if self.scoped_user_group:
             geo_zones = GeoZone.objects.filter(user_groups=self.scoped_user_group)
         else:

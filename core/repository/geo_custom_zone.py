@@ -31,8 +31,6 @@ class GeoCustomZoneRepository(
         *args,
         **kwargs,
     ) -> QuerySet[GeoCustomZone]:
-        # mixin filters
-
         queryset = self._filter_timestamped(
             queryset=queryset,
             filter_created_at=filter_created_at,

@@ -42,6 +42,4 @@ class GeoCustomZone(GeoZone):
     import_id = models.BigIntegerField(null=True)
 
     class Meta:
-        indexes = [
-            models.Index(fields=["geozone_ptr"]),
-        ]
+        indexes = []

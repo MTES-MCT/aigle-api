@@ -7,8 +7,6 @@ from django.contrib.gis.geos import Point
 
 
 class TileSetService:
-    """Service for handling TileSet business logic."""
-
     @staticmethod
     def find_tile_set_by_coordinates(
         x: float,
@@ -17,7 +15,6 @@ class TileSetService:
         tile_set_types: Optional[List[TileSetType]] = None,
         scoped_user_group: Optional[UserGroup] = None,
     ) -> Optional[TileSet]:
-        """Find the appropriate tile set for given coordinates with user permissions."""
         point = Point(x, y)
 
         return (

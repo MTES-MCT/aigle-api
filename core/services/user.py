@@ -19,11 +19,8 @@ else:
 
 
 class UserService:
-    """Service for handling User business logic."""
-
     @staticmethod
     def get_user_profile_with_logging(user: "User") -> "User":
-        """Get user profile with analytics logging."""
         create_log(
             user=user,
             analytic_log_type=AnalyticLogType.USER_ACCESS,
@@ -32,7 +29,6 @@ class UserService:
 
     @staticmethod
     def get_filtered_users_queryset(user: "User", queryset: QuerySet) -> QuerySet:
-        """Filter users queryset based on current user permissions."""
         if user.user_role == UserRole.ADMIN:
             queryset = queryset.filter(user_role=UserRole.REGULAR)
             user_group_ids = user.user_user_groups.values_list(
@@ -45,7 +41,6 @@ class UserService:
 
     @staticmethod
     def update_user_position(user: "User", x: float, y: float) -> None:
-        """Update user's last known position."""
         user.last_position = Point(x, y)
         user.save(update_fields=["last_position"])
 
@@ -58,11 +53,8 @@ class UserService:
         user_user_groups: Optional[List[Dict[str, Any]]] = None,
         is_staff: bool = False,
     ) -> "User":
-        """Create a new user with business logic validation."""
-        # Check email uniqueness
         UserService._validate_email_unique(email)
 
-        # Validate role permissions
         if (
             requesting_user.user_role != UserRole.SUPER_ADMIN
             and user_role != UserRole.REGULAR
@@ -86,7 +78,6 @@ class UserService:
                     requesting_user=requesting_user,
                 )
 
-                # Set initial position if no position set
                 if not user.last_position:
                     user_group_centroid = UserService._get_user_group_centroid(
                         user_groups=list(
@@ -113,29 +104,23 @@ class UserService:
         user_user_groups: Optional[List[Dict[str, Any]]] = None,
         **other_fields,
     ) -> "User":
-        """Update user with business logic validation."""
         with transaction.atomic():
-            # Validate email change
             if email and user.email != email:
                 UserService._validate_email_unique(email)
                 user.email = email
 
-            # Handle password change
             if password:
                 user.set_password(password)
 
-            # Validate role change permissions
             if user_role is not None:
                 UserService._validate_role_change_permissions(
                     user=user, new_role=user_role, requesting_user=requesting_user
                 )
                 user.user_role = user_role
 
-            # Update other fields
             for field, value in other_fields.items():
                 setattr(user, field, value)
 
-            # Handle user groups
             if user_user_groups is not None:
                 UserService._update_user_groups(
                     user=user,
@@ -150,7 +135,6 @@ class UserService:
     def _validate_email_unique(
         email: str, exclude_user: Optional["User"] = None
     ) -> None:
-        """Validate email uniqueness."""
         query = User.objects.filter(email=email)
         if exclude_user:
             query = query.exclude(id=exclude_user.id)
@@ -166,8 +150,6 @@ class UserService:
     def _validate_role_change_permissions(
         user: "User", new_role: UserRole, requesting_user: "User"
     ) -> None:
-        """Validate role change permissions."""
-        # Non-super admin updating another user to non-regular role
         if (
             requesting_user.user_role != UserRole.SUPER_ADMIN
             and user.id != requesting_user.id
@@ -177,7 +159,6 @@ class UserService:
                 "Un administrateur ne peut pas donner à un autre utilisateur un rôle autre que normal"
             )
 
-        # Non-super admin trying to set super admin role
         if (
             requesting_user.user_role != UserRole.SUPER_ADMIN
             and new_role == UserRole.SUPER_ADMIN
@@ -190,12 +171,10 @@ class UserService:
     def _update_user_groups(
         user: "User", user_user_groups: List[Dict[str, Any]], requesting_user: "User"
     ) -> None:
-        """Update user group relationships."""
         user_user_groups_map = {ug["user_group_uuid"]: ug for ug in user_user_groups}
 
         updated_groups = []
 
-        # Update existing relationships
         for existing_ug in user.user_user_groups.all():
             if user_user_groups_map.get(existing_ug.user_group.uuid):
                 existing_ug.user_group_rights = user_user_groups_map[
@@ -204,13 +183,11 @@ class UserService:
                 updated_groups.append(existing_ug)
                 user_user_groups_map.pop(existing_ug.user_group.uuid)
             else:
-                # Remove deleted relationships
                 existing_ug.delete()
 
         if updated_groups:
             UserUserGroup.objects.bulk_update(updated_groups, ["user_group_rights"])
 
-        # Create new relationships
         new_groups = UserGroup.objects.filter(
             uuid__in=user_user_groups_map.keys()
         ).all()
@@ -237,7 +214,6 @@ class UserService:
 
     @staticmethod
     def _get_user_group_centroid(user_groups: List[UserGroup]) -> Optional[Point]:
-        """Get centroid from user groups for initial position."""
         if not user_groups:
             return None
 

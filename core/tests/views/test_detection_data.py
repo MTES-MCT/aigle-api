@@ -127,11 +127,9 @@ class DetectionDataPrescriptionTests(BaseAPITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-        # No detection row was deleted.
         self.assertEqual(self.detection_object.detections.count(), 2)
         self.assertTrue(Detection.objects.filter(id=past_detection.id).exists())
 
-        # The past detection was invalidated and unprescribed instead.
         past_data.refresh_from_db()
         self.assertEqual(
             past_data.detection_validation_status,
@@ -143,7 +141,6 @@ class DetectionDataPrescriptionTests(BaseAPITestCase):
         )
         self.assertEqual(past_data.user_last_update, self.super_admin)
 
-        # The edited detection keeps its own validation status.
         self.current_data.refresh_from_db()
         self.assertEqual(
             self.current_data.detection_validation_status,

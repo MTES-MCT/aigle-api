@@ -1,9 +1,3 @@
-"""
-Development settings for aigle project.
-
-This file contains settings specific to the development environment.
-"""
-
 import os
 from .base import *  # noqa: F403, F401
 from .base import SQL_ECHO
@@ -21,12 +15,10 @@ if os.environ.get("ENVIRONMENT") == "development":
         "GEOS_LIBRARY_PATH", "/opt/homebrew/opt/geos/lib/libgeos_c.dylib"
     )
 
-# Debug toolbar configuration
 INTERNAL_IPS = [
     "127.0.0.1",
 ]
 
-# Development logging configuration
 BASE_HANDLERS = ["console"]
 
 LOGGING = {
@@ -81,17 +73,17 @@ LOGGING = {
         # Silence noisy Django loggers in development
         "django.utils.autoreload": {
             "handlers": BASE_HANDLERS,
-            "level": "WARNING",  # Only show warnings/errors from autoreload
+            "level": "WARNING",
             "propagate": False,
         },
         "django.server": {
             "handlers": BASE_HANDLERS,
-            "level": "INFO",  # Keep server logs but not debug
+            "level": "INFO",
             "propagate": False,
         },
         "django.template": {
             "handlers": BASE_HANDLERS,
-            "level": "WARNING",  # Silence template debug logs
+            "level": "WARNING",
             "propagate": False,
         },
         "django.security": {
@@ -106,8 +98,6 @@ LOGGING = {
         },
     },
 }
-
-# custom dev / debug utils
 
 
 def get_raw_sql(queryset):
@@ -132,7 +122,5 @@ def get_raw_sql(queryset):
     except Exception as e:
         return f"Error getting SQL: {e}"
 
-
-# make them available globally
 
 builtins.get_raw_sql = get_raw_sql

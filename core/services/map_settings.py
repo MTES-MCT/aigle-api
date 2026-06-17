@@ -22,8 +22,6 @@ from core.serializers.tile_set import TileSetMinimalSerializer
 
 
 class MapSettingsService:
-    """Service for assembling map configuration and settings data."""
-
     def __init__(self, user, scoped_user_group=None):
         self.user = user
         self.scoped_user_group = scoped_user_group
@@ -36,19 +34,14 @@ class MapSettingsService:
         )
 
     def build_settings(self) -> Dict[str, Any]:
-        """Build complete map settings configuration."""
-        # Get tile sets and global geometry based on user role
         setting_tile_sets, global_geometry_bbox = self._get_tile_sets_data()
 
-        # Get object types with permissions
         setting_object_types = self._get_object_types_data()
 
-        # Get custom zones data
         geo_custom_zones_uncategorized, geo_custom_zone_categories = (
             self._get_custom_zones_data()
         )
 
-        # Build final settings
         setting = MapSettingsSerializer(
             data={
                 "tile_set_settings": setting_tile_sets,
@@ -72,14 +65,12 @@ class MapSettingsService:
         return setting.initial_data
 
     def _get_tile_sets_data(self) -> tuple[List[Dict], Optional[Any]]:
-        """Get tile sets data based on user role and permissions."""
         if self._is_unrestricted():
             return self._get_super_admin_tile_sets(), None
         else:
             return self._get_regular_user_tile_sets()
 
     def _get_super_admin_tile_sets(self) -> List[Dict]:
-        """Get tile sets for super admin users."""
         tile_sets = TileSet.objects.filter(
             tile_set_status__in=[TileSetStatus.VISIBLE, TileSetStatus.HIDDEN]
         ).order_by(*TILE_SETS_ORDER_BYS)
@@ -101,7 +92,6 @@ class MapSettingsService:
         return setting_tile_sets
 
     def _get_regular_user_tile_sets(self) -> tuple[List[Dict], Optional[Any]]:
-        """Get tile sets for regular users with permission filtering."""
         tile_sets = TileSetPermission(
             user=self.user, scoped_user_group=self.scoped_user_group
         ).list_(with_bbox=True)
@@ -120,13 +110,11 @@ class MapSettingsService:
         return setting_tile_sets, global_geometry_bbox
 
     def _serialize_geometry_bbox(self, bbox) -> Optional[Dict]:
-        """Serialize geometry bounding box to GeoJSON."""
         if not bbox:
             return None
         return json.loads(GEOSGeometry(bbox).geojson)
 
     def _get_object_types_data(self) -> List[Dict]:
-        """Get object types data with status information."""
         object_types_with_status = (
             self.user_permission.get_user_object_types_with_status()
         )
@@ -144,7 +132,6 @@ class MapSettingsService:
         return setting_object_types
 
     def _get_custom_zones_data(self) -> tuple[List[Dict], Dict]:
-        """Get organized custom zones data with permissions."""
         geo_custom_zones_data = GeoCustomZone.objects.order_by(
             *GEO_CUSTOM_ZONES_ORDER_BYS
         ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)

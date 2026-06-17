@@ -31,7 +31,6 @@ class UserActionLog(TimestampedModelMixin, UuidModelMixin):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["created_at"]),
-            models.Index(fields=["user"]),
             models.Index(fields=["action"]),
             models.Index(fields=["user", "created_at"]),
         ]

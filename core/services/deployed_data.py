@@ -2,9 +2,9 @@ import os
 from collections import defaultdict
 from typing import List, Optional
 
+from django.db import connection
 from django.db.models import Count
 
-from core.models.detection import Detection
 from core.models.detection_data import DetectionValidationStatusChangeReason
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
@@ -48,12 +48,24 @@ from core.utils.string import normalize
 # detobj_id_commune_idx) keeps it on an index-only scan instead of a multi-GB heap scan.
 # None of the queries filter deleted=False: nothing in the app soft-deletes these rows
 # and `deleted` is in no index, so the filter would only force heap access.
+#
+# DETAIL performance: a department's detail used to scan whole tables for EVERY query
+# because it filtered on `commune_id IN (<all the department's communes>)`. A department
+# has hundreds of (mostly empty) communes, so that IN-list both (a) ballooned the query
+# and (b) wrecked the planner's cardinality estimate, which then chose hash joins that
+# full-scanned the multi-GB detection tables even for departments with a handful of
+# detections (a 15-object department took ~8s). The detail now first finds the POPULATED
+# communes (those that actually hold a detection object — one cheap index-only GROUP BY)
+# and scopes the detection/parcel queries to just those, so a sparse department seeks a
+# few rows instead of scanning everything. The per-tile-set total and in-custom-zone
+# counts are gathered in a single detection scan (conditional aggregation) instead of two.
 DEPLOYED_DATA_CACHE_TTL = int(os.environ.get("DEPLOYED_DATA_CACHE_TTL", 24 * 60 * 60))
 
 # Bump when the cached SHAPE/semantics change so a deploy orphans stale entries
 # immediately (alongside the runtime version counter, which only handles data freshness).
 # v9: per-commune figures count detection OBJECTS again (per-tile-set stays detections).
-_CACHE_SCHEMA = "v9"
+# v10: detail scoped to populated communes; sitadel count is now detection-object driven.
+_CACHE_SCHEMA = "v10"
 
 
 class DeployedDataService:
@@ -79,8 +91,6 @@ class DeployedDataService:
     breakdown (`detections_by_tile_set`) does use Detection.tile_set, but scoped to the
     department's own detections, which is meaningful.
     """
-
-    # --- Public API -------------------------------------------------------------
 
     @staticmethod
     def get_departments_summary(
@@ -146,23 +156,31 @@ class DeployedDataService:
 
     @staticmethod
     def refresh_cache() -> List[dict]:
-        """Recompute and (re)populate the SUMMARY cache, and invalidate every cached
-        per-department detail so each refreshes lazily on its next access.
+        """Recompute and (re)populate the SUMMARY cache AND every per-department detail.
 
         Meant to be run out-of-band (see `warm_deployed_data_cache`) after an import so
-        the list view always hits a warm cache and details serve fresh data on demand.
+        both the list view and every department detail page hit a warm cache. Bumping the
+        version first orphans the old entries; we then recompute the summary and, because
+        the version bump would otherwise leave every detail cold (the original footgun
+        behind "the dashboard is slow when the cache isn't stored yet"), eagerly warm each
+        department's detail under the new version too.
         """
         # Bump the version first: orphans the old summary AND all per-department details.
         invalidate_deployed_data_cache()
         summary = DeployedDataService._compute_summary()
         # _summary_cache_key() now reads the bumped version, so this writes under the new
-        # version; details recompute lazily under it.
+        # version.
         safe_cache_set(
             DeployedDataService._summary_cache_key(), summary, DEPLOYED_DATA_CACHE_TTL
         )
-        return summary
 
-    # --- Threshold ---------------------------------------------------------------
+        # Warm every department detail under the (now bumped) version so no one pays the
+        # cold computation on the next page load. Each detail is keyed and cached by
+        # get_or_compute, exactly as a lazy first access would do.
+        for department in summary:
+            DeployedDataService.get_department_deployed_data(department["uuid"])
+
+        return summary
 
     @staticmethod
     def _apply_min_commune_detections(
@@ -193,8 +211,6 @@ class DeployedDataService:
             "communes_with_detections_count": len(communes),
         }
 
-    # --- Cache keys --------------------------------------------------------------
-
     @staticmethod
     def _summary_cache_key() -> str:
         return (
@@ -218,16 +234,10 @@ class DeployedDataService:
         )
         return result or []
 
-    # --- Summary computation (all departments, lean) -----------------------------
-
     @staticmethod
     def _compute_summary() -> List[dict]:
-        # 1. Detection-OBJECT count per commune, in a single grouped scan. This tells us
-        #    which communes (hence departments) are deployed and feeds the per-commune
-        #    threshold applied at request time. Counts objects (not Detection rows) to
-        #    match the commune table in the detail. Count("commune_id") (non-null under
-        #    the filter, in the partial detobj_id_commune_idx) keeps it on index-only
-        #    scans (see the module docstring).
+        # Count("commune_id") (non-null under the filter, in the partial
+        # detobj_id_commune_idx) keeps this on an index-only scan (see the module docstring).
         objects_by_commune = defaultdict(int)
         for row in (
             DetectionObject.objects.filter(commune_id__isnull=False)
@@ -239,7 +249,6 @@ class DeployedDataService:
         if not objects_by_commune:
             return []
 
-        # 2. Per-department list of its communes' object counts (the threshold input).
         commune_counts_by_department = defaultdict(list)
         for commune in GeoCommune.objects.filter(
             id__in=list(objects_by_commune.keys())
@@ -258,8 +267,8 @@ class DeployedDataService:
             return []
         department_ids = [department["id"] for department in departments]
 
-        # 3. Map every geo_zone id (each department and ALL its communes) to its
-        #    department, so associations targeting any commune resolve to the department.
+        # Map every geo_zone id (each department and ALL its communes) to its department,
+        # so associations targeting any commune resolve to the department.
         commune_to_department = {
             row["id"]: row["department_id"]
             for row in GeoCommune.objects.filter(
@@ -272,8 +281,8 @@ class DeployedDataService:
         zone_to_department.update(commune_to_department)
         all_zone_ids = list(department_ids) + list(commune_to_department.keys())
 
-        # 4. Distinct users per department, across every group linked to the department
-        #    or one of its communes (a group's geo_zones may span several departments).
+        # Distinct users per department, across every group linked to the department or one
+        # of its communes (a group's geo_zones may span several departments).
         group_departments = defaultdict(set)
         for row in (
             UserGroup.objects.filter(geo_zones__id__in=all_zone_ids)
@@ -297,7 +306,6 @@ class DeployedDataService:
             for department_id in dept_ids:
                 users_by_department[department_id].update(members)
 
-        # 5. Tile-set years per department (from the geo_zones association).
         years_by_department = defaultdict(set)
         for row in (
             TileSet.objects.filter(geo_zones__id__in=all_zone_ids)
@@ -308,7 +316,6 @@ class DeployedDataService:
             if department_id is not None:
                 years_by_department[department_id].add(row["date"].year)
 
-        # 6. Assemble the lean per-department summary.
         result = []
         for department in departments:
             department_id = department["id"]
@@ -329,8 +336,6 @@ class DeployedDataService:
 
         return result
 
-    # --- Detail computation (one department, full) -------------------------------
-
     @staticmethod
     def _compute_department_detail(uuid) -> Optional[dict]:
         department = (
@@ -349,11 +354,13 @@ class DeployedDataService:
         if not commune_ids:
             return None
 
-        # Per-commune DETECTION OBJECT counts (total + in-custom-zone), scoped to this
-        # department. The commune table counts objects (a real-world object detected on
-        # several tile sets/years is one object), NOT Detection rows — unlike the
-        # per-tile-set breakdown below. The geo_custom_zones M2M join multiplies an object
-        # sitting in several zones, so the in-zone query Count(distinct) the object id.
+        # Per-commune DETECTION OBJECT counts, scoped to this department. The commune
+        # table counts objects (a real-world object detected on several tile sets/years is
+        # one object), NOT Detection rows — unlike the per-tile-set breakdown below.
+        # Count("commune_id") keeps this on the partial commune index. This first pass
+        # also tells us which communes are POPULATED (hold ≥1 object); the detection and
+        # parcel queries below are scoped to just those so they seek instead of scanning
+        # the whole multi-GB tables for the department's many empty communes.
         objects_by_commune = defaultdict(int)
         for row in (
             DetectionObject.objects.filter(commune_id__in=commune_ids)
@@ -365,10 +372,14 @@ class DeployedDataService:
         if not objects_by_commune:
             return None  # department not deployed -> 404
 
+        populated_commune_ids = list(objects_by_commune.keys())
+
+        # Per-commune in-custom-zone OBJECT counts. The geo_custom_zones M2M join
+        # multiplies an object sitting in several zones, so Count(distinct) the object id.
         objects_in_zone_by_commune = defaultdict(int)
         for row in (
             DetectionObject.objects.filter(
-                commune_id__in=commune_ids,
+                commune_id__in=populated_commune_ids,
                 geo_custom_zones__isnull=False,
             )
             .values("commune_id")
@@ -392,26 +403,36 @@ class DeployedDataService:
             key=lambda commune: commune["name"],
         )
 
-        # Per-tile-set detection counts (total + in-custom-zone), scoped to this
-        # department's detections. Same total/in-zone criteria as the commune table.
-        detections_by_tile_set = defaultdict(int)
-        for row in (
-            Detection.objects.filter(detection_object__commune_id__in=commune_ids)
-            .values("tile_set_id")
-            .annotate(count=Count("tile_set_id"))
-        ):
-            detections_by_tile_set[row["tile_set_id"]] += row["count"]
-
-        detections_in_zone_by_tile_set = defaultdict(int)
-        for row in (
-            Detection.objects.filter(
-                detection_object__commune_id__in=commune_ids,
-                detection_object__geo_custom_zones__isnull=False,
+        # Per-tile-set detection counts (total + in-custom-zone) for this department's
+        # detections, gathered in a SINGLE detection scan via conditional aggregation
+        # (instead of one query for the total and another for the in-zone subset). The
+        # deduped LEFT JOIN to the custom-zone M2M means a detection whose object sits in
+        # several zones is still counted once (matching the per-commune in-zone criteria),
+        # while the planner stays on a stable hash-join plan (a per-row EXISTS filter
+        # produced wildly unstable plans). Raw SQL because this conditional aggregation
+        # over a deduped join has no clean ORM form; the commune ids are bound, not
+        # interpolated.
+        detections_by_tile_set = {}
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT d.tile_set_id,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE z.detectionobject_id IS NOT NULL) AS in_zone
+                FROM core_detection d
+                JOIN core_detectionobject o ON o.id = d.detection_object_id
+                LEFT JOIN (
+                    SELECT detectionobject_id
+                    FROM core_detectionobject_geo_custom_zones
+                    GROUP BY detectionobject_id
+                ) z ON z.detectionobject_id = d.detection_object_id
+                WHERE o.commune_id = ANY(%s)
+                GROUP BY d.tile_set_id
+                """,
+                [populated_commune_ids],
             )
-            .values("tile_set_id")
-            .annotate(count=Count("id", distinct=True))
-        ):
-            detections_in_zone_by_tile_set[row["tile_set_id"]] += row["count"]
+            for tile_set_id, total, in_zone in cursor.fetchall():
+                detections_by_tile_set[tile_set_id] = (total, in_zone)
 
         tile_set_meta = {
             row["id"]: row
@@ -426,29 +447,27 @@ class DeployedDataService:
                     "name": tile_set_meta[tile_set_id]["name"],
                     "date": tile_set_meta[tile_set_id]["date"],
                     "detections_count": total,
-                    "detections_in_custom_zone_count": (
-                        detections_in_zone_by_tile_set.get(tile_set_id, 0)
-                    ),
+                    "detections_in_custom_zone_count": in_zone,
                 }
-                for tile_set_id, total in detections_by_tile_set.items()
+                for tile_set_id, (total, in_zone) in detections_by_tile_set.items()
                 if tile_set_id in tile_set_meta
             ),
             key=lambda tile_set: tile_set["date"],
             reverse=True,
         )
 
-        # Parcels in the department, and the subset updated by the SITADEL import (a
-        # parcel with a detection object carrying a SITADEL-sourced detection). Counting
-        # distinct parcels attributes each to its own (single) commune.
+        # Parcels in the department (all communes — a parcel exists independently of any
+        # detection), and the subset "updated by SITADEL": a parcel carrying a detection
+        # object whose detection has a SITADEL change reason. Driving this from the
+        # department's detection objects (scoped to populated communes) — rather than from
+        # all of the department's parcels — keeps the planner from scanning every SITADEL
+        # detection in the country; Count(distinct parcel_id) collapses the join fan-out.
         parcels_count = Parcel.objects.filter(commune_id__in=commune_ids).count()
-        sitadel_updated_parcels_count = (
-            Parcel.objects.filter(commune_id__in=commune_ids)
-            .filter(
-                detection_objects__detections__detection_data__detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL
-            )
-            .distinct()
-            .count()
-        )
+        sitadel_updated_parcels_count = DetectionObject.objects.filter(
+            commune_id__in=populated_commune_ids,
+            parcel_id__isnull=False,
+            detections__detection_data__detection_validation_status_change_reason=DetectionValidationStatusChangeReason.SITADEL,
+        ).aggregate(count=Count("parcel_id", distinct=True))["count"]
 
         # Associations (user groups + members, custom zones, tile sets) linked via the
         # geo_zones M2M to the department or any of its communes. Single department, so

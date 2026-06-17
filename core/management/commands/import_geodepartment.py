@@ -60,7 +60,6 @@ class Command(BaseCommand):
         else:
             log_event("No insee codes provided, importing all departments")
 
-        # shape data
         temp_dir, file_path = download_file(
             url=SHP_ZIP_URL, file_name="departments.zip"
         )
@@ -70,7 +69,6 @@ class Command(BaseCommand):
 
         shape = shapefile.Reader(f"{extract_folder_path}/{SHP_FILE_NAME}")
 
-        # additional data
         additional_data: List[AdditionalInfos] = download_json(url=ADDITIONAL_JSON_URL)
 
         regions = GeoRegion.objects.filter(

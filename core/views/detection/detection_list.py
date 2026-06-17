@@ -108,8 +108,6 @@ DETECTION_CONTROL_STATUSES_ORDERED = [
 ]
 DOWNLOAD_LIMIT_ROWS = 20000
 
-# returns order_bys and distincts
-
 
 def order_queryset(queryset: QuerySet[Detection], ordering: str) -> QuerySet[Detection]:
     if "parcel" in ordering:
@@ -469,9 +467,6 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
         return JsonResponse(overview.initial_data)
 
 
-# utils
-
-
 def process_rows(results):
     combined_data = {}
 
@@ -489,7 +484,6 @@ def process_rows(results):
     for row in results:
         obj_id = row[ID_INDEX]
 
-        # labelize
         row[SOURCE_INDEX] = DETECTION_SOURCE_NAMES_MAP.get(
             row[SOURCE_INDEX], row[SOURCE_INDEX]
         )
@@ -509,13 +503,10 @@ def process_rows(results):
             )
         )
 
-        # transform UUID to url
         row[UUID_INDEX] = f"https://{DOMAIN}/map?detectionObjectUuid={row[UUID_INDEX]}"
 
-        # format score
         row[SCORE_INDEX] = "{:.2f}".format(row[SCORE_INDEX] * 100)
 
-        # combine duplicates
         if obj_id not in combined_data:
             combined_data[obj_id] = [
                 row,
@@ -526,10 +517,8 @@ def process_rows(results):
             combined_data[obj_id][1].update(row[TILE_SETS_INDEX])
             combined_data[obj_id][2].update(row[CUSTOM_ZONES_INDEX])
 
-    # Convert to final format
     final_results = []
     for base_data, tile_sets, custom_zones in combined_data.values():
-        # Create dictionary only once per unique ID
         result = [
             *base_data[:TILE_SETS_INDEX],
             ", ".join(tile_sets),

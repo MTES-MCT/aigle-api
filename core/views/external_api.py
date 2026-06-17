@@ -9,15 +9,7 @@ from core.services.external_api import ExternalApiService
 
 
 class ExternalAPITestView(APIView):
-    """
-    Test endpoint for API key authentication.
-
-    GET: Returns a success message with timestamp
-    POST: Echoes back the received data
-
-    This endpoint requires a valid API key in the Authorization header.
-    Use: Authorization: Api-Key YOUR_API_KEY_HERE
-    """
+    """Auth header: Authorization: Api-Key YOUR_API_KEY_HERE"""
 
     permission_classes = [HasAPIKey]
 
@@ -45,12 +37,7 @@ class ExternalAPITestView(APIView):
 
 
 class ExternalAPIUpdateControlStatusView(APIView):
-    """
-    Update control status for detections on a specific parcel.
-
-    This endpoint requires a valid API key in the Authorization header.
-    Use: Authorization: Api-Key YOUR_API_KEY_HERE
-    """
+    """Auth header: Authorization: Api-Key YOUR_API_KEY_HERE"""
 
     permission_classes = [HasAPIKey]
 

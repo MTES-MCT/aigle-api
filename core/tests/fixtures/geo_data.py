@@ -2,9 +2,6 @@ from django.contrib.gis.geos import Polygon
 from core.models import GeoRegion, GeoDepartment, GeoCommune, Parcel
 
 
-# --- Regions ---
-
-
 def create_occitanie_region():
     coords = [
         (0.0, 42.5),
@@ -41,9 +38,6 @@ def create_ile_de_france_region():
         },
     )
     return region
-
-
-# --- Departments ---
 
 
 def create_herault_department(region=None):
@@ -132,9 +126,6 @@ def create_hauts_de_seine_department(region=None):
         },
     )
     return department
-
-
-# --- Communes ---
 
 
 def create_montpellier_commune(department=None):
@@ -321,9 +312,6 @@ def create_nanterre_commune(department=None):
     return commune
 
 
-# --- Parcels ---
-
-
 def create_parcel(commune=None, id_parcellaire="000000", x=None, y=None):
     if commune is None:
         commune = create_montpellier_commune()
@@ -382,9 +370,6 @@ def create_montpellier_parcels(commune=None, count=3):
         parcels.append(parcel)
 
     return parcels
-
-
-# --- Complete hierarchy ---
 
 
 def create_complete_geo_hierarchy():

@@ -120,10 +120,8 @@ class Command(BaseCommand):
                 "--ignore-categories enabled: zones will be imported as uncategorized"
             )
 
-        # departments lookup (by insee code)
         department_map = self._get_department_map()
 
-        # read the source rows (optionally restricted to some departments / ids)
         rows = self._read_rows(
             table_schema=table_schema,
             table_name=table_name,
@@ -137,7 +135,6 @@ class Command(BaseCommand):
         # this entirely and stores NULL on the category FK.
         category_map = {} if ignore_categories else self._get_category_map(rows)
 
-        # resolve rows to (department, category, geometry)
         resolved, skipped = self._resolve_rows(
             rows,
             category_map=category_map,

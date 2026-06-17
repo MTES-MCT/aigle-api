@@ -27,7 +27,6 @@ class CommandRun(TimestampedModelMixin, UuidModelMixin):
 
     class Meta:
         indexes = [
-            models.Index(fields=["task_id"]),
             models.Index(fields=["status"]),
             models.Index(fields=["command_name"]),
             models.Index(fields=["created_at"]),

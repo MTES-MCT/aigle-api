@@ -35,8 +35,6 @@ except ImportError:
     sys.exit(1)
 
 
-# ── Constants ────────────────────────────────────────────────────────
-
 BATCH_SIZE = 500
 SIMPLIFY_TOLERANCE = 0.0001
 DEV_PASSWORD = "aigle-dev"
@@ -72,9 +70,6 @@ SEQUENCE_TABLES = [
     "core_user",
     "core_usergroup",
 ]
-
-
-# ── Utilities ────────────────────────────────────────────────────────
 
 
 def make_django_password(password):
@@ -151,9 +146,6 @@ def prompt_multi_select(items, prompt_text):
             return parse_selection(choice, len(items))
         except (ValueError, IndexError):
             print(f"  Invalid. Enter numbers between 1 and {len(items)}, or 'all'.")
-
-
-# ── Database helpers ─────────────────────────────────────────────────
 
 
 def get_table_columns(conn, table_name):
@@ -240,9 +232,6 @@ def extract_and_write(conn, f, section, table_name, where_clause, params, **kwar
         f.write("\n")
         print(f"  {table_name}: {len(rows)} rows")
     return rows
-
-
-# ── Interactive selection ────────────────────────────────────────────
 
 
 def select_regions(conn):
@@ -353,9 +342,6 @@ def select_communes(conn, department_ids):
     return [communes[i] for i in selected]
 
 
-# ── Scanning ─────────────────────────────────────────────────────────
-
-
 def scan_epcis(conn, commune_ids, department_ids):
     with conn.cursor() as cur:
         cur.execute(
@@ -444,9 +430,6 @@ def scan_object_type_category_ids(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM core_objecttypecategory WHERE deleted = false")
         return [r[0] for r in cur.fetchall()]
-
-
-# ── Write sections ───────────────────────────────────────────────────
 
 
 def write_header(f, metadata):
@@ -656,7 +639,6 @@ def write_detections(conn, f, ids):
         "AND deleted = false"
     )
 
-    # Tiles referenced by detections
     tile_where = (
         "id IN (SELECT DISTINCT d.tile_id FROM core_detection d "
         "JOIN core_detectionobject dobj ON dobj.id = d.detection_object_id "
@@ -664,7 +646,6 @@ def write_detections(conn, f, ids):
     )
     extract_and_write(conn, f, "Tiles", "core_tile", tile_where, [commune_ids])
 
-    # Collect parcel IDs that exist in our seed (parcels from selected communes)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM core_parcel WHERE commune_id = ANY(%s) AND deleted = false",
@@ -708,7 +689,6 @@ def write_detections(conn, f, ids):
     f.write("\n")
     print(f"  core_detectionobject: {len(rows)} rows")
 
-    # Detection object M2M
     if cz_ids:
         extract_and_write(
             conn,
@@ -747,7 +727,6 @@ def write_detections(conn, f, ids):
         null_columns={"user_last_update_id"},
     )
 
-    # Detections
     extract_and_write(
         conn, f, "Detections", "core_detection", det_subquery, [commune_ids]
     )
@@ -864,7 +843,6 @@ def write_users_and_groups(f, ids, metadata):
     f.write("\n")
     print(f"  core_user: {len(user_rows)} dev users")
 
-    # User groups
     ddtm_group_id = GROUP_ID_START
     coll_group_id = GROUP_ID_START + 1
 
@@ -906,7 +884,6 @@ def write_users_and_groups(f, ids, metadata):
     f.write("\n")
     print("  core_usergroup: 2 groups")
 
-    # UserGroup <> GeoZone
     ug_gz_cols = ["usergroup_id", "geozone_id"]
     ug_gz_rows = [
         (ddtm_group_id, first_dept_id),
@@ -916,7 +893,6 @@ def write_users_and_groups(f, ids, metadata):
     f.write(generate_inserts("core_usergroup_geo_zones", ug_gz_cols, ug_gz_rows))
     f.write("\n")
 
-    # UserGroup <> ObjectTypeCategory
     otc_ids = ids.get("object_type_category", [])
     if otc_ids:
         ug_otc_cols = ["usergroup_id", "objecttypecategory_id"]
@@ -932,7 +908,6 @@ def write_users_and_groups(f, ids, metadata):
         )
         f.write("\n")
 
-    # UserGroup <> GeoCustomZone
     cz_ids = ids.get("custom_zone", [])
     if cz_ids:
         ug_cz_cols = ["usergroup_id", "geocustomzone_id"]
@@ -946,7 +921,6 @@ def write_users_and_groups(f, ids, metadata):
         )
         f.write("\n")
 
-    # UserUserGroup
     uug_cols = [
         "created_at",
         "updated_at",
@@ -978,9 +952,6 @@ def write_sequence_resets(f):
             f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
             f"COALESCE((SELECT MAX(id) FROM {table}), 1));\n"
         )
-
-
-# ── Main ─────────────────────────────────────────────────────────────
 
 
 def main():
@@ -1026,8 +997,6 @@ Examples:
         sys.exit(1)
     print("Connected.\n")
 
-    # ── Interactive selection ──
-
     regions = select_regions(conn)
     region_ids = [r[0] for r in regions]
     region_names = [r[1] for r in regions]
@@ -1043,8 +1012,6 @@ Examples:
     if not commune_ids:
         print("No communes selected. Exiting.")
         sys.exit(0)
-
-    # ── Scan phase ──
 
     print("\nScanning related data...")
 
@@ -1069,8 +1036,6 @@ Examples:
     print(f"  Custom zones: {len(ids['custom_zone'])}")
     print(f"  Sub custom zones: {len(ids['sub_custom_zone'])}")
     print(f"  Tilesets: {len(ids['tileset'])}")
-
-    # ── Write phase ──
 
     output_dir = os.path.dirname(args.output)
     if output_dir:

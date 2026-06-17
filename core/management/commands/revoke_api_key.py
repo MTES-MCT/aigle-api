@@ -33,7 +33,6 @@ class Command(BaseCommand):
             log_event(f"API Key revoked successfully - Name: {name}")
 
         except APIKey.DoesNotExist:
-            # List all active (non-revoked) API keys
             api_keys = APIKey.objects.filter(revoked=False)
             if api_keys.exists():
                 available_keys = ", ".join(

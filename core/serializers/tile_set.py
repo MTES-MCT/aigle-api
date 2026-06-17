@@ -231,9 +231,6 @@ class TileSetBulkCreateInputSerializer(
         return instances
 
 
-# utils
-
-
 def check_tileset_has_collectivities(collectivities: List[GeoZone]):
     if not collectivities:
         message = "Au moins une commune, un département ou une région doit être associé au fond de carte"
@@ -254,11 +251,7 @@ def check_tileset_uniqueness(
     collectivity_ids = [col.id for col in collectivities]
     collectivity_count = len(collectivity_ids)
 
-    # Find TileSets with same date, exact same count of geo_zones, and all matching geo_zones
-    # This is done in a single query by:
-    # 1. Filtering by date
-    # 2. Filtering only TileSets that have ALL the collectivity_ids
-    # 3. Annotating with count to ensure exact match (no extra geo_zones)
+    # Exact-set match in one query: all collectivity_ids present AND no extras (count equality).
     query = Q()
     for geo_zone_id in collectivity_ids:
         query &= Q(geo_zones__id=geo_zone_id)

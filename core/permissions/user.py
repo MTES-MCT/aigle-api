@@ -227,7 +227,6 @@ class UserPermission(
     def get_user_object_types_with_status(
         self,
     ) -> List[Tuple[ObjectType, ObjectTypeCategoryObjectTypeStatus]]:
-        """Get object types accessible by user with their status."""
         if self._is_unrestricted():
             object_types = ObjectType.objects.order_by("name").all()
             return [
@@ -292,7 +291,6 @@ class UserPermission(
         points: List[Point],
         raise_if_has_no_right: Optional[UserGroupRight] = None,
     ) -> List[UserGroupRight]:
-        """Get user group rights for given points."""
         if self._is_unrestricted():
             return [
                 UserGroupRight.WRITE,
@@ -379,11 +377,9 @@ class UserPermission(
         )
 
     def validate_geometry_edit_permission(self, geometry: "GEOSGeometry") -> None:
-        """Validate user can edit at given geometry location."""
         self.can_edit(geometry=geometry, raise_exception=True)
 
     def validate_user_group_access(self, user_group_ids: List[str]) -> None:
-        """Validate user has access to specified user groups."""
         if not user_group_ids:
             return
 
@@ -400,7 +396,6 @@ class UserPermission(
             )
 
     def validate_user_group_access_for_detection_object(self, detection_object) -> None:
-        """Validate user has access to modify a detection object based on its user groups."""
         existing_user_group_ids = [
             str(ug.id) for ug in detection_object.user_groups.all()
         ]

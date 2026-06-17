@@ -10,7 +10,6 @@ from .base import *  # noqa: F403, F401
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-# Production logging configuration
 BASE_HANDLERS = ["console", "scaleway_loki"]
 
 LOGGING = {

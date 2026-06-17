@@ -143,7 +143,6 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
             scoped_user_group=resolve_scoped_user_group(self.request),
         )
 
-        # Create filter instance to get filter parameters
         filter_instance = self.filterset_class(
             request.GET, queryset=self.get_queryset(), request=request
         )
@@ -185,7 +184,6 @@ class ParcelViewSet(BaseViewSetMixin[Parcel]):
             scoped_user_group=resolve_scoped_user_group(self.request),
         )
 
-        # Create filter instance to get filter parameters
         filter_instance = self.filterset_class(
             request.GET, queryset=self.get_queryset(), request=request
         )

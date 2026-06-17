@@ -19,8 +19,6 @@ from rest_framework.status import HTTP_500_INTERNAL_SERVER_ERROR
 
 
 class PriorLetterService:
-    """Service for handling prior letter document generation."""
-
     TEMPLATE_PATH = os.path.join(settings.MEDIA_ROOT, "templates", "prior_letter.odt")
 
     def __init__(self, user, scoped_user_group: Optional[UserGroup] = None):
@@ -28,25 +26,16 @@ class PriorLetterService:
         self.scoped_user_group = scoped_user_group
 
     def generate_document(self, detection_object_uuid: str) -> HttpResponse:
-        """Generate prior letter document for detection object."""
-        # Get detection object with permissions check
         detection_object = self._get_detection_object_with_permissions(
             detection_object_uuid
         )
-
-        # Update control status
         self._update_control_status(detection_object)
-
-        # Create analytics log
         self._create_analytics_log(detection_object, detection_object_uuid)
-
-        # Generate document
         return self._generate_odt_document(detection_object)
 
     def _get_detection_object_with_permissions(
         self, detection_object_uuid: str
     ) -> DetectionObject:
-        """Retrieve detection object with permission validation."""
         geo_custom_zones_prefetch, geo_custom_zones_category_prefetch = (
             GeoCustomZonePermission(
                 user=self.user, scoped_user_group=self.scoped_user_group
@@ -63,7 +52,6 @@ class PriorLetterService:
         except DetectionObject.DoesNotExist:
             raise PermissionError("Detection object not found or access denied")
 
-        # Check edit permissions
         UserPermission(
             user=self.user, scoped_user_group=self.scoped_user_group
         ).can_edit(
@@ -73,11 +61,9 @@ class PriorLetterService:
         return detection_object
 
     def _update_control_status(self, detection_object: DetectionObject) -> None:
-        """Update detection object control status with business rules."""
         # Import here to avoid circular imports
         from core.models.detection_data import DetectionData
 
-        # Business logic for status updates
         detections_to_update = []
         for detection in detection_object.detections.all():
             if detection.detection_data:
@@ -97,7 +83,6 @@ class PriorLetterService:
     def _create_analytics_log(
         self, detection_object: DetectionObject, detection_object_uuid: str
     ) -> None:
-        """Create analytics log for document generation."""
         create_log(
             self.user,
             AnalyticLogType.PRIOR_LETTER_DOWNLOAD,
@@ -112,7 +97,6 @@ class PriorLetterService:
         )
 
     def _generate_odt_document(self, detection_object: DetectionObject) -> HttpResponse:
-        """Generate ODT document from template."""
         try:
             parcel_label = self._get_parcel_label(detection_object)
             filename = f"Courrier préalable - {parcel_label}.odt"
@@ -121,14 +105,12 @@ class PriorLetterService:
                 temp_output_path = temp_file.name
 
             try:
-                # Process template
                 processor = ODTTemplateProcessor(self.TEMPLATE_PATH)
                 placeholders = self._build_template_placeholders(
                     detection_object, parcel_label
                 )
                 processor.replace_placeholders(placeholders, temp_output_path)
 
-                # Generate response
                 with open(temp_output_path, "rb") as f:
                     response = HttpResponse(
                         f.read(), content_type="application/vnd.oasis.opendocument.text"
@@ -147,7 +129,6 @@ class PriorLetterService:
             )
 
     def _get_parcel_label(self, detection_object: DetectionObject) -> str:
-        """Generate parcel label for filename."""
         if detection_object.parcel:
             return f"{detection_object.parcel.section} {detection_object.parcel.num_parcel}"
         return "[[Parcelle inconnue]]"
@@ -155,7 +136,6 @@ class PriorLetterService:
     def _build_template_placeholders(
         self, detection_object: DetectionObject, parcel_label: str
     ) -> Dict[str, Any]:
-        """Build placeholders for document template."""
         return {
             "date": datetime.now().strftime("%d/%m/%Y"),
             "num_parcelle": parcel_label,
@@ -166,7 +146,6 @@ class PriorLetterService:
         }
 
     def _get_custom_zones_text(self, detection_object: DetectionObject) -> str:
-        """Format custom zone names for document."""
         geo_custom_zones = detection_object.geo_custom_zones.all()
         geo_sub_custom_zones = detection_object.geo_sub_custom_zones.all()
 
@@ -185,6 +164,5 @@ class PriorLetterService:
                     sub_zone.geo_custom_zone.geo_custom_zone_category.name
                 )
 
-        # Remove duplicates and sort
         unique_zones = sorted(set(zones_names))
         return ", ".join(unique_zones) if unique_zones else "Aucune zone à enjeux"

@@ -41,15 +41,11 @@ class User(
         blank=False,
     )
 
-    # AbstractBaseUser definitions
-
     first_name = None
     last_name = None
     is_staff = models.BooleanField(_("staff status"), default=False)
     is_active = models.BooleanField(_("active"), default=True)
     date_joined = models.DateTimeField(_("date joined"), default=timezone.now)
-
-    # Additional fields
 
     user_role = models.CharField(
         max_length=DEFAULT_MAX_LENGTH,

@@ -8,18 +8,14 @@ from django.dispatch import receiver
 
 @receiver(pre_create_historical_record)
 def track_changed_fields(sender, instance, history_instance, **kwargs):
-    # Get current and previous historical records
-    # Wrap in try-except to handle cases where history doesn't exist yet
-    # or when we're in a transaction that might be broken
+    # History may not exist yet, or the surrounding transaction may be broken
     try:
         previous = instance.history.first()
     except Exception:
-        # No history yet or transaction issue - skip comparison
         previous = None
 
     current = instance
 
-    # Compare each field in your model to find changes
     changed_fields = []
     if previous:
         for field in instance._meta.fields:
@@ -36,7 +32,6 @@ def track_changed_fields(sender, instance, history_instance, **kwargs):
                     }
                 )
 
-    # Save the changed fields to the history instance
     history_instance.changed_fields = json.loads(
         json.dumps(changed_fields, indent=4, sort_keys=True, default=str)
     )

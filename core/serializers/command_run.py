@@ -27,10 +27,8 @@ class ListTasksParametersSerializer(serializers.Serializer):
         if not value:
             return None
 
-        # Split by comma and clean up
         status_strings = [s.strip().upper() for s in value.split(",") if s.strip()]
 
-        # Validate each status
         valid_statuses = [choice[0] for choice in CommandRunStatus.choices]
         invalid_statuses = [s for s in status_strings if s not in valid_statuses]
 
@@ -40,5 +38,4 @@ class ListTasksParametersSerializer(serializers.Serializer):
                 f"Valid statuses are: {', '.join(valid_statuses)}"
             )
 
-        # Return list of CommandRunStatus enum values
         return [CommandRunStatus(s) for s in status_strings]

@@ -51,14 +51,12 @@ class DetectionProcessService:
             detections_data = [detection.detection_data for detection in detections]
             detection_to_keep = max(detections, key=lambda detec: detec.score)
 
-            # combine geometries
             union_geometry = MultiPolygon(
                 [detec.geometry for detec in detections]
             ).unary_union
             new_geometry = union_geometry.envelope
             detection_to_keep.geometry = new_geometry
 
-            # extract properties to keep the highest priority ones
             detection_to_keep.detection_source = extract_higest_priority_value(
                 detections, "detection_source"
             )
@@ -78,7 +76,6 @@ class DetectionProcessService:
                 )
             )
 
-            # prescription
             detection_to_keep.auto_prescribed = any(
                 [detection.auto_prescribed for detection in detections]
             )
@@ -98,7 +95,6 @@ class DetectionProcessService:
                 if tile:
                     detection_to_keep.tile = tile
 
-            # user last update
             detection_last_updated = max(
                 detections,
                 key=lambda detec: detec.detection_data.updated_at or datetime.min,
@@ -110,7 +106,6 @@ class DetectionProcessService:
                 detection_last_updated.detection_data.user_last_update
             )
 
-            # official_report_date
             if not all(
                 detection.detection_data.official_report_date is None
                 for detection in detections

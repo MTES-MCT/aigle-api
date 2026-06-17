@@ -27,7 +27,6 @@ class Command(BaseCommand):
         name = options["name"]
         expiry_days = options.get("expiry_days")
 
-        # Create API key with optional expiry date
         if expiry_days:
             expiry_date = datetime.now() + timedelta(days=expiry_days)
             api_key, key = APIKey.objects.create_key(name=name, expiry_date=expiry_date)

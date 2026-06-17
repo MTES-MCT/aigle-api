@@ -17,7 +17,6 @@ from core.utils.logs_helpers import log_command_event
 
 COMMAND_NAME = "import_control_statuses"
 
-# CSV columns
 COL_INSEE = "COM_INSEE"
 COL_SECTION = "PARCELLE_SECTION"
 COL_NUM = "PARCELLE_NUM"

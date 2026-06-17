@@ -30,6 +30,4 @@ class AnalyticLog(models.Model):
         indexes = [
             models.Index(fields=["created_at"]),
             models.Index(fields=["analytic_log_type"]),
-            models.Index(fields=["created_at", "analytic_log_type"]),
-            models.Index(fields=["user"]),
         ]

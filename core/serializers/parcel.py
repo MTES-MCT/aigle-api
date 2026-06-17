@@ -163,8 +163,7 @@ class ParcelListItemSerializer(ParcelWithCommuneSerializer):
         detections_count_by_object_type_map = defaultdict(int)
         object_types_map = dict()
 
-        # Check if detection_objects has been prefetched with filters
-        # If it has, use the prefetched data directly
+        # prefer the filtered prefetch cache; .all() would re-query without the view's filters
         if (
             hasattr(obj, "_prefetched_objects_cache")
             and "detection_objects" in obj._prefetched_objects_cache

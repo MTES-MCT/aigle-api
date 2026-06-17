@@ -9,6 +9,4 @@ class GeoSubCustomZone(GeoZone):
     )
 
     class Meta:
-        indexes = [
-            models.Index(fields=["geozone_ptr"]),
-        ]
+        indexes = []

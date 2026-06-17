@@ -233,10 +233,8 @@ class ScopeOnDetectionDataUpdateTests(BaseAPITestCase):
         self.detection = setup["detection"]
         self.detection_data = setup["detection_data"]
 
-        # detection geometry is a Point at (3.88, 43.61). Build a department
-        # whose polygon explicitly covers it so the "covering" scoping check
-        # passes deterministically (the Hérault fixture polygon is slightly
-        # offset and does not contain the point).
+        # Hérault fixture polygon is offset and doesn't contain the detection
+        # point (3.88, 43.61); build a department polygon that explicitly covers it.
         covering_geom = Polygon(
             [
                 (3.0, 43.0),
@@ -258,11 +256,9 @@ class ScopeOnDetectionDataUpdateTests(BaseAPITestCase):
             },
         )
 
-        # group that covers the dept where the detection lives
         self.group_covering = create_user_group(
             name="DD covering", geo_zones=[self.dept]
         )
-        # group that covers nowhere relevant
         self.group_empty = create_user_group(name="DD empty")
 
     def _patch(self, headers=None):

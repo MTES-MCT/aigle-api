@@ -184,7 +184,6 @@ class ImportSitadelCommandTests(BaseTestCase):
 
         controlled.refresh_from_db()
         uncontrolled.refresh_from_db()
-        # Neither detection on the parcel is touched.
         for detection_data in (controlled, uncontrolled):
             self.assertEqual(
                 detection_data.detection_validation_status,

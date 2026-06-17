@@ -21,9 +21,6 @@ from core.utils.cache import (
 # block, on_commit runs the callback immediately.
 
 
-# --- User membership changes → invalidate that user only ---
-
-
 @receiver(post_save, sender=UserUserGroup)
 @receiver(post_delete, sender=UserUserGroup)
 def on_user_group_membership_change(sender, instance, **kwargs):  # noqa: ARG001
@@ -31,17 +28,11 @@ def on_user_group_membership_change(sender, instance, **kwargs):  # noqa: ARG001
     transaction.on_commit(lambda: invalidate_caches_for_user(user_id))
 
 
-# --- Group geo_zones changes → invalidate all users in that group ---
-
-
 @receiver(m2m_changed, sender=UserGroup.geo_zones.through)
 def on_user_group_geo_zones_change(sender, instance, action, **kwargs):  # noqa: ARG001
     if action in ("post_add", "post_remove", "post_clear"):
         group_id = instance.id
         transaction.on_commit(lambda: invalidate_caches_for_group(group_id))
-
-
-# --- Tileset changes → invalidate all tileset filter caches ---
 
 
 @receiver(post_save, sender=TileSet)

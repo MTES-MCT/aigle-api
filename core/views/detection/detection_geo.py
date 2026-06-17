@@ -103,7 +103,6 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         )
         detections = detections_queryset.all()
 
-        # Use bulk update service for business logic
         from core.permissions.scope import resolve_scoped_user_group
         from core.services.detection_bulk_update import DetectionBulkUpdateService
 
