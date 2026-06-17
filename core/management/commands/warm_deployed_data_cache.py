@@ -12,10 +12,13 @@ def log_event(info: str):
 
 class Command(BaseCommand):
     help = (
-        "Recompute and cache the SUPER_ADMIN 'deployed data' overview. The aggregation "
-        "scans the whole detection/parcel dataset (index-only scans, ~10-20s); run this "
-        "after a detection/parcel import (which invalidates the cache) so HTTP requests "
-        "always hit a warm cache instead of paying the cold computation cost."
+        "Recompute and cache the SUPER_ADMIN 'deployed data' overview: both the "
+        "department list AND every per-department detail page. Run this after a "
+        "detection/parcel import (which invalidates the cache) so every HTTP request "
+        "hits a warm cache instead of paying the cold per-department computation. "
+        "Computing all department details scans the detection/parcel dataset once per "
+        "department, so this takes on the order of a minute; it is meant to run "
+        "out-of-band (Celery/cron), not in the request path."
     )
 
     def handle(self, *args, **options):

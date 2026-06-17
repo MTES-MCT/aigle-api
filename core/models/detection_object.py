@@ -62,4 +62,14 @@ class DetectionObject(
                 condition=models.Q(commune__isnull=False),
                 name="detobj_id_commune_idx",
             ),
+            # commune-LEADING covering index for the per-department deployed-data detail,
+            # which seeks objects by `commune_id IN (<populated communes>)`. The (id,
+            # commune) index above leads with id and so can't seek by commune; this one
+            # lets those scoped lookups (and the detection-join object side) run as
+            # index-only seeks instead of scanning the whole table. See DeployedDataService.
+            models.Index(
+                fields=["commune", "id"],
+                condition=models.Q(commune__isnull=False),
+                name="detobj_commune_id_idx",
+            ),
         ]
