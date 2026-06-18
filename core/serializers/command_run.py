@@ -22,6 +22,10 @@ class CommandRunSerializer(UuidTimestampedModelSerializerMixin):
 
 class ListTasksParametersSerializer(serializers.Serializer):
     statuses = serializers.CharField(required=False, allow_blank=True)
+    q = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_q(self, value):
+        return value.strip() or None
 
     def validate_statuses(self, value):
         if not value:

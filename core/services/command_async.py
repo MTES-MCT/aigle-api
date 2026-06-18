@@ -68,11 +68,15 @@ class CommandAsyncService:
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         statuses: Optional[List[str]] = None,
+        q: Optional[str] = None,
     ) -> Tuple[List[CommandRun], int]:
         queryset = CommandRun.objects.all().order_by("-created_at")
 
         if statuses:
             queryset = queryset.filter(status__in=statuses)
+
+        if q:
+            queryset = queryset.filter(command_name__icontains=q)
 
         count = queryset.count()
         if limit:

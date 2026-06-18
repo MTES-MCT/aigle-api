@@ -186,6 +186,28 @@ class RunCommandEndpointTests(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(CommandRun.objects.exists())
 
+    def test_tasks_endpoint_filters_by_command_name_q(self):
+        CommandRun.objects.create(
+            command_name="import_custom_zones",
+            task_id="22222222-2222-2222-2222-222222222222",
+            status=CommandRunStatus.SUCCESS,
+        )
+        CommandRun.objects.create(
+            command_name="import_parcels",
+            task_id="33333333-3333-3333-3333-333333333333",
+            status=CommandRunStatus.SUCCESS,
+        )
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(
+            reverse("CommandAsyncViewSet-list-tasks"), {"q": "parcel"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["command_name"], "import_parcels")
+
     def test_tasks_endpoint_returns_raw_json_without_camelcase(self):
         # This route opts out of the camelCase renderer so arguments keys round-trip
         # verbatim. The canary: "--table-name" stays as-is and the model field is served

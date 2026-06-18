@@ -63,9 +63,10 @@ class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
         offset = paginator.get_offset(request)
 
         statuses = params_serializer.validated_data.get("statuses")
+        q = params_serializer.validated_data.get("q")
 
         command_runs, count = CommandAsyncService.get_command_runs(
-            limit=limit, offset=offset, statuses=statuses
+            limit=limit, offset=offset, statuses=statuses, q=q
         )
         serializer = CommandRunSerializer(command_runs, many=True)
         return Response(
