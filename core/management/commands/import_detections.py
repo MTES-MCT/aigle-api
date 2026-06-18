@@ -1,4 +1,5 @@
 import csv
+import time
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 from django.core.management.base import BaseCommand, CommandError
@@ -33,7 +34,7 @@ from core.constants.detection import PERCENTAGE_SAME_DETECTION_THRESHOLD
 from core.services.detection import DetectionService
 from core.services.detection_process import DetectionProcessService
 from core.services.prescription import PrescriptionService
-from core.utils.logs_helpers import log_command_event
+from core.utils.logs_helpers import log_command_event, log_command_progress
 from core.utils.string import normalize
 from core.utils.cache import invalidate_count_caches
 from simple_history.utils import bulk_create_with_history
@@ -112,6 +113,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         super().__init__(*args, **kwargs)
 
         self.start_time = datetime.now()
+        self.start_monotonic = time.monotonic()
 
         self.object_types_map = None
         self._user_reviewer = None
@@ -500,14 +502,17 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         self.total_inserted_detections += len(self.detections_to_insert)
 
         if self.total:
-            log_event(
-                f"Inserted {self.total_inserted_detections}/{self.total} detections in total ({(self.total_inserted_detections/self.total)*100:.2f}%)"
+            log_command_progress(
+                "import_detections",
+                self.total_inserted_detections,
+                self.total,
+                self.start_monotonic,
             )
         else:
+            # File imports have no upfront row count — log the running tally only.
             log_event(f"Inserted {
                 self.total_inserted_detections} detections in total")
-
-        log_event(f"Elapsed time: {datetime.now() - self.start_time}")
+            log_event(f"Elapsed time: {datetime.now() - self.start_time}")
 
         self.detection_objects_to_insert = []
         self.detection_datas_to_insert = []

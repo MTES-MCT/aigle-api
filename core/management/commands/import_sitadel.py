@@ -1,5 +1,6 @@
 from collections import defaultdict
 import csv
+import time
 from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
@@ -15,7 +16,7 @@ from core.models.detection_data import (
     DetectionValidationStatusChangeReason,
 )
 from core.models.parcel import Parcel
-from core.utils.logs_helpers import log_command_event
+from core.utils.logs_helpers import log_command_event, log_command_progress
 from core.utils.cache import invalidate_count_caches
 from operator import or_
 from django.db.models import Q, Count, Prefetch
@@ -83,9 +84,14 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         filter_coms = options["filter_coms"]
         filter_dpts = options["filter_dpts"]
 
+        # Cheap extra pass (no CSV parsing) to know the denominator for progress.
+        with open(file_csv_path, mode="r") as f:
+            total = max(sum(1 for _ in f) - 1, 0)
+
         file_csv = open(file_csv_path, mode="r")
         file_csv_reader = csv.DictReader(file_csv, delimiter=";")
 
+        start_time = time.monotonic()
         while True:
             csv_data = self.extract_data_from_csv(
                 file_csv_reader=file_csv_reader,
@@ -102,6 +108,12 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             self.update_database(data=csv_data, persist_data=persist_data)
 
             self.log()
+            log_command_progress(
+                "import_sitadel",
+                min(file_csv_reader.line_num - 1, total),
+                total,
+                start_time,
+            )
 
     @staticmethod
     def extract_data_from_csv(

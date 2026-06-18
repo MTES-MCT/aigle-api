@@ -6,6 +6,8 @@ import uuid as uuid_lib
 from django.utils import timezone
 
 from core.models.command_run import CommandRun, CommandRunOrigin, CommandRunStatus
+from core.utils.command_progress import clear_command_progress
+from core.utils.logs_helpers import current_command_run_pk_var
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +108,10 @@ class CommandRunTrackerMixin:
                 command_run.save(
                     update_fields=["status", "run_started_at", "updated_at"]
                 )
+                # Expose the row to log_command_progress for the duration of the run.
+                self._aigle_progress_token = current_command_run_pk_var.set(
+                    command_run.pk
+                )
             return command_run
         except Exception:
             logger.exception(
@@ -115,8 +121,14 @@ class CommandRunTrackerMixin:
 
     def _aigle_finish_tracking(self, command_run, status, error=None):
         captured_output = self._aigle_detach_log_capture()
+        token = getattr(self, "_aigle_progress_token", None)
+        if token is not None:
+            current_command_run_pk_var.reset(token)
+            self._aigle_progress_token = None
         if command_run is None:
             return
+        # Progress lived in Redis only for the run's duration — drop it now it's finished.
+        clear_command_progress(command_run.pk)
         try:
             now = timezone.now()
             fields = {"status": status, "run_ended_at": now, "updated_at": now}

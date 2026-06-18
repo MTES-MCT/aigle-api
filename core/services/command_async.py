@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from django.utils import timezone
 
 from core.models.command_run import CommandRun, CommandRunOrigin, CommandRunStatus
+from core.utils.command_progress import clear_command_progress
 from core.utils.tasks import run_management_command
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,14 @@ class CommandAsyncService:
         )
 
         AsyncResult(task_id).revoke(terminate=True)
+
+        # Best-effort tidy: revoke is async, so the worker may run one more batch and
+        # re-write the key after this clear. That's fine — the serializer never renders
+        # progress for a terminal run, and the TTL reaps any leftover key regardless.
+        run = CommandRun.objects.filter(task_id=task_id).only("id").first()
+        if run is not None:
+            clear_command_progress(run.pk)
+
         return True
 
     @staticmethod
