@@ -226,6 +226,11 @@ CACHES = {
 
 CELERY_BROKER_URL = "redis://localhost:6379/0"
 CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
+
+# Redis re-delivers any task that runs longer than visibility_timeout (default 1h),
+# silently re-executing long imports (→ duplicate detections). Must exceed the longest
+# possible run, with wide margin since these imports are heavy and non-idempotent.
+CELERY_BROKER_TRANSPORT_OPTIONS = {"visibility_timeout": 60 * 60 * 24}
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
@@ -242,3 +247,11 @@ CELERY_TASK_ROUTES = {
 
 CELERY_WORKER_CONCURRENCY = 1
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# A stuck task must not block the single sequential_commands worker forever, but big
+# imports legitimately run up to ~12h. Soft limit raises inside the task so
+# run_management_command's except/finally marks the row ERROR and the queue advances;
+# hard limit SIGKILLs the child as a last resort. Must stay below visibility_timeout
+# (24h) so a hung task is always killed before the broker would re-deliver it.
+CELERY_TASK_SOFT_TIME_LIMIT = 60 * 60 * 15
+CELERY_TASK_TIME_LIMIT = 60 * 60 * 16

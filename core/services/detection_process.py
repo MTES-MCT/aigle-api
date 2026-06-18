@@ -15,6 +15,8 @@ from django.contrib.gis.geos import MultiPolygon
 from django.db.models import Prefetch, Sum, Case, When, IntegerField
 from django.contrib.gis.db.models.functions import Centroid
 
+from core.utils.logs_helpers import log_command_event
+
 
 class DetectionProcessService:
     """Service for handling detection database processes"""
@@ -46,15 +48,24 @@ class DetectionProcessService:
             .defer("detections__tile__geometry")
         )
 
-        for detection_object in detection_objects.all():
+        log_command_event("merge_double_detections", "started")
+
+        for index, detection_object in enumerate(detection_objects.all()):
+            if index % 500 == 0:
+                log_command_event(
+                    "merge_double_detections", f"processed {index} objects"
+                )
+
             detections = detection_object.detections.all()
             detections_data = [detection.detection_data for detection in detections]
             detection_to_keep = max(detections, key=lambda detec: detec.score)
 
-            union_geometry = MultiPolygon(
+            # Only the bounding box is kept, so skip the expensive unary_union dissolve
+            # (which can spin for hours on overlapping/invalid polygons) — the envelope
+            # of the collection equals the envelope of its union.
+            new_geometry = MultiPolygon(
                 [detec.geometry for detec in detections]
-            ).unary_union
-            new_geometry = union_geometry.envelope
+            ).envelope
             detection_to_keep.geometry = new_geometry
 
             detection_to_keep.detection_source = extract_higest_priority_value(
@@ -135,6 +146,8 @@ class DetectionProcessService:
                 id__in=detection_data_ids_to_delete
             ).all().delete()
             Detection.objects.filter(id__in=detection_ids_to_delete).all().delete()
+
+        log_command_event("merge_double_detections", "finished")
 
 
 VALUE_PRIORITY_MAP = {
