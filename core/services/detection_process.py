@@ -15,6 +15,10 @@ from django.contrib.gis.geos import MultiPolygon
 from django.db.models import Prefetch, Sum, Case, When, IntegerField
 from django.contrib.gis.db.models.functions import Centroid
 
+from core.utils.cache import (
+    invalidate_count_caches,
+    suppress_count_cache_invalidation,
+)
 from core.utils.logs_helpers import log_command_event
 
 
@@ -128,9 +132,6 @@ class DetectionProcessService:
                     ]
                 )
 
-            detection_to_keep.detection_data.save()
-            detection_to_keep.save()
-
             detection_ids_to_delete = [
                 detection.id
                 for detection in detections
@@ -142,11 +143,18 @@ class DetectionProcessService:
                 if detection.id != detection_to_keep.id
             ]
 
-            DetectionData.objects.filter(
-                id__in=detection_data_ids_to_delete
-            ).all().delete()
-            Detection.objects.filter(id__in=detection_ids_to_delete).all().delete()
+            # Per-row save/delete fires the count-cache signal once per row; suppress it
+            # here and invalidate once after the loop (see invalidate below).
+            with suppress_count_cache_invalidation():
+                detection_to_keep.detection_data.save()
+                detection_to_keep.save()
 
+                DetectionData.objects.filter(
+                    id__in=detection_data_ids_to_delete
+                ).all().delete()
+                Detection.objects.filter(id__in=detection_ids_to_delete).all().delete()
+
+        invalidate_count_caches()
         log_command_event("merge_double_detections", "finished")
 
 

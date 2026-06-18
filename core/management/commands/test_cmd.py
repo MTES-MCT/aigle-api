@@ -1,6 +1,7 @@
 from time import sleep
 
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 
 from core.models.user import User
 from core.utils.logs_helpers import log_command_event
@@ -10,7 +11,7 @@ def log_event(info: str):
     log_command_event(command_name="test_cmd", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "No-op command used to verify the admin run-command flow end-to-end."
 
     def add_arguments(self, parser):

@@ -208,6 +208,24 @@ class RunCommandEndpointTests(BaseAPITestCase):
         self.assertEqual(body["count"], 1)
         self.assertEqual(body["results"][0]["command_name"], "import_parcels")
 
+    def test_tasks_endpoint_exposes_origin_and_timing_fields(self):
+        CommandRun.objects.create(
+            command_name="test_cmd",
+            task_id="44444444-4444-4444-4444-444444444444",
+            run_origin="CLI",
+            status=CommandRunStatus.RUNNING,
+        )
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.json()["results"][0]
+        # snake_case (this route opts out of the camelCase renderer)
+        self.assertEqual(result["run_origin"], "CLI")
+        self.assertIn("run_started_at", result)
+        self.assertIn("run_ended_at", result)
+
     def test_tasks_endpoint_returns_raw_json_without_camelcase(self):
         # This route opts out of the camelCase renderer so arguments keys round-trip
         # verbatim. The canary: "--table-name" stays as-is and the model field is served

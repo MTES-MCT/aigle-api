@@ -1,5 +1,6 @@
 from typing import Any, Dict, Iterable
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from rest_framework import serializers
 from django.db import connection
 from django.db.models import F
@@ -31,7 +32,7 @@ def log_event(info: str):
     log_command_event(command_name="import_geoepcis", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import EPCIs from another schema, generated from adminexpress"
 
     def add_arguments(self, parser):

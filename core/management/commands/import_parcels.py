@@ -2,6 +2,7 @@ import json
 import tempfile
 from typing import Any, Dict, List, Tuple, TypedDict
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from datetime import datetime
 import gzip
 
@@ -54,7 +55,7 @@ def log_event(info: str):
     log_command_event(command_name="import_parcels", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import parcels to database from JSON"
 
     def add_arguments(self, parser):

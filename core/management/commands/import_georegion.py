@@ -1,6 +1,7 @@
 import json
 from typing import TypedDict
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 import shapefile
 
 from core.constants.geo import SRID
@@ -29,7 +30,7 @@ def log_event(info: str):
     log_command_event(command_name="import_georegion", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import regions to database from SHP"
 
     def add_arguments(self, parser):

@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 
 from core.models.geo_custom_zone import GeoCustomZone
 from core.services.geo_custom_zone import GeoCustomZoneService
@@ -9,7 +10,7 @@ def log_event(info: str):
     log_command_event(command_name="update_custom_zones", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Refresh data after update geometry of a custom zone"
 
     def add_arguments(self, parser):

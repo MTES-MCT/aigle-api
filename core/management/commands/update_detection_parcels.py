@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
 from django.contrib.gis.geos import GEOSGeometry
@@ -14,7 +15,7 @@ def log_event(info: str):
     log_command_event(command_name="update_detection_parcels", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Update parcel_id in DetectionObject model with pagination"
 
     def add_arguments(self, parser):

@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
@@ -13,7 +14,7 @@ def log_event(info: str):
     log_command_event(command_name="compute_prescription", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Compute prescription statuses for specified object types"
 
     def add_arguments(self, parser):

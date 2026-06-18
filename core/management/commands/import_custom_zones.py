@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from django.contrib.gis.geos import GEOSGeometry
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 from django.db import connection, transaction
 
 from core.constants.geo import SRID
@@ -39,7 +40,7 @@ def log_event(info: str):
     log_command_event(command_name="import_custom_zones", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = (
         "Import custom zones from the detections schema (default table: zae_layer). "
         "Each source row becomes one GeoCustomZone, attached to the department "

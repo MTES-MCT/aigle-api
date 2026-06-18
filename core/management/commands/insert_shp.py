@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from django.contrib.gis.geos import GEOSGeometry
 from django.db import connection
 from django.contrib.gis.db.models.functions import Intersection
@@ -15,7 +16,7 @@ BATCH_SIZE = 10000
 IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Convert a shape to postgis geometry and insert it in database"
 
     def add_arguments(self, parser):

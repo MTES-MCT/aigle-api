@@ -47,13 +47,38 @@ _increment_version, which swallow and log backend errors; with the version count
 unreachable, every key resolves to version 1 consistently, so callers just recompute.
 """
 
+import contextvars
 import logging
 import os
+from contextlib import contextmanager
 from typing import Callable, Optional, TypeVar
 
 from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
+
+# When set, the count-cache signal handlers skip their per-row invalidation. For
+# bulk per-row save/delete loops (e.g. merge_double_detections) that would otherwise
+# bump the count version once per row and flood the logs. Read at signal-emit time
+# (inside save()/delete()), so it is robust to whenever the surrounding transaction
+# commits. The block's caller MUST invalidate_count_caches() once afterward.
+_suppress_count_invalidation: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "suppress_count_invalidation", default=False
+)
+
+
+@contextmanager
+def suppress_count_cache_invalidation():
+    token = _suppress_count_invalidation.set(True)
+    try:
+        yield
+    finally:
+        _suppress_count_invalidation.reset(token)
+
+
+def count_cache_invalidation_suppressed() -> bool:
+    return _suppress_count_invalidation.get()
+
 
 # Namespace + schema version for every key. Bump CACHE_SCHEMA_VERSION to force a
 # one-time cold start of the whole cache (e.g. if a cached value's pickled shape

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from django.db import transaction
 
 from core.constants.detection import CONTROLLED_DETECTION_STATUSES
@@ -65,7 +66,7 @@ class DataOutputRow:
     parcels: Optional[List[Parcel]] = None
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import Sitadel file"
     dpt_detection_objects_ids_updated_map = defaultdict(set)
     dpt_parcels_ids_updated_map = defaultdict(set)

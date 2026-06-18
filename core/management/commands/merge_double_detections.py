@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 
 from core.services.detection_process import DetectionProcessService
 from core.utils.logs_helpers import log_command_event
@@ -8,7 +9,7 @@ def log_event(info: str):
     log_command_event(command_name="merge_double_detections", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Command to merge detections that belong to the same tileset but are attached to the same detection object"
 
     def add_arguments(self, parser):

@@ -38,6 +38,7 @@ from core.utils.cache import (
     invalidate_user_geo_caches,
     safe_cache_get,
     safe_cache_set,
+    suppress_count_cache_invalidation,
 )
 from core.utils.pagination import generate_query_cache_key
 
@@ -186,6 +187,23 @@ class CountInvalidationSignalTests(TestCase):
         version_before = get_count_cache_version()
         with self.captureOnCommitCallbacks(execute=True):
             create_detection_object(object_type=create_object_type(name="CountSigType"))
+        self.assertNotEqual(version_before, get_count_cache_version())
+
+    def test_suppress_context_skips_count_invalidation(self):
+        # merge_double_detections suppresses the per-row signal and invalidates once
+        # at the end instead of bumping the version on every save/delete.
+        obj = create_detection_object(
+            object_type=create_object_type(name="CountSigSuppress")
+        )
+        version_before = get_count_cache_version()
+        with self.captureOnCommitCallbacks(execute=True):
+            with suppress_count_cache_invalidation():
+                obj.save()
+        self.assertEqual(version_before, get_count_cache_version())
+
+        # signal fires normally again once outside the suppression block
+        with self.captureOnCommitCallbacks(execute=True):
+            obj.save()
         self.assertNotEqual(version_before, get_count_cache_version())
 
     def test_custom_zone_association_invalidates_count(self):

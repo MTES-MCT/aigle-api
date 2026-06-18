@@ -4,6 +4,7 @@ from typing import List, Tuple
 from functools import reduce
 import operator
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionValidationStatus,
@@ -33,7 +34,7 @@ def parse_date(date_string: str) -> date:
         )
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import data from Lucca analytics database"
 
     def add_arguments(self, parser):

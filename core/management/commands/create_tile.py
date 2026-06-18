@@ -2,6 +2,7 @@ import math
 
 from django.contrib.gis.db.models.functions import Envelope
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 
 from core.models.geo_zone import GeoZone
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
@@ -27,7 +28,7 @@ def lat_to_tile_y(lat: float, zoom: int) -> int:
     )
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Populate tile table"
 
     def add_arguments(self, parser):

@@ -9,7 +9,9 @@ from celery.signals import worker_ready
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import close_old_connections, connection as default_connection
+from django.utils import timezone
 
+from core.management.base import command_run_uuid_var
 from core.models.command_run import CommandRun, CommandRunStatus
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ def reap_orphaned_runs(**_kwargs) -> None:
         ).update(
             status=CommandRunStatus.ERROR,
             error="Worker restarted before task could finish.",
+            run_ended_at=timezone.now(),
         )
         if count:
             logger.warning("Reaped %d orphaned CommandRun row(s) on worker boot", count)
@@ -120,28 +123,6 @@ def capture_aigle_logs(buffer: StringIO):
         aigle_logger.removeHandler(handler)
 
 
-def _save_terminal_state(
-    command_run: Optional[CommandRun],
-    status: str,
-    output: str,
-    error: Optional[str] = None,
-) -> None:
-    """Writes the final status — but skips if the row is already finished (CANCELED) so the user's cancel always wins the race."""
-    if not command_run:
-        return
-    try:
-        command_run.refresh_from_db(fields=["status"])
-    except CommandRun.DoesNotExist:
-        return
-    if command_run.is_finished():
-        return
-    command_run.status = status
-    command_run.output = output
-    if error is not None:
-        command_run.error = error
-    command_run.save()
-
-
 @shared_task(bind=True)
 def run_management_command(
     self,
@@ -161,10 +142,10 @@ def run_management_command(
         command_kwargs,
     )
 
+    # Hand the row to CommandRunTrackerMixin, which owns the status/timing lifecycle for
+    # both API and CLI runs. This task only streams live output into the row.
+    var_token = command_run_uuid_var.set(command_run_uuid)
     command_run = CommandRun.objects.filter(uuid=command_run_uuid).first()
-    if command_run:
-        command_run.status = CommandRunStatus.RUNNING
-        command_run.save()
 
     output = LiveBuffer()
     flusher = (
@@ -182,32 +163,23 @@ def run_management_command(
                 **(command_kwargs or {}),
             )
 
-        _save_terminal_state(command_run, CommandRunStatus.SUCCESS, output.snapshot())
         return {
             "status": "success",
             "output": output.snapshot(),
             "task_id": task_id,
         }
     except CommandError as e:
-        _save_terminal_state(
-            command_run, CommandRunStatus.ERROR, output.snapshot(), str(e)
-        )
         return {"status": "error", "error": str(e), "task_id": task_id}
     except Exception as e:
         # No retry: import/heavy commands are rarely safe to re-run blind.
         logger.exception("Unexpected error running %s", command_name)
-        _save_terminal_state(
-            command_run,
-            CommandRunStatus.ERROR,
-            output.snapshot(),
-            f"Unexpected error: {e}",
-        )
         return {
             "status": "error",
             "error": f"Unexpected error: {e}",
             "task_id": task_id,
         }
     finally:
+        command_run_uuid_var.reset(var_token)
         if flusher is not None:
             flusher.stop()
             flusher.join(timeout=10)

@@ -1,4 +1,5 @@
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from django.db import connection, transaction
 
 from core.utils.cache import invalidate_count_caches
@@ -22,7 +23,7 @@ ORPHAN_DETECTION_OBJECTS = """
 """
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Completely remove detections (and their orphaned data/objects) for a batch id or a tile set id."
 
     def add_arguments(self, parser):

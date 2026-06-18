@@ -2,6 +2,7 @@ import csv
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 from rest_framework import serializers
 from django.db import connection
 
@@ -93,7 +94,7 @@ def log_event(info: str):
     log_command_event(command_name="import_detections", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import detections from CSV"
     start_time: datetime
     object_types_map: Dict[str, ObjectType]

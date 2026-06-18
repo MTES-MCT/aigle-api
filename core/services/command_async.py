@@ -2,7 +2,9 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.models.command_run import CommandRun, CommandRunStatus
+from django.utils import timezone
+
+from core.models.command_run import CommandRun, CommandRunOrigin, CommandRunStatus
 from core.utils.tasks import run_management_command
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,7 @@ class CommandAsyncService:
             command_name=command_name,
             task_id=command_run_uuid,
             arguments={"kwargs": parameters},
+            run_origin=CommandRunOrigin.API,
             status=CommandRunStatus.PENDING,
         )
 
@@ -54,11 +57,22 @@ class CommandAsyncService:
     def cancel_task(task_id: str) -> bool:
         from celery.result import AsyncResult
 
-        command_run = CommandRun.objects.filter(task_id=task_id).first()
-        if command_run and not command_run.is_finished():
-            command_run.status = CommandRunStatus.CANCELED
-            command_run.error = "Task cancelled by user"
-            command_run.save()
+        now = timezone.now()
+        # Atomic compare-and-set: only a not-yet-finished row flips to CANCELED, so this
+        # never overwrites a run that already succeeded/errored, never races the tracker
+        # mixin's terminal write, and never clobbers the live-streamed output field.
+        CommandRun.objects.filter(task_id=task_id).exclude(
+            status__in=[
+                CommandRunStatus.SUCCESS,
+                CommandRunStatus.ERROR,
+                CommandRunStatus.CANCELED,
+            ]
+        ).update(
+            status=CommandRunStatus.CANCELED,
+            error="Task cancelled by user",
+            run_ended_at=now,
+            updated_at=now,
+        )
 
         AsyncResult(task_id).revoke(terminate=True)
         return True
