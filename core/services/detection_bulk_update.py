@@ -46,7 +46,8 @@ class DetectionBulkUpdateService:
             self._perform_bulk_updates(
                 detection_datas_to_update,
                 detection_objects_to_update,
-                detection_data_fields_to_update + ["user_last_update"],
+                self._get_columns_to_persist(detection_data_fields_to_update)
+                + ["user_last_update"],
             )
 
         return detections
@@ -77,6 +78,21 @@ class DetectionBulkUpdateService:
         if update_data.get("detection_validation_status"):
             fields.append("detection_validation_status")
         return fields
+
+    def _get_columns_to_persist(self, fields_to_update: List[str]) -> List[str]:
+        # set_detection_control_status cascades to the validation and prescription
+        # statuses (DETECTED_NOT_VERIFIED -> SUSPECT, and un-prescribe on
+        # OFFICIAL_REPORT_DRAWN_UP), so those columns must be written even when not
+        # edited directly — otherwise bulk_update silently drops the cascaded change.
+        columns = list(fields_to_update)
+        if "detection_control_status" in columns:
+            for cascaded in (
+                "detection_validation_status",
+                "detection_prescription_status",
+            ):
+                if cascaded not in columns:
+                    columns.append(cascaded)
+        return columns
 
     def _update_detection_data_fields(
         self,

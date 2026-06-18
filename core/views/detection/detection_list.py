@@ -98,6 +98,7 @@ class DownloadParamsSerializer(serializers.Serializer):
 DEFAULT_ORDERING = "id"
 DETECTION_CONTROL_STATUSES_ORDERED = [
     DetectionControlStatus.NOT_CONTROLLED,
+    DetectionControlStatus.TO_CONTROL,
     DetectionControlStatus.CONTROLLED_FIELD,
     DetectionControlStatus.PRIOR_LETTER_SENT,
     DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,

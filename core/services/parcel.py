@@ -42,12 +42,14 @@ class ParcelService:
                 filter_detection_validation_status_in=[
                     DetectionValidationStatus.DETECTED_NOT_VERIFIED,
                     DetectionValidationStatus.SUSPECT,
+                    DetectionValidationStatus.ILLEGAL,
                 ],
                 filter_object_type_uuid_in=[
                     str(object_type.uuid) for object_type, _ in object_types_with_status
                 ],
                 filter_detection_control_status_in=[
                     DetectionControlStatus.NOT_CONTROLLED,
+                    DetectionControlStatus.TO_CONTROL,
                     DetectionControlStatus.CONTROLLED_FIELD,
                     DetectionControlStatus.PRIOR_LETTER_SENT,
                     DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
@@ -124,6 +126,7 @@ class ParcelService:
                 filter=Q(
                     detection_objects__detections__detection_data__detection_validation_status__in=[
                         DetectionValidationStatus.SUSPECT,
+                        DetectionValidationStatus.ILLEGAL,
                         DetectionValidationStatus.LEGITIMATE,
                         DetectionValidationStatus.INVALIDATED,
                     ]
@@ -132,7 +135,10 @@ class ParcelService:
             not_controlled_count=Count(
                 "detection_objects__detections__detection_data",
                 filter=Q(
-                    detection_objects__detections__detection_data__detection_control_status=DetectionControlStatus.NOT_CONTROLLED
+                    detection_objects__detections__detection_data__detection_control_status__in=[
+                        DetectionControlStatus.NOT_CONTROLLED,
+                        DetectionControlStatus.TO_CONTROL,
+                    ]
                 ),
             ),
             controlled_count=Count(

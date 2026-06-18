@@ -62,6 +62,84 @@ class DetectionDataViewSetTests(BaseAPITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_set_to_control_upgrades_not_verified_to_suspect(self):
+        self.detection_data.detection_control_status = (
+            DetectionControlStatus.NOT_CONTROLLED
+        )
+        self.detection_data.detection_validation_status = (
+            DetectionValidationStatus.DETECTED_NOT_VERIFIED
+        )
+        self.detection_data.save()
+
+        self.authenticate_user(self.super_admin)
+        url = reverse(
+            "DetectionDataViewSet-detail",
+            kwargs={"uuid": str(self.detection_data.uuid)},
+        )
+        response = self.client.patch(
+            url,
+            {"detectionControlStatus": DetectionControlStatus.TO_CONTROL.value},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.detection_data.refresh_from_db()
+        self.assertEqual(
+            self.detection_data.detection_control_status,
+            DetectionControlStatus.TO_CONTROL,
+        )
+        self.assertEqual(
+            self.detection_data.detection_validation_status,
+            DetectionValidationStatus.SUSPECT,
+        )
+
+
+class DetectionBulkUpdateTests(BaseAPITestCase):
+    """Bulk edit via DetectionBulkUpdateService.update_multiple_detections."""
+
+    def setUp(self):
+        super().setUp()
+        self.super_admin = create_super_admin(email="bulkadmin@test.com")
+        self.tile_set = create_tile_set(name="Bulk 2024")
+
+    def _create_not_verified_detection(self, bbox):
+        detection_data = create_detection_data(
+            detection_control_status=DetectionControlStatus.NOT_CONTROLLED,
+            detection_validation_status=DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+        )
+        return create_detection(
+            detection_object=create_detection_object(),
+            tile_set=self.tile_set,
+            geometry=self.create_bbox_polygon(*bbox),
+            detection_data=detection_data,
+        )
+
+    def test_bulk_control_status_persists_cascaded_validation_upgrade(self):
+        """Editing only the control status must still persist the validation
+        status that set_detection_control_status cascades (NOT_VERIFIED -> SUSPECT)."""
+        from core.services.detection_bulk_update import DetectionBulkUpdateService
+
+        detections = [
+            self._create_not_verified_detection((3.86, 43.60, 3.87, 43.61)),
+            self._create_not_verified_detection((3.88, 43.62, 3.89, 43.63)),
+        ]
+
+        DetectionBulkUpdateService(user=self.super_admin).update_multiple_detections(
+            detections=detections,
+            update_data={"detection_control_status": DetectionControlStatus.TO_CONTROL},
+        )
+
+        for detection in detections:
+            detection.detection_data.refresh_from_db()
+            self.assertEqual(
+                detection.detection_data.detection_control_status,
+                DetectionControlStatus.TO_CONTROL,
+            )
+            self.assertEqual(
+                detection.detection_data.detection_validation_status,
+                DetectionValidationStatus.SUSPECT,
+            )
+
 
 class DetectionDataPrescriptionTests(BaseAPITestCase):
     """Prescription transitions via PATCH detection-data/<uuid>/.

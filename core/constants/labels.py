@@ -8,12 +8,13 @@ from core.models.detection_data import (
 
 DETECTION_CONTROL_STATUSES_NAMES_MAP = {
     DetectionControlStatus.NOT_CONTROLLED: "Non contrôlé",
+    DetectionControlStatus.TO_CONTROL: "À contrôler",
     DetectionControlStatus.PRIOR_LETTER_SENT: "Courrier préalable envoyé",
     DetectionControlStatus.CONTROLLED_FIELD: "Contrôlé terrain",
     DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP: "PV dressé",
     DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT: "Astreinte Administrative",
     DetectionControlStatus.OBSERVARTION_REPORT_REDACTED: "Rapport de constatations rédigé",
-    DetectionControlStatus.JUGEMENT: "Jugement",
+    DetectionControlStatus.JUGEMENT: "En jugement",
     DetectionControlStatus.REHABILITATED: "Remis en état",
 }
 
@@ -31,6 +32,7 @@ DETECTION_PRESCRIPTION_STATUSES_NAMES_MAP = {
 DETECTION_VALIDATION_STATUSES_NAMES_MAP = {
     DetectionValidationStatus.DETECTED_NOT_VERIFIED: "Non vérifié",
     DetectionValidationStatus.SUSPECT: "Suspect",
+    DetectionValidationStatus.ILLEGAL: "Illégal",
     DetectionValidationStatus.LEGITIMATE: "Légal",
     DetectionValidationStatus.INVALIDATED: "Invalidé",
 }
