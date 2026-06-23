@@ -1,10 +1,13 @@
+import time
+
 from django.core.management.base import BaseCommand, CommandError
+from core.management.base import CommandRunTrackerMixin
 
 from core.models.detection_object import DetectionObject
 from core.models.object_type import ObjectType
 from core.services.prescription import PrescriptionService
 from core.utils.cache import invalidate_count_caches
-from core.utils.logs_helpers import log_command_event
+from core.utils.logs_helpers import log_command_event, log_command_progress
 
 BATCH_SIZE = 10000
 
@@ -13,7 +16,7 @@ def log_event(info: str):
     log_command_event(command_name="compute_prescription", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Compute prescription statuses for specified object types"
 
     def add_arguments(self, parser):
@@ -29,6 +32,7 @@ class Command(BaseCommand):
         log_event(f"Starting compute prescription statuses for object types: {
               [ot.name for ot in object_types]}")
 
+        start_time = time.monotonic()
         offset = 0
         total = DetectionObject.objects.filter(object_type__in=object_types).count()
 
@@ -51,8 +55,7 @@ class Command(BaseCommand):
 
             offset += len(detection_objects)
 
-            log_event(f"Computed prescription for detection objects: {
-                  offset}/{total}")
+            log_command_progress("compute_prescription", offset, total, start_time)
 
         # PrescriptionService bulk-updates prescription status (bypasses post_save),
         # which is a count filter dimension — invalidate counts once for the run.

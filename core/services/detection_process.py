@@ -15,6 +15,12 @@ from django.contrib.gis.geos import MultiPolygon
 from django.db.models import Prefetch, Sum, Case, When, IntegerField
 from django.contrib.gis.db.models.functions import Centroid
 
+from core.utils.cache import (
+    invalidate_count_caches,
+    suppress_count_cache_invalidation,
+)
+from core.utils.logs_helpers import log_command_event
+
 
 class DetectionProcessService:
     """Service for handling detection database processes"""
@@ -46,15 +52,24 @@ class DetectionProcessService:
             .defer("detections__tile__geometry")
         )
 
-        for detection_object in detection_objects.all():
+        log_command_event("merge_double_detections", "started")
+
+        for index, detection_object in enumerate(detection_objects.all()):
+            if index % 500 == 0:
+                log_command_event(
+                    "merge_double_detections", f"processed {index} objects"
+                )
+
             detections = detection_object.detections.all()
             detections_data = [detection.detection_data for detection in detections]
             detection_to_keep = max(detections, key=lambda detec: detec.score)
 
-            union_geometry = MultiPolygon(
+            # Only the bounding box is kept, so skip the expensive unary_union dissolve
+            # (which can spin for hours on overlapping/invalid polygons) — the envelope
+            # of the collection equals the envelope of its union.
+            new_geometry = MultiPolygon(
                 [detec.geometry for detec in detections]
-            ).unary_union
-            new_geometry = union_geometry.envelope
+            ).envelope
             detection_to_keep.geometry = new_geometry
 
             detection_to_keep.detection_source = extract_higest_priority_value(
@@ -117,9 +132,6 @@ class DetectionProcessService:
                     ]
                 )
 
-            detection_to_keep.detection_data.save()
-            detection_to_keep.save()
-
             detection_ids_to_delete = [
                 detection.id
                 for detection in detections
@@ -131,10 +143,19 @@ class DetectionProcessService:
                 if detection.id != detection_to_keep.id
             ]
 
-            DetectionData.objects.filter(
-                id__in=detection_data_ids_to_delete
-            ).all().delete()
-            Detection.objects.filter(id__in=detection_ids_to_delete).all().delete()
+            # Per-row save/delete fires the count-cache signal once per row; suppress it
+            # here and invalidate once after the loop (see invalidate below).
+            with suppress_count_cache_invalidation():
+                detection_to_keep.detection_data.save()
+                detection_to_keep.save()
+
+                DetectionData.objects.filter(
+                    id__in=detection_data_ids_to_delete
+                ).all().delete()
+                Detection.objects.filter(id__in=detection_ids_to_delete).all().delete()
+
+        invalidate_count_caches()
+        log_command_event("merge_double_detections", "finished")
 
 
 VALUE_PRIORITY_MAP = {
@@ -151,13 +172,15 @@ VALUE_PRIORITY_MAP = {
         DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP: 4,
         DetectionControlStatus.PRIOR_LETTER_SENT: 5,
         DetectionControlStatus.CONTROLLED_FIELD: 6,
-        DetectionControlStatus.NOT_CONTROLLED: 7,
+        DetectionControlStatus.TO_CONTROL: 7,
+        DetectionControlStatus.NOT_CONTROLLED: 8,
     },
     "detection_validation_status": {
-        DetectionValidationStatus.INVALIDATED: 0,
-        DetectionValidationStatus.LEGITIMATE: 1,
-        DetectionValidationStatus.SUSPECT: 2,
-        DetectionValidationStatus.DETECTED_NOT_VERIFIED: 3,
+        DetectionValidationStatus.ILLEGAL: 0,
+        DetectionValidationStatus.INVALIDATED: 1,
+        DetectionValidationStatus.LEGITIMATE: 2,
+        DetectionValidationStatus.SUSPECT: 3,
+        DetectionValidationStatus.DETECTED_NOT_VERIFIED: 4,
     },
     "detection_prescription_status": {
         DetectionPrescriptionStatus.PRESCRIBED: 0,

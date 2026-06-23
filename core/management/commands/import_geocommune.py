@@ -1,6 +1,7 @@
 import json
 from typing import Dict, List, TypedDict
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from django.db import IntegrityError
 
 from core.management.commands._common.file import (
@@ -30,7 +31,7 @@ def log_event(info: str):
     log_command_event(command_name="import_geocommune", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import communes to database from JSON"
 
     def add_arguments(self, parser):

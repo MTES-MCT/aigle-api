@@ -3,6 +3,7 @@ import random
 import re
 from typing import Iterable, List, Optional, Tuple, TypedDict
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 import csv
 from django.db.models import Q
 
@@ -41,7 +42,7 @@ def log_event(info: str):
     log_command_event(command_name="import_pvs", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import PVs from a local csv file"
 
     def add_arguments(self, parser):

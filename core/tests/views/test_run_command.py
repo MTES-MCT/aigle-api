@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.core.exceptions import BadRequest
 from django.test import SimpleTestCase
 from django.urls import reverse
@@ -7,6 +8,7 @@ from rest_framework import status
 
 from core.models.command_run import CommandRun, CommandRunStatus
 from core.tests.base import BaseAPITestCase
+from core.utils.command_progress import set_command_progress
 from core.tests.fixtures.users import (
     create_super_admin,
     create_admin,
@@ -185,6 +187,80 @@ class RunCommandEndpointTests(BaseAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(CommandRun.objects.exists())
+
+    def test_tasks_endpoint_filters_by_command_name_q(self):
+        CommandRun.objects.create(
+            command_name="import_custom_zones",
+            task_id="22222222-2222-2222-2222-222222222222",
+            status=CommandRunStatus.SUCCESS,
+        )
+        CommandRun.objects.create(
+            command_name="import_parcels",
+            task_id="33333333-3333-3333-3333-333333333333",
+            status=CommandRunStatus.SUCCESS,
+        )
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(
+            reverse("CommandAsyncViewSet-list-tasks"), {"q": "parcel"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        body = response.json()
+        self.assertEqual(body["count"], 1)
+        self.assertEqual(body["results"][0]["command_name"], "import_parcels")
+
+    def test_tasks_endpoint_exposes_origin_and_timing_fields(self):
+        CommandRun.objects.create(
+            command_name="test_cmd",
+            task_id="44444444-4444-4444-4444-444444444444",
+            run_origin="CLI",
+            status=CommandRunStatus.RUNNING,
+        )
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.json()["results"][0]
+        # snake_case (this route opts out of the camelCase renderer)
+        self.assertEqual(result["run_origin"], "CLI")
+        self.assertIn("run_started_at", result)
+        self.assertIn("run_ended_at", result)
+
+    def test_tasks_endpoint_exposes_progress_for_running_run(self):
+        cache.clear()  # LocMemCache persists across tests
+        run = CommandRun.objects.create(
+            command_name="create_tile",
+            task_id="55555555-5555-5555-5555-555555555555",
+            status=CommandRunStatus.RUNNING,
+        )
+        set_command_progress(run.pk, 3, 10)
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.json()["results"][0]["progress"], {"current": 3, "total": 10}
+        )
+
+    def test_tasks_endpoint_hides_progress_for_finished_run(self):
+        # A leftover Redis key (cancel-vs-worker race / TTL window) must never render a
+        # progress bar next to a terminal-status run.
+        cache.clear()  # LocMemCache persists across tests
+        run = CommandRun.objects.create(
+            command_name="create_tile",
+            task_id="66666666-6666-6666-6666-666666666666",
+            status=CommandRunStatus.CANCELED,
+        )
+        set_command_progress(run.pk, 3, 10)
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.json()["results"][0]["progress"])
 
     def test_tasks_endpoint_returns_raw_json_without_camelcase(self):
         # This route opts out of the camelCase renderer so arguments keys round-trip

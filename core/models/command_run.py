@@ -13,15 +13,27 @@ class CommandRunStatus(models.TextChoices):
     CANCELED = "CANCELED", "CANCELED"
 
 
+class CommandRunOrigin(models.TextChoices):
+    API = "API", "API"
+    CLI = "CLI", "CLI"
+
+
 class CommandRun(TimestampedModelMixin, UuidModelMixin):
     command_name = models.CharField(max_length=DEFAULT_MAX_LENGTH)
     task_id = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
     arguments = models.JSONField(default=dict, blank=True)
+    run_origin = models.CharField(
+        max_length=DEFAULT_MAX_LENGTH,
+        choices=CommandRunOrigin.choices,
+        default=CommandRunOrigin.API,
+    )
     status = models.CharField(
         max_length=DEFAULT_MAX_LENGTH,
         choices=CommandRunStatus.choices,
         default=CommandRunStatus.PENDING,
     )
+    run_started_at = models.DateTimeField(null=True, blank=True)
+    run_ended_at = models.DateTimeField(null=True, blank=True)
     output = models.TextField(blank=True, null=True)
     error = models.TextField(blank=True, null=True)
 

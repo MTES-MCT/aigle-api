@@ -1,6 +1,7 @@
 import json
 from typing import List, TypedDict, Union
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 import shapefile
 
 from core.management.commands._common.file import (
@@ -44,7 +45,7 @@ def log_event(info: str):
     log_command_event(command_name="import_geodepartment", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import departments to database from SHP"
 
     def add_arguments(self, parser):

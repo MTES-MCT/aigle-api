@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from django.db import transaction
 from django.db.models import Prefetch
 
@@ -110,7 +111,7 @@ def build_parcel_queryset(insee: str, section: str, num_parcel: int):
     )
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = (
         "Update detection control / prescription statuses from a per-parcel CSV "
         f"(columns: {COL_INSEE}, {COL_SECTION}, {COL_NUM}, {COL_STATUS_1}, "

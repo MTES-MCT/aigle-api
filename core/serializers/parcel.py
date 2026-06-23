@@ -199,7 +199,7 @@ class ParcelOverviewSerializer(serializers.Serializer):
         help_text="Number of parcels that have more than 50% of their detections in DETECTED_NOT_VERIFIED status"
     )
     verified = serializers.IntegerField(
-        help_text="Number of parcels that have 50% or more of their detections in SUSPECT, LEGITIMATE, or INVALIDATED status"
+        help_text="Number of parcels that have 50% or more of their detections in SUSPECT, ILLEGAL, LEGITIMATE, or INVALIDATED status"
     )
     total = serializers.IntegerField(
         help_text="Total number of parcels in the filtered queryset"

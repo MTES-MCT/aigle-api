@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from rest_framework_api_key.models import APIKey
 
 from core.utils.logs_helpers import log_command_event
@@ -9,7 +10,7 @@ def log_event(info: str):
     log_command_event(command_name="create_api_key", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Create an API key for external API access"
 
     def add_arguments(self, parser):

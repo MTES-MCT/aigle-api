@@ -9,6 +9,7 @@ from core.models.parcel import Parcel
 from core.models.tile_set import TileSet
 from core.models.user_group import UserGroup, UserUserGroup
 from core.utils.cache import (
+    count_cache_invalidation_suppressed,
     invalidate_caches_for_user,
     invalidate_caches_for_group,
     invalidate_count_caches,
@@ -62,6 +63,8 @@ def on_tileset_geo_zones_change(sender, action, **kwargs):  # noqa: ARG001
 
 
 def _on_count_relevant_change(sender, **kwargs):  # noqa: ARG001
+    if count_cache_invalidation_suppressed():
+        return
     transaction.on_commit(invalidate_count_caches)
 
 
@@ -76,5 +79,7 @@ for _count_model in (Detection, DetectionData, DetectionObject, Parcel):
 # invalidate explicitly instead.
 @receiver(m2m_changed, sender=DetectionObject.geo_custom_zones.through)
 def on_detection_object_custom_zones_change(sender, action, **kwargs):  # noqa: ARG001
-    if action in ("post_add", "post_remove", "post_clear"):
+    if action in ("post_add", "post_remove", "post_clear") and (
+        not count_cache_invalidation_suppressed()
+    ):
         transaction.on_commit(invalidate_count_caches)

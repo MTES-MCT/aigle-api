@@ -1,5 +1,7 @@
+import time
 from typing import Any, Dict, Iterable
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 from rest_framework import serializers
 from django.db import connection
 from django.db.models import F
@@ -12,7 +14,7 @@ from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
 from core.models.geo_epci import GeoEpci
 from core.utils.cache import invalidate_user_geo_caches
-from core.utils.logs_helpers import log_command_event
+from core.utils.logs_helpers import log_command_event, log_command_progress
 
 PERCENTAGE_COMMUNE_INCLUDED_THRESHOLD = 0.6
 
@@ -31,7 +33,7 @@ def log_event(info: str):
     log_command_event(command_name="import_geoepcis", info=info)
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import EPCIs from another schema, generated from adminexpress"
 
     def add_arguments(self, parser):
@@ -62,6 +64,7 @@ class Command(BaseCommand):
             table_schema=table_schema,
         )
 
+        start_time = time.monotonic()
         for index, row in enumerate(rows_to_insert):
             serializer = EpciRowSerializer(data=row)
             if not serializer.is_valid():
@@ -112,7 +115,7 @@ class Command(BaseCommand):
 
             GeoCommune.objects.bulk_update(communes, ["epci_id"])
 
-            log_event(f"EPCIs inserted: {index+1}/{self.total}")
+            log_command_progress("import_geoepcis", index + 1, self.total, start_time)
 
         self.cursor.close()
 

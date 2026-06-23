@@ -13,6 +13,7 @@ from core.serializers.command_run import (
 )
 from core.serializers.run_command import RunCommandSerializer
 from core.services.command_async import CommandAsyncService
+from core.utils.command_progress import get_command_progress_many
 from core.utils.permissions import SuperAdminRoleModifyActionPermission
 from core.utils.run_command import COMMANDS_AND_PARAMETERS, CommandParameters
 from core.utils.user_action_log import UserActionLogMixin
@@ -63,11 +64,17 @@ class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
         offset = paginator.get_offset(request)
 
         statuses = params_serializer.validated_data.get("statuses")
+        q = params_serializer.validated_data.get("q")
 
         command_runs, count = CommandAsyncService.get_command_runs(
-            limit=limit, offset=offset, statuses=statuses
+            limit=limit, offset=offset, statuses=statuses, q=q
         )
-        serializer = CommandRunSerializer(command_runs, many=True)
+        progress_map = get_command_progress_many([run.pk for run in command_runs])
+        serializer = CommandRunSerializer(
+            command_runs,
+            many=True,
+            context={"command_progress_map": progress_map},
+        )
         return Response(
             {"count": count, "results": serializer.data},
             status=status.HTTP_200_OK,

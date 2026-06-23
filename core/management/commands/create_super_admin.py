@@ -1,11 +1,12 @@
 from django.core.management.base import BaseCommand
+from core.management.base import CommandRunTrackerMixin
 
 from core.models.user import User
 
 BATCH_SIZE = 10000
 
 
-class Command(BaseCommand):
+class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Create a super admin"
 
     def add_arguments(self, parser):
