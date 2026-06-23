@@ -36,9 +36,6 @@ class DetectionService:
         linked_detections_queryset = linked_detections_queryset.filter(
             ~Q(tile_set__id__in=exclude_tile_set_ids)
         )
-        linked_detections_queryset = linked_detections_queryset.order_by(
-            "-tile_set__date"
-        )
         linked_detections_queryset = linked_detections_queryset.filter(
             geometry__intersects=detection_geometry,
             detection_object__object_type__id=object_type_id,
@@ -46,11 +43,12 @@ class DetectionService:
         linked_detections_queryset = linked_detections_queryset.annotate(
             intersection_area=Area(Intersection("geometry", Value(detection_geometry)))
         )
+        # most recent tile set wins; largest overlap breaks ties within the same date
         linked_detections_queryset = linked_detections_queryset.order_by(
-            "-intersection_area"
+            "-tile_set__date", "-intersection_area"
         )
         linked_detections_queryset = linked_detections_queryset.select_related(
-            "detection_object", "detection_object__object_type", "tile_set"
+            "detection_object", "detection_data"
         )
 
         return list(

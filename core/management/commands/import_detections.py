@@ -1,4 +1,5 @@
 import csv
+import math
 import time
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
@@ -41,6 +42,18 @@ from simple_history.utils import bulk_create_with_history
 
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
 INSERT_BATCH_SIZE = 10000
+
+
+def slippy_tile_xy(lon: float, lat: float, z: int) -> tuple[int, int]:
+    # Tile.geometry is ST_TileEnvelope(z, x, y), so the standard slippy-map
+    # formula yields the exact tile containing a centroid — an indexed (x, y, z)
+    # lookup instead of a per-row GiST polygon scan over tens of millions of tiles.
+    n = 2**z
+    x = int(math.floor((lon + 180.0) / 360.0 * n))
+    y = int(
+        math.floor((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+    )
+    return x, y
 
 
 class DetectionRowSerializer(serializers.Serializer):
@@ -183,6 +196,20 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             if len(object_types_unknown) > 0:
                 raise CommandError("Unknown object types in the specified batch")
 
+    def get_batch_name(self, table_schema: str, batch_id: str) -> str:
+        # batch_id references detections.batch.id; the human-readable name lives there.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT batch_name FROM %s.batch WHERE id = %%s" % table_schema,
+                [batch_id],
+            )
+            row = cursor.fetchone()
+
+        if not row:
+            raise CommandError(f"Batch not found for batch id: {batch_id}")
+
+        return row[0]
+
     def get_detection_rows_to_insert_from_file(
         self, file_path: str
     ) -> Iterable[Dict[str, Any]]:
@@ -229,7 +256,12 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             batch_id=self.batch_id,
         )
 
-        log_event(f"Starting importing detections for batch: {self.batch_id}")
+        batch_name = self.get_batch_name(
+            table_schema=options["table_schema"], batch_id=self.batch_id
+        )
+        log_event(
+            f"Starting importing detections for batch: {self.batch_id} (name: {batch_name})"
+        )
 
         self.tile_set = TileSet.objects.get(id=tile_set_id)
         TileSet.objects.filter(id=self.tile_set.id).update(
@@ -335,7 +367,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 (
                     detection
                     for detection in linked_detections
-                    if detection.tile_set.id == self.tile_set.id
+                    if detection.tile_set_id == self.tile_set.id
                 ),
                 None,
             )
@@ -351,10 +383,12 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 exclude_tile_set_ids=[self.tile_set.id],
             )
 
+        # centroid (DB expression) still feeds the parcel/commune ST_Contains lookups below
         centroid = Centroid(geometry)
-        tile = Tile.objects.filter(
-            geometry__contains=centroid, z=TILE_DEFAULT_ZOOM
-        ).first()
+        tile_x, tile_y = slippy_tile_xy(
+            geometry.centroid.x, geometry.centroid.y, TILE_DEFAULT_ZOOM
+        )
+        tile = Tile.objects.filter(x=tile_x, y=tile_y, z=TILE_DEFAULT_ZOOM).first()
 
         if not tile:
             if serialized_detection.get("tile_x") and serialized_detection.get(
@@ -488,13 +522,19 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         bulk_create_with_history(self.detection_datas_to_insert, DetectionData)
         bulk_create_with_history(self.detections_to_insert, Detection)
 
-        # bulk_create bypasses post_save, so the count-cache signals never fire for
-        # imported rows — invalidate explicitly so list/parcel counts stay correct.
-        invalidate_count_caches()
-
-        detection_objects = [
-            detection.detection_object for detection in self.detections_to_insert
-        ]
+        # Re-fetch the distinct objects with their detections/tile_set/detection_data
+        # prefetched — compute_prescription reads all three, so the in-memory objects
+        # would otherwise trigger a fresh query storm per detection.
+        object_ids = list(
+            {detection.detection_object.id for detection in self.detections_to_insert}
+        )
+        detection_objects = (
+            DetectionObject.objects.filter(id__in=object_ids)
+            .select_related("object_type")
+            .prefetch_related(
+                "detections", "detections__detection_data", "detections__tile_set"
+            )
+        )
 
         for detection_object in detection_objects:
             PrescriptionService.compute_prescription(detection_object=detection_object)
