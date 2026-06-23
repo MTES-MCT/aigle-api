@@ -3,13 +3,15 @@ import time
 
 from django.contrib.gis.db.models.functions import Envelope
 from django.core.management.base import BaseCommand, CommandError
+from django.db import connection
 from core.management.base import CommandRunTrackerMixin
 
+from core.constants.geo import SRID
 from core.models.geo_zone import GeoZone
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
 from core.utils.logs_helpers import log_command_event, log_command_progress
 
-BATCH_SIZE = 10000
+BATCH_SIZE = 100000
 
 
 def log_event(info: str):
@@ -85,23 +87,22 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 f"--z-min must be smaller than --z-max, current: --z-min: {z_min}, --z-max: {z_max}"
             )
 
-        self.tiles = []
         self.total = (z_max - z_min + 1) * (y_max - y_min + 1) * (x_max - x_min + 1)
         self.inserted = 0
         self.start_time = time.monotonic()
 
         log_event(f"Starting insert tiles, total: {self.total}")
 
+        # Insert in pure SQL: generate_series builds the x/y grid and
+        # ST_TileEnvelope computes geometry server-side, so the whole batch is
+        # one round-trip instead of one per tile.
+        row_width = x_max - x_min + 1
+        y_band = max(1, BATCH_SIZE // row_width)
+
         for z in range(z_min, z_max + 1):
-            for y in range(y_min, y_max + 1):
-                for x in range(x_min, x_max + 1):
-                    tile = Tile(x=x, y=y, z=z)
-                    self.tiles.append(tile)
-
-                    if len(self.tiles) == BATCH_SIZE:
-                        self.insert_tiles()
-
-        self.insert_tiles()
+            for y_start in range(y_min, y_max + 1, y_band):
+                y_end = min(y_start + y_band - 1, y_max)
+                self.insert_tiles(z, x_min, x_max, y_start, y_end)
 
     def get_bounds_from_geozone(self, geozone_uuid: str, zoom: int):
         geozone = (
@@ -126,11 +127,26 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
         return x_min, x_max, y_min, y_max
 
-    def insert_tiles(self):
-        if not len(self.tiles):
-            return
+    def insert_tiles(self, z, x_min, x_max, y_min, y_max):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO {Tile._meta.db_table} (created_at, updated_at, x, y, z, geometry)
+                SELECT now(), now(), x, y, %(z)s,
+                       ST_Transform(ST_TileEnvelope(%(z)s, x, y), %(srid)s)
+                FROM generate_series(%(x_min)s, %(x_max)s) AS x,
+                     generate_series(%(y_min)s, %(y_max)s) AS y
+                ON CONFLICT (x, y, z) DO NOTHING
+                """,
+                {
+                    "z": z,
+                    "srid": SRID,
+                    "x_min": x_min,
+                    "x_max": x_max,
+                    "y_min": y_min,
+                    "y_max": y_max,
+                },
+            )
 
-        Tile.objects.bulk_create(self.tiles, ignore_conflicts=True)
-        self.inserted += len(self.tiles)
-        self.tiles = []
+        self.inserted += (x_max - x_min + 1) * (y_max - y_min + 1)
         log_command_progress("create_tile", self.inserted, self.total, self.start_time)

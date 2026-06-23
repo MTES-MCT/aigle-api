@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from core.management.base import CommandRunTrackerMixin
 from django.db import transaction
 
@@ -84,12 +84,25 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         filter_coms = options["filter_coms"]
         filter_dpts = options["filter_dpts"]
 
-        # Cheap extra pass (no CSV parsing) to know the denominator for progress.
-        with open(file_csv_path, mode="r") as f:
-            total = max(sum(1 for _ in f) - 1, 0)
-
-        file_csv = open(file_csv_path, mode="r")
+        file_csv = open(file_csv_path, mode="r", encoding="utf-8")
         file_csv_reader = csv.DictReader(file_csv, delimiter=";")
+        # Sitadel exports now prepend a human-readable label row before the
+        # technical column-code row (REG_CODE;DEP_CODE;COMM;...). DictReader read
+        # the labels — advance to the codes row. Older single-header files already
+        # expose COMM as a fieldname here.
+        header_rows = 1
+        if file_csv_reader.fieldnames and "COMM" not in file_csv_reader.fieldnames:
+            file_csv_reader = csv.DictReader(file_csv, delimiter=";")
+            header_rows = 2
+
+        if not file_csv_reader.fieldnames or "COMM" not in file_csv_reader.fieldnames:
+            raise CommandError(
+                "import_sitadel: no technical header row found (missing COMM column)"
+            )
+
+        # Cheap extra pass (no CSV parsing) to know the denominator for progress.
+        with open(file_csv_path, mode="r", encoding="utf-8") as f:
+            total = max(sum(1 for _ in f) - header_rows, 0)
 
         start_time = time.monotonic()
         while True:
@@ -128,13 +141,13 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             if row["ETAT_DAU"] == "4":
                 continue
 
-            commune_code = row["COMM"]
-            department_code = commune_code[:2]
-
-            if filter_dpts and department_code not in filter_dpts:
+            # Filter on the DEP_CODE column, not COMM[:2]: overseas departments
+            # have 3-digit codes (Réunion 974, commune 97411), so COMM[:2] would
+            # wrongly read "97" and drop every overseas row.
+            if filter_dpts and row["DEP_CODE"] not in filter_dpts:
                 continue
 
-            if filter_coms and commune_code not in filter_coms:
+            if filter_coms and row["COMM"] not in filter_coms:
                 continue
 
             data_output = get_data_output(row)
