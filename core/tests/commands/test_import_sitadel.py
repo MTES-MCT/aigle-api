@@ -11,11 +11,15 @@ the import never overwrites a manual control decision.
 
 import csv
 import datetime
+import io
 import tempfile
 
 from django.contrib.gis.geos import Point
 from django.core.management import call_command
+from django.test import SimpleTestCase
 from django.utils import timezone
+
+from core.management.commands.import_sitadel import Command
 
 from core.models.detection_authorization import DetectionAuthorization
 from core.models.detection_data import (
@@ -73,8 +77,11 @@ def _sitadel_row(comm, section, num_parcel, num_dau, date="2024-01-15", etat="2"
     }
 
 
-def _write_csv(rows):
+def _write_csv(rows, label_header=False):
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="")
+    if label_header:
+        # New Sitadel format prepends a human-readable label row before the codes.
+        csv.writer(tmp, delimiter=";").writerow([f"Libellé {f}" for f in CSV_FIELDS])
     writer = csv.DictWriter(tmp, fieldnames=CSV_FIELDS, delimiter=";")
     writer.writeheader()
     for row in rows:
@@ -82,6 +89,47 @@ def _write_csv(rows):
     tmp.flush()
     tmp.close()
     return tmp.name
+
+
+def _csv_reader(rows):
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CSV_FIELDS, delimiter=";")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    buf.seek(0)
+    return csv.DictReader(buf, delimiter=";")
+
+
+class ExtractDataFromCsvFilterTests(SimpleTestCase):
+    """The --filter-dpts / --filter-coms row filtering (replaces the old
+    standalone extract_sitadel.py pre-pass)."""
+
+    def test_filter_dpts_uses_dep_code_column_not_comm_prefix(self):
+        # Overseas: DEP_CODE='974' but COMM[:2]='97' — the row must survive.
+        row = _sitadel_row("97411", "AB", 12, "PC1")
+        row["DEP_CODE"] = "974"
+        data = Command.extract_data_from_csv(
+            _csv_reader([row]), filter_coms=None, filter_dpts=["974"]
+        )
+        self.assertEqual(len(data), 1)
+
+    def test_filter_dpts_excludes_non_matching(self):
+        row = _sitadel_row("34172", "AB", 12, "PC1")  # DEP_CODE='34'
+        data = Command.extract_data_from_csv(
+            _csv_reader([row]), filter_coms=None, filter_dpts=["31"]
+        )
+        self.assertEqual(data, [])
+
+    def test_filter_coms(self):
+        rows = [
+            _sitadel_row("34172", "AB", 12, "PC1"),
+            _sitadel_row("34173", "AB", 13, "PC2"),
+        ]
+        data = Command.extract_data_from_csv(
+            _csv_reader(rows), filter_coms=["34172"], filter_dpts=None
+        )
+        self.assertEqual([d.data_input["COMM"] for d in data], ["34172"])
 
 
 class ImportSitadelCommandTests(BaseTestCase):
@@ -191,6 +239,31 @@ class ImportSitadelCommandTests(BaseTestCase):
             )
         self.assertFalse(
             DetectionAuthorization.objects.filter(authorization_id="PC789").exists()
+        )
+
+    def test_two_header_rows_new_sitadel_format(self):
+        """New Sitadel export prepends a label row before the technical codes;
+        the command skips it and still reconciles parcels."""
+        parcel = self._create_parcel("IJ", 500)
+        detection_data = self._create_detection(
+            parcel, DetectionControlStatus.NOT_CONTROLLED
+        )
+
+        csv_path = _write_csv(
+            [_sitadel_row("34172", "IJ", 500, "PC500")], label_header=True
+        )
+        call_command("import_sitadel", file_csv_path=csv_path, persist_data=True)
+
+        detection_data.refresh_from_db()
+        self.assertEqual(
+            detection_data.detection_validation_status,
+            DetectionValidationStatus.LEGITIMATE,
+        )
+        self.assertEqual(
+            DetectionAuthorization.objects.get(
+                detection_data=detection_data
+            ).authorization_id,
+            "PC500",
         )
 
     def test_dry_run_does_not_persist(self):
