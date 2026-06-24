@@ -1,11 +1,13 @@
 from collections import defaultdict
 import csv
+import tempfile
 import time
 from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
 from django.core.management.base import BaseCommand, CommandError
 from core.management.base import CommandRunTrackerMixin
+from core.management.commands._common.file import download_file, download_json
 from django.db import transaction
 
 from core.constants.detection import CONTROLLED_DETECTION_STATUSES
@@ -26,9 +28,56 @@ from core.models.detection import Detection
 BATCH_SIZE = 100
 BULK_UPDATE_BATCH_SIZE = 1000
 
+# SDES "DiDo" open-data platform. SITADEL_DATASET_ID is the "Liste des permis de
+# construire et autres autorisations d'urbanisme" dataset (created 2023-09,
+# refreshed monthly). If it ever changes, override with --dataset-id — find the
+# new id in the catalogue link on:
+# https://www.statistiques.developpement-durable.gouv.fr/donnees-des-permis-de-construire-et-autres-autorisations-durbanisme
+DIDO_API_BASE = "https://data.statistiques.developpement-durable.gouv.fr/dido/api/v1"
+SITADEL_DATASET_ID = "6513f0189d7d312c80ec5b5b"
+
 
 def log_event(info: str):
     log_command_event(command_name="import_sitadel", info=info)
+
+
+def _select_autorisations_datafiles(dataset: dict) -> List[Tuple[str, str, str]]:
+    """(title, rid, latest_millesime) for each "autorisations d'urbanisme créant
+    des …" datafile (logements / locaux non résidentiels), matched by title so
+    the permis d'aménager / démolir datafiles of the same dataset are left out."""
+    selected = []
+    for datafile in dataset.get("datafiles", []):
+        if "autorisation" not in datafile["title"].lower():
+            continue
+        millesimes = datafile.get("millesimes") or []
+        if not millesimes:
+            continue
+        latest = max(millesimes, key=lambda m: m["millesime"])
+        selected.append((datafile["title"], datafile["rid"], latest["millesime"]))
+    return selected
+
+
+def download_latest_autorisations_csvs(
+    dataset_id: str = SITADEL_DATASET_ID,
+) -> List[Tuple[str, "tempfile.TemporaryDirectory[str]", str]]:
+    """Download the latest millesime of both autorisations CSVs (logements +
+    locaux non résidentiels) from the DiDo Sitadel dataset. Returns
+    (label, temp_dir, file_path) per file; caller cleans up temp_dir."""
+    dataset = download_json(f"{DIDO_API_BASE}/datasets/{dataset_id}")
+    log_event(f"Dataset: {dataset['title']} (updated {dataset.get('last_update')})")
+
+    datafiles = _select_autorisations_datafiles(dataset)
+    if not datafiles:
+        raise CommandError(
+            "import_sitadel: no 'autorisations' datafile found in Sitadel dataset"
+        )
+
+    downloads = []
+    for title, rid, millesime in datafiles:
+        url = f"{DIDO_API_BASE}/datafiles/{rid}/csv?millesime={millesime}"
+        temp_dir, file_path = download_file(url=url, file_name=f"{rid}.{millesime}.csv")
+        downloads.append((f"{title} ({millesime})", temp_dir, file_path))
+    return downloads
 
 
 class DataInputWithoutParcels(TypedDict):
@@ -73,17 +122,56 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     dpt_parcels_ids_updated_map = defaultdict(set)
 
     def add_arguments(self, parser):
-        parser.add_argument("--file-csv-path", type=str, required=True)
+        parser.add_argument(
+            "--file-csv-path",
+            type=str,
+            required=False,
+            help="CSV to import. If omitted, the latest autorisations CSVs "
+            "(logements + locaux non résidentiels) are downloaded from DiDo.",
+        )
+        parser.add_argument(
+            "--dataset-id",
+            type=str,
+            default=SITADEL_DATASET_ID,
+            help="DiDo dataset id to download autorisations CSVs from when "
+            "--file-csv-path is omitted. Defaults to the Sitadel dataset; find a "
+            "new id in the catalogue link on "
+            "https://www.statistiques.developpement-durable.gouv.fr/donnees-des-permis-de-construire-et-autres-autorisations-durbanisme",
+        )
         parser.add_argument("--persist-data", type=bool, default=False)
         parser.add_argument("--filter-coms", action="append", required=False)
         parser.add_argument("--filter-dpts", action="append", required=False)
 
     def handle(self, *args, **options):
         file_csv_path = options["file_csv_path"]
+        dataset_id = options["dataset_id"]
         persist_data = options["persist_data"]
         filter_coms = options["filter_coms"]
         filter_dpts = options["filter_dpts"]
 
+        if file_csv_path:
+            self.process_file(file_csv_path, persist_data, filter_coms, filter_dpts)
+            return
+
+        log_event(
+            "No --file-csv-path provided: downloading latest autorisations CSVs from DiDo"
+        )
+        for label, temp_dir, file_path in download_latest_autorisations_csvs(
+            dataset_id
+        ):
+            log_event(f"Processing {label}")
+            try:
+                self.process_file(file_path, persist_data, filter_coms, filter_dpts)
+            finally:
+                temp_dir.cleanup()
+
+    def process_file(
+        self,
+        file_csv_path: str,
+        persist_data: bool,
+        filter_coms: Optional[List[str]],
+        filter_dpts: Optional[List[str]],
+    ):
         file_csv = open(file_csv_path, mode="r", encoding="utf-8")
         file_csv_reader = csv.DictReader(file_csv, delimiter=";")
         # Sitadel exports now prepend a human-readable label row before the

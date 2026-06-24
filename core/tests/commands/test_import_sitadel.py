@@ -19,7 +19,10 @@ from django.core.management import call_command
 from django.test import SimpleTestCase
 from django.utils import timezone
 
-from core.management.commands.import_sitadel import Command
+from core.management.commands.import_sitadel import (
+    Command,
+    _select_autorisations_datafiles,
+)
 
 from core.models.detection_authorization import DetectionAuthorization
 from core.models.detection_data import (
@@ -130,6 +133,64 @@ class ExtractDataFromCsvFilterTests(SimpleTestCase):
             _csv_reader(rows), filter_coms=["34172"], filter_dpts=None
         )
         self.assertEqual([d.data_input["COMM"] for d in data], ["34172"])
+
+
+class SelectAutorisationsDatafilesTests(SimpleTestCase):
+    """The DiDo auto-download picks both 'autorisations' datafiles at their latest
+    millesime, and ignores the permis d'aménager / démolir siblings."""
+
+    def test_selects_both_autorisations_at_latest_millesime(self):
+        dataset = {
+            "datafiles": [
+                {
+                    "title": "Liste des autorisations d'urbanisme créant des logements",
+                    "rid": "rid-log",
+                    "millesimes": [{"millesime": "2026-04"}, {"millesime": "2026-05"}],
+                },
+                {
+                    "title": "Liste des autorisations d'urbanisme créant des locaux non résidentiels",
+                    "rid": "rid-loc",
+                    "millesimes": [{"millesime": "2026-05"}],
+                },
+                {
+                    "title": "Liste des permis d'aménager",
+                    "rid": "rid-amng",
+                    "millesimes": [{"millesime": "2026-05"}],
+                },
+                {
+                    "title": "Liste des permis de démolir",
+                    "rid": "rid-demo",
+                    "millesimes": [{"millesime": "2026-05"}],
+                },
+            ]
+        }
+        self.assertEqual(
+            sorted(_select_autorisations_datafiles(dataset)),
+            [
+                (
+                    "Liste des autorisations d'urbanisme créant des locaux non résidentiels",
+                    "rid-loc",
+                    "2026-05",
+                ),
+                (
+                    "Liste des autorisations d'urbanisme créant des logements",
+                    "rid-log",
+                    "2026-05",
+                ),
+            ],
+        )
+
+    def test_skips_datafiles_without_millesime(self):
+        dataset = {
+            "datafiles": [
+                {
+                    "title": "Liste des autorisations d'urbanisme créant des logements",
+                    "rid": "rid-log",
+                    "millesimes": [],
+                }
+            ]
+        }
+        self.assertEqual(_select_autorisations_datafiles(dataset), [])
 
 
 class ImportSitadelCommandTests(BaseTestCase):
