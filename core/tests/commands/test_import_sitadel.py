@@ -13,6 +13,7 @@ import csv
 import datetime
 import io
 import tempfile
+from unittest.mock import patch
 
 from django.contrib.gis.geos import Point
 from django.core.management import call_command
@@ -343,3 +344,39 @@ class ImportSitadelCommandTests(BaseTestCase):
             DetectionValidationStatus.DETECTED_NOT_VERIFIED,
         )
         self.assertFalse(DetectionAuthorization.objects.exists())
+
+    @patch("core.management.commands.import_sitadel.DeployedDataService.refresh_cache")
+    def test_persisting_import_refreshes_deployed_data_cache(self, mock_refresh):
+        """Regression: the deployed-data dashboard reads the SITADEL change reason
+        (sitadel_updated_parcels_count) from a version-gated cache that no import used
+        to bump, so it kept serving pre-import figures. A persisting import now refreshes
+        it exactly once."""
+        parcel = self._create_parcel("KL", 600)
+        self._create_detection(parcel, DetectionControlStatus.NOT_CONTROLLED)
+
+        csv_path = _write_csv([_sitadel_row("34172", "KL", 600, "PC600")])
+        call_command("import_sitadel", file_csv_path=csv_path, persist_data=True)
+
+        mock_refresh.assert_called_once()
+
+    @patch("core.management.commands.import_sitadel.DeployedDataService.refresh_cache")
+    def test_dry_run_does_not_refresh_deployed_data_cache(self, mock_refresh):
+        parcel = self._create_parcel("MN", 700)
+        self._create_detection(parcel, DetectionControlStatus.NOT_CONTROLLED)
+
+        csv_path = _write_csv([_sitadel_row("34172", "MN", 700, "PC700")])
+        call_command("import_sitadel", file_csv_path=csv_path, persist_data=False)
+
+        mock_refresh.assert_not_called()
+
+    @patch("core.management.commands.import_sitadel.DeployedDataService.refresh_cache")
+    def test_import_with_no_changes_does_not_refresh(self, mock_refresh):
+        """Nothing written (every match is a user-controlled, protected parcel) ->
+        no needless full-dataset recompute."""
+        parcel = self._create_parcel("OP", 800)
+        self._create_detection(parcel, DetectionControlStatus.CONTROLLED_FIELD)
+
+        csv_path = _write_csv([_sitadel_row("34172", "OP", 800, "PC800")])
+        call_command("import_sitadel", file_csv_path=csv_path, persist_data=True)
+
+        mock_refresh.assert_not_called()

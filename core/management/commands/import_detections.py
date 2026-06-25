@@ -38,6 +38,7 @@ from core.services.prescription import PrescriptionService
 from core.utils.logs_helpers import log_command_event, log_command_progress
 from core.utils.string import normalize
 from core.utils.cache import invalidate_count_caches
+from core.services.deployed_data import DeployedDataService
 from simple_history.utils import bulk_create_with_history
 
 USER_REVIEWER_MAIL = "user.reviewer.default.aigle@aigle.beta.gouv.fr"
@@ -304,6 +305,14 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         # associate_detections_to_custom_zones writes the geo_custom_zones M2M via raw
         # SQL (bypasses signals), so invalidate counts once for the whole import.
         invalidate_count_caches()
+
+        # New detections change every figure on the SUPER_ADMIN deployed-data dashboard,
+        # whose cache is version-gated and otherwise only refreshed by
+        # warm_deployed_data_cache. Refresh once at the end (invalidate + recompute, so the
+        # cache is never left cold) when this import actually inserted anything.
+        if self.total_inserted_detections:
+            log_event("Refreshing deployed-data cache after detections import")
+            DeployedDataService.refresh_cache()
 
         log_event(f"Detections import finished for batch: {self.batch_id}")
 

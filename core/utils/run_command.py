@@ -141,7 +141,9 @@ def parse_parameters(
     command_name: str, parameters: CommandParameters
 ) -> CommandParameters:
     command_parameters_map = COMMANDS_AND_PARAMETERS_MAP.get(command_name)
-    if not command_parameters_map:
+    # `is None` not falsiness: a command with no arguments maps to an empty dict {},
+    # which is falsy — `if not ...` would wrongly report it as "not found".
+    if command_parameters_map is None:
         raise BadRequest(f"Command with name '{command_name}' not found")
 
     parsed_parameters = parameters.copy()

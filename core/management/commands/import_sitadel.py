@@ -20,6 +20,7 @@ from core.models.detection_data import (
 from core.models.parcel import Parcel
 from core.utils.logs_helpers import log_command_event, log_command_progress
 from core.utils.cache import invalidate_count_caches
+from core.services.deployed_data import DeployedDataService
 from operator import or_
 from django.db.models import Q, Count, Prefetch
 from core.models.detection_object import DetectionObject
@@ -149,21 +150,37 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         filter_coms = options["filter_coms"]
         filter_dpts = options["filter_dpts"]
 
+        # Per-run instance state: these are declared as class attributes, so a long-lived
+        # Celery worker would otherwise carry one run's updates into the next (inflating
+        # the summary log and the cache-refresh guard below).
+        self.dpt_detection_objects_ids_updated_map = defaultdict(set)
+        self.dpt_parcels_ids_updated_map = defaultdict(set)
+        self._deployed_data_dirty = False
+
         if file_csv_path:
             self.process_file(file_csv_path, persist_data, filter_coms, filter_dpts)
-            return
+        else:
+            log_event(
+                "No --file-csv-path provided: downloading latest autorisations CSVs from DiDo"
+            )
+            for label, temp_dir, file_path in download_latest_autorisations_csvs(
+                dataset_id
+            ):
+                log_event(f"Processing {label}")
+                try:
+                    self.process_file(file_path, persist_data, filter_coms, filter_dpts)
+                finally:
+                    temp_dir.cleanup()
 
-        log_event(
-            "No --file-csv-path provided: downloading latest autorisations CSVs from DiDo"
-        )
-        for label, temp_dir, file_path in download_latest_autorisations_csvs(
-            dataset_id
-        ):
-            log_event(f"Processing {label}")
-            try:
-                self.process_file(file_path, persist_data, filter_coms, filter_dpts)
-            finally:
-                temp_dir.cleanup()
+        # Sitadel flips detections to LEGITIMATE/SITADEL, which the SUPER_ADMIN
+        # deployed-data dashboard surfaces (sitadel_updated_parcels_count). That cache is
+        # version-gated and otherwise only refreshed by warm_deployed_data_cache, so
+        # without this the dashboard keeps serving pre-import figures until the TTL.
+        # refresh_cache invalidates AND recomputes — never leaving the cache cold, per its
+        # design. Once at the end (not per batch: refresh is a full-dataset recompute).
+        if self._deployed_data_dirty:
+            log_event("Refreshing deployed-data cache after Sitadel import")
+            DeployedDataService.refresh_cache()
 
     def process_file(
         self,
@@ -392,6 +409,9 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         if not persist_data:
             return
 
+        if not detection_datas_to_update_map:
+            return
+
         DetectionData.objects.bulk_update(
             objs=detection_datas_to_update_map.values(),
             fields=[
@@ -405,6 +425,8 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         )
         # bulk_update / bulk_create bypass post_save; invalidate counts explicitly.
         transaction.on_commit(invalidate_count_caches)
+        # Drives the one-shot deployed-data cache refresh at the end of handle().
+        self._deployed_data_dirty = True
 
     def log(self):
         departments = list(

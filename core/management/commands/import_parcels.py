@@ -23,6 +23,7 @@ from core.utils.cache import (
     invalidate_count_caches,
     suppress_count_cache_invalidation,
 )
+from core.services.deployed_data import DeployedDataService
 from core.utils.logs_helpers import log_command_event, log_command_progress
 
 
@@ -221,6 +222,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
         log_event(f"Departments: {', '.join(departments)}")
 
+        deployed_data_dirty = False
         for department in departments:
             if not GeoDepartment.objects.filter(insee_code=department).exists():
                 log_event(f"Department not found for code: {department}")
@@ -229,7 +231,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             temp_dir, features = get_data_parcels(department=department)
             try:
                 with suppress_count_cache_invalidation():
-                    _, deleted, _ = import_department_parcels(
+                    upserted, deleted, _ = import_department_parcels(
                         department, features, dry_run=dry_run
                     )
             finally:
@@ -237,6 +239,9 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
             if dry_run:
                 continue
+
+            if upserted or deleted:
+                deployed_data_dirty = True
 
             invalidate_count_caches()
             if deleted:
@@ -247,5 +252,12 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                     f"{deleted} stale parcels"
                 )
                 call_command("update_detection_parcels", department_code=department)
+
+        # Parcel counts feed the SUPER_ADMIN deployed-data dashboard, whose cache is
+        # version-gated and otherwise only refreshed by warm_deployed_data_cache. Refresh
+        # once after all departments (invalidate + recompute, never left cold).
+        if deployed_data_dirty:
+            log_event("Refreshing deployed-data cache after parcels import")
+            DeployedDataService.refresh_cache()
 
         log_event("Finished importing parcels")

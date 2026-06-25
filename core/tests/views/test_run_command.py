@@ -126,6 +126,12 @@ class ParseParametersTests(SimpleTestCase):
         with self.assertRaises(BadRequest):
             parse_parameters("does_not_exist", {})
 
+    def test_command_with_no_parameters_is_not_reported_as_unknown(self):
+        # Regression: a command with no arguments maps to an empty dict {}, which is falsy.
+        # The old `if not command_parameters_map` rejected it as "not found" with a 400.
+        self.assertEqual(COMMANDS_AND_PARAMETERS_MAP["warm_deployed_data_cache"], {})
+        self.assertEqual(parse_parameters("warm_deployed_data_cache", {}), {})
+
 
 class RunCommandEndpointTests(BaseAPITestCase):
     def setUp(self):

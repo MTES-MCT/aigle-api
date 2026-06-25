@@ -186,3 +186,25 @@ class ImportDepartmentParcelsTests(BaseTestCase):
         mock_cc.assert_called_once_with(
             "update_detection_parcels", department_code="34"
         )
+
+    @patch("core.management.commands.import_parcels.DeployedDataService.refresh_cache")
+    @patch("core.management.commands.import_parcels.get_data_parcels")
+    def test_handle_refreshes_deployed_data_cache_on_persist(
+        self, mock_get, mock_refresh
+    ):
+        mock_get.return_value = (MagicMock(), [make_feature("34172000A0001", "34172")])
+
+        call_command("import_parcels", "--departments", "34")
+
+        mock_refresh.assert_called_once()
+
+    @patch("core.management.commands.import_parcels.DeployedDataService.refresh_cache")
+    @patch("core.management.commands.import_parcels.get_data_parcels")
+    def test_handle_dry_run_does_not_refresh_deployed_data_cache(
+        self, mock_get, mock_refresh
+    ):
+        mock_get.return_value = (MagicMock(), [make_feature("34172000A0001", "34172")])
+
+        call_command("import_parcels", "--departments", "34", "--dry-run")
+
+        mock_refresh.assert_not_called()
