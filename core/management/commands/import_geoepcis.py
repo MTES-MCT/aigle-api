@@ -1,4 +1,5 @@
 import time
+import re
 from typing import Any, Dict, Iterable
 from django.core.management.base import BaseCommand
 from core.management.base import CommandRunTrackerMixin
@@ -17,6 +18,10 @@ from core.utils.cache import invalidate_user_geo_caches
 from core.utils.logs_helpers import log_command_event, log_command_progress
 
 PERCENTAGE_COMMUNE_INCLUDED_THRESHOLD = 0.6
+
+# Strict SQL identifier pattern — schema/table names interpolated into raw SQL must match
+# this (see get_rows_to_insert_from_table). Mirrors insert_shp / import_custom_zones.
+IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 class EpciRowSerializer(serializers.Serializer):
@@ -43,6 +48,12 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     def get_rows_to_insert_from_table(
         self, table_name: str, table_schema: str
     ) -> Iterable[Dict[str, Any]]:
+        # Schema/table are SQL identifiers and cannot be passed as %s parameters, so they
+        # are interpolated into the query string. Validate them against a strict identifier
+        # pattern first to prevent SQL injection via the --table-name/--table-schema args.
+        if not IDENTIFIER_RE.match(table_schema) or not IDENTIFIER_RE.match(table_name):
+            raise ValueError(f"Invalid table identifier: {table_schema}.{table_name}")
+
         self.cursor = connection.cursor()
 
         self.cursor.execute("SELECT count(*) FROM %s.%s" % (table_schema, table_name))
