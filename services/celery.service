@@ -13,10 +13,12 @@ ExecStart=/home/ubuntu/aigle-api/venv/bin/celery -A aigle worker --loglevel=info
 Restart=always
 RestartSec=10
 
-# SIGTERM triggers Celery's warm shutdown (finish current task, refuse new ones).
-# Give it up to 1h before systemd SIGKILLs — heavy imports should be able to finish.
+# Warm shutdown: finish current task, refuse new ones. KillMode=mixed sends SIGTERM
+# to the master only — the control-group default would also hit the prefork child
+# and kill the task. Wait up to 12h for the task before SIGKILL.
+KillMode=mixed
 KillSignal=SIGTERM
-TimeoutStopSec=3600
+TimeoutStopSec=12h
 
 [Install]
 WantedBy=multi-user.target
