@@ -15,6 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 
+from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path, re_path
 
@@ -22,5 +23,9 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/", include("core.urls")),
     re_path(r"^auth/", include("core.urls_auth")),
-    path("__debug__/", include("debug_toolbar.urls")),
 ]
+
+# Debug toolbar URLs only when it is actually installed (development). They expose
+# request/SQL internals and must never be routable in production.
+if settings.DEBUG and "debug_toolbar" in settings.INSTALLED_APPS:
+    urlpatterns += [path("__debug__/", include("debug_toolbar.urls"))]

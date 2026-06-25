@@ -29,15 +29,26 @@ class UserService:
 
     @staticmethod
     def get_filtered_users_queryset(user: "User", queryset: QuerySet) -> QuerySet:
+        """Filter users queryset based on current user permissions.
+
+        SUPER_ADMIN sees everyone; ADMIN sees only REGULAR users within their own
+        groups; anyone else (REGULAR, DEACTIVATED) sees no one. Returning the full
+        queryset for non-admins previously leaked every account (emails, roles) and —
+        combined with the broken write permission — enabled account takeover.
+        """
+        if user.user_role == UserRole.SUPER_ADMIN:
+            return queryset
+
         if user.user_role == UserRole.ADMIN:
-            queryset = queryset.filter(user_role=UserRole.REGULAR)
             user_group_ids = user.user_user_groups.values_list(
                 "user_group__id", flat=True
             )
-            queryset = queryset.filter(
-                user_user_groups__user_group__id__in=user_group_ids
+            return queryset.filter(
+                user_role=UserRole.REGULAR,
+                user_user_groups__user_group__id__in=user_group_ids,
             )
-        return queryset
+
+        return queryset.none()
 
     @staticmethod
     def update_user_position(user: "User", x: float, y: float) -> None:

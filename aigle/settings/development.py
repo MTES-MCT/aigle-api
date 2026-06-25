@@ -1,10 +1,18 @@
 import os
 from .base import *  # noqa: F403, F401
-from .base import SQL_ECHO
+from .base import SQL_ECHO, INSTALLED_APPS, MIDDLEWARE
 import builtins
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
+
+# django-debug-toolbar is a development-only tool: it exposes SQL, settings and request
+# internals. It is installed here (not in base) so it can never load in production.
+INSTALLED_APPS = INSTALLED_APPS + ["debug_toolbar"]
+MIDDLEWARE = ["debug_toolbar.middleware.DebugToolbarMiddleware"] + MIDDLEWARE
+
+# Local dev convenience: allow any browser origin. Production restricts this.
+CORS_ALLOW_ALL_ORIGINS = True
 
 # Development-specific GDAL/GEOS paths for macOS
 if os.environ.get("ENVIRONMENT") == "development":

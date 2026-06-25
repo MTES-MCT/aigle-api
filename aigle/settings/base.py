@@ -54,7 +54,6 @@ INSTALLED_APPS = [
     "core",
     "djoser",
     "django_filters",
-    "debug_toolbar",
     "simple_history",
 ]
 
@@ -79,7 +78,6 @@ DJOSER = {
 }
 
 MIDDLEWARE = [
-    "debug_toolbar.middleware.DebugToolbarMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -97,7 +95,12 @@ extra_delay_request = int(os.environ.get("EXTRA_DELAY_REQUEST", "0"))
 if extra_delay_request:
     MIDDLEWARE.append("common.middlewares.delay.DelayMiddleware")
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS: never allow all origins by default. Development overrides this to True for
+# convenience; production must set CORS_ALLOWED_ORIGINS (see production.py). Setting
+# CORS_ALLOW_ALL_ORIGINS=true via env is supported but discouraged outside local dev.
+CORS_ALLOW_ALL_ORIGINS = strtobool(os.environ.get("CORS_ALLOW_ALL_ORIGINS", "false"))
+if os.environ.get("CORS_ALLOWED_ORIGINS"):
+    CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS").split(",")
 
 ROOT_URLCONF = "aigle.urls"
 
@@ -157,8 +160,23 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.IsAuthenticated"],
+    # IsActiveAuthenticated (not bare IsAuthenticated) so DEACTIVATED accounts whose JWT
+    # is still valid are locked out of every endpoint by default.
+    "DEFAULT_PERMISSION_CLASSES": ["core.utils.permissions.IsActiveAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        # Anonymous traffic (login, password reset, contact form, external test) is rare
+        # and a prime brute-force target, so it is held tight. Authenticated users drive a
+        # request-heavy map UI, so their ceiling is generous; "login" is a per-endpoint
+        # scope applied to the token endpoints (see core/views/auth.py).
+        "anon": os.environ.get("THROTTLE_ANON", "30/min"),
+        "user": os.environ.get("THROTTLE_USER", "600/min"),
+        "login": os.environ.get("THROTTLE_LOGIN", "5/min"),
+    },
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
         "djangorestframework_camel_case.render.CamelCaseBrowsableAPIRenderer",
@@ -173,8 +191,16 @@ REST_FRAMEWORK = {
 
 SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("JWT",),
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=30),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=180),
+    # Short-lived access token: a leaked/stolen token is only usable for an hour, not a
+    # month. The frontend transparently refreshes on 401, so this is invisible to users.
+    # Refresh tokens last a week (was 180 days), bounding how long a stolen refresh token
+    # grants access and forcing periodic re-authentication.
+    "ACCESS_TOKEN_LIFETIME": timedelta(
+        minutes=int(os.environ.get("ACCESS_TOKEN_LIFETIME_MINUTES", "60"))
+    ),
+    "REFRESH_TOKEN_LIFETIME": timedelta(
+        days=int(os.environ.get("REFRESH_TOKEN_LIFETIME_DAYS", "7"))
+    ),
     "UPDATE_LAST_LOGIN": True,
 }
 

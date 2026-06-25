@@ -1,9 +1,17 @@
 import os
 from .base import *  # noqa: F403, F401
-from .base import BASE_DIR  # noqa: F401
+from .base import BASE_DIR, REST_FRAMEWORK  # noqa: F401
 
 DEBUG = True
 ALLOWED_HOSTS = ["*"]
+
+# Disable DRF rate throttling in the test suite: it is order/timing dependent and would
+# make otherwise-correct tests flaky. The throttle configuration is exercised against the
+# running server instead.
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_RATES": {"anon": None, "user": None, "login": None},
+}
 
 DATABASES = {
     "default": {
