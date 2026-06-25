@@ -1,11 +1,9 @@
-import csv
 import math
 import time
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 from django.core.management.base import BaseCommand, CommandError
 from core.management.base import CommandRunTrackerMixin
-from rest_framework import serializers
 from django.db import connection
 
 from core.constants.geo import SRID
@@ -13,8 +11,12 @@ from core.models.detection import Detection, DetectionSource
 from core.models.detection_data import (
     DetectionControlStatus,
     DetectionData,
-    DetectionPrescriptionStatus,
     DetectionValidationStatus,
+)
+from core.services.detections_schema import (
+    DetectionRowSerializer,
+    DetectionsSchemaService,
+    InferenceFilter,
 )
 from core.models.detection_object import DetectionObject
 from django.contrib.gis.geos import GEOSGeometry
@@ -57,54 +59,6 @@ def slippy_tile_xy(lon: float, lat: float, z: int) -> tuple[int, int]:
     return x, y
 
 
-class DetectionRowSerializer(serializers.Serializer):
-    score = serializers.FloatField()
-    id = serializers.IntegerField(required=True)
-    address = serializers.CharField(allow_blank=True, allow_null=True)
-    object_type = serializers.CharField()
-    detection_control_status = serializers.ChoiceField(
-        choices=DetectionControlStatus.choices,
-        required=False,
-        allow_null=True,
-        default=DetectionControlStatus.NOT_CONTROLLED,
-    )
-    detection_validation_status = serializers.ChoiceField(
-        choices=DetectionValidationStatus.choices,
-        required=False,
-        allow_null=True,
-        default=DetectionValidationStatus.DETECTED_NOT_VERIFIED,
-    )
-    detection_prescription_status = serializers.ChoiceField(
-        choices=DetectionPrescriptionStatus.choices,
-        required=False,
-        allow_null=True,
-    )
-    detection_source = serializers.ChoiceField(
-        choices=DetectionSource.choices,
-        required=False,
-        allow_null=True,
-        default=DetectionSource.ANALYSIS,
-    )
-    user_reviewed = serializers.BooleanField(
-        default=False,
-        allow_null=True,
-    )
-    tile_x = serializers.IntegerField(required=False, allow_null=True)
-    tile_y = serializers.IntegerField(required=False, allow_null=True)
-    created_at = serializers.DateTimeField(required=False, allow_null=True)
-    updated_at = serializers.DateTimeField(required=False, allow_null=True)
-
-
-TABLE_COLUMNS_DATE = ["created_at", "updated_at"]
-TABLE_COLUMNS = list(
-    [
-        col
-        for col in DetectionRowSerializer().get_fields().keys()
-        if col not in TABLE_COLUMNS_DATE
-    ]
-) + ["geometry"]
-
-
 def log_event(info: str):
     log_command_event(command_name="import_detections", info=info)
 
@@ -121,7 +75,6 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
     total_inserted_detections: int
     total: Optional[int]
-    query_colums: Optional[List[str]]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -138,10 +91,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
         self.total_inserted_detections = 0
 
-        self.file = None
         self.total = None
-        self.query_colums = None
-        self.cursor = None
 
     @property
     def user_reviewer(self):
@@ -160,108 +110,45 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--tile-set-id", type=int, required=True)
-        parser.add_argument("--with-dates", type=bool, default=False)
         parser.add_argument("--clean-step", type=bool, default=False)
         parser.add_argument("--batch-id", type=str, required=True)
-        parser.add_argument("--file-path", type=str)
-        parser.add_argument("--table-name", type=str, default="inference")
-        parser.add_argument("--table-schema", type=str, default="detections")
 
-    def validate_arguments(self, options):
-        if not options.get("file_path") and not options.get("table_name"):
-            raise CommandError(
-                "You have to provide either a file path or a table name with parameter --file-path or --table-name"
-            )
+    def check_object_types(self, inference_filter: InferenceFilter):
+        object_types = DetectionsSchemaService.get_distinct_object_types(
+            inference_filter
+        )
+        object_types_unknown = set(object_types).difference(
+            set(self.object_types_map.keys())
+        )
 
-        if options.get("table_name") and not options.get("batch_id"):
-            raise CommandError(
-                "You have to provide a batch id with parameter --batch-id when using a table name with parameter --table-name"
-            )
+        if len(object_types_unknown) > 0:
+            raise CommandError("Unknown object types in the specified batch")
 
-        if options.get("file_path") and options.get("table_name"):
-            raise CommandError(
-                "You can't provide both a file path and a table name with parameter --file-path or --table-name"
-            )
+    def get_batch(self, batch_id: str) -> Dict[str, Any]:
+        # batch_id references detections.batch.id.
+        batch = DetectionsSchemaService.get_batch(batch_id)
 
-    def check_object_types(self, table_name: str, table_schema: str, batch_id: str):
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT DISTINCT object_type FROM %s.%s WHERE batch_id = %s"
-                % (table_schema, table_name, f"'{batch_id}'")
-            )
-            object_types = [row[0] for row in cursor.fetchall()]
-            object_types_unknown = set(object_types).difference(
-                set(self.object_types_map.keys())
-            )
-
-            if len(object_types_unknown) > 0:
-                raise CommandError("Unknown object types in the specified batch")
-
-    def get_batch_name(self, table_schema: str, batch_id: str) -> str:
-        # batch_id references detections.batch.id; the human-readable name lives there.
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT batch_name FROM %s.batch WHERE id = %%s" % table_schema,
-                [batch_id],
-            )
-            row = cursor.fetchone()
-
-        if not row:
+        if batch is None:
             raise CommandError(f"Batch not found for batch id: {batch_id}")
 
-        return row[0]
-
-    def get_detection_rows_to_insert_from_file(
-        self, file_path: str
-    ) -> Iterable[Dict[str, Any]]:
-        self.file = open(file_path, "r")
-        reader = csv.DictReader(self.file, delimiter=";", quotechar='"')
-        return reader
-
-    def get_detection_rows_to_insert_from_table(
-        self, table_name: str, table_schema: str, batch_id: str, with_dates: bool
-    ) -> Iterable[Dict[str, Any]]:
-        self.cursor = connection.cursor()
-        self.cursor.execute(
-            "SELECT count(*) FROM %s.%s WHERE batch_id = %s"
-            % (table_schema, table_name, f"'{batch_id}'")
-        )
-        self.total = self.cursor.fetchone()[0]
-
-        table_columns = TABLE_COLUMNS
-
-        if with_dates:
-            table_columns += TABLE_COLUMNS_DATE
-
-        self.cursor.execute(
-            "SELECT %s FROM %s.%s WHERE batch_id = %s ORDER BY score DESC"
-            % (", ".join(table_columns), table_schema, table_name, f"'{batch_id}'")
-        )
-        return map(lambda row: dict(zip(table_columns, row)), self.cursor)
+        return batch
 
     def handle(self, *args, **options):
         self._initialize_object_types_map()
 
-        self.validate_arguments(options)
-
         tile_set_id = options["tile_set_id"]
-        with_dates = options["with_dates"]
         self.clean_step = options["clean_step"]
         self.batch_id = options.get("batch_id") or datetime.now().strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
 
-        self.check_object_types(
-            table_name=options["table_name"],
-            table_schema=options["table_schema"],
-            batch_id=self.batch_id,
-        )
+        inference_filter = InferenceFilter(batch_id=self.batch_id)
 
-        batch_name = self.get_batch_name(
-            table_schema=options["table_schema"], batch_id=self.batch_id
-        )
+        self.check_object_types(inference_filter)
+
+        batch = self.get_batch(self.batch_id)
         log_event(
-            f"Starting importing detections for batch: {self.batch_id} (name: {batch_name})"
+            f"Starting importing detections for batch: {self.batch_id} (name: {batch['batch_name']})"
         )
 
         self.tile_set = TileSet.objects.get(id=tile_set_id)
@@ -271,27 +158,14 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
         log_event(f"TileSet found: {self.tile_set.name}")
 
-        if options.get("file_path"):
-            detection_rows_to_insert = self.get_detection_rows_to_insert_from_file(
-                file_path=options["file_path"]
-            )
-        else:
-            detection_rows_to_insert = self.get_detection_rows_to_insert_from_table(
-                table_name=options["table_name"],
-                table_schema=options["table_schema"],
-                batch_id=self.batch_id,
-                with_dates=with_dates,
-            )
+        self.total = DetectionsSchemaService.count_inferences(inference_filter)
+        detection_rows_to_insert = DetectionsSchemaService.get_inference_rows(
+            inference_filter
+        )
 
         for row in detection_rows_to_insert:
             self.queue_detection(row)
             self.insert_detections()
-
-        if self.file:
-            self.file.close()
-
-        if self.cursor:
-            self.cursor.close()
 
         self.insert_detections(force=True)
         TileSet.objects.filter(id=self.tile_set.id).update(
@@ -427,8 +301,6 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             detection_prescription_status=serialized_detection[
                 "detection_prescription_status"
             ],
-            created_at=serialized_detection.get("created_at"),
-            updated_at=serialized_detection.get("updated_at"),
         )
 
         if serialized_detection["user_reviewed"]:
@@ -481,8 +353,6 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 address=serialized_detection["address"],
                 batch_id=self.batch_id,
                 import_id=serialized_detection["id"],
-                created_at=serialized_detection.get("created_at"),
-                updated_at=serialized_detection.get("updated_at"),
             )
             self.detection_objects_to_insert.append(detection_object)
 
@@ -507,8 +377,6 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             detection_data=detection_data,
             batch_id=self.batch_id,
             import_id=serialized_detection["id"],
-            created_at=serialized_detection.get("created_at"),
-            updated_at=serialized_detection.get("updated_at"),
         )
 
         detection.detection_object = detection_object
