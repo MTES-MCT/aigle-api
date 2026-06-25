@@ -20,15 +20,6 @@ from core.views.statistics.deployed_data import (
     StatisticsDeployedDataDetailView,
     StatisticsDeployedDataView,
 )
-from core.views.statistics.validation_status_evolution import (
-    StatisticsValidationStatusEvolutionView,
-)
-from core.views.statistics.validation_status_global import (
-    StatisticsValidationStatusGlobalView,
-)
-from core.views.statistics.validation_status_object_types_global import (
-    StatisticsValidationStatusObjectTypesGlobalView,
-)
 from core.views.tile_set import TileSetViewSet
 from core.views.user import UserViewSet
 from core.views.user_action_log import UserActionLogViewSet
@@ -90,21 +81,6 @@ urlpatterns += [
 ]
 
 urlpatterns += [
-    path(
-        "statistics/validation-status-evolution/",
-        StatisticsValidationStatusEvolutionView.as_view(),
-        name="StatisticsValidationStatusEvolutionView",
-    ),
-    path(
-        "statistics/validation-status-global/",
-        StatisticsValidationStatusGlobalView.as_view(),
-        name="StatisticsValidationStatusGlobalView",
-    ),
-    path(
-        "statistics/validation-status-object-types-global/",
-        StatisticsValidationStatusObjectTypesGlobalView.as_view(),
-        name="StatisticsValidationStatusObjectTypesGlobalView",
-    ),
     path(
         "statistics/deployed-data/",
         StatisticsDeployedDataView.as_view(),

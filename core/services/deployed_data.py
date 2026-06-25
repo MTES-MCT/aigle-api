@@ -29,8 +29,8 @@ from core.utils.string import normalize
 #   threshold), plus distinct user counts and tile-set years. Cached under the summary
 #   key, refreshed out-of-band by `manage.py warm_deployed_data_cache`.
 # - DETAIL (one department): the full breakdown — per-commune and per-tile-set detection
-#   counts (total + in-custom-zone), parcels, SITADEL parcels, user groups, custom zones,
-#   tile sets — computed lazily the first time a department's detail page is opened and
+#   counts (total + in-custom-zone), parcels, SITADEL parcels, user groups, custom zones
+#   — computed lazily the first time a department's detail page is opened and
 #   cached under a per-department key. Every query is scoped to that one department's
 #   communes (a small `commune_id IN (...)`) so it stays index-driven and cheap; the
 #   list view never triggers it.
@@ -65,7 +65,8 @@ DEPLOYED_DATA_CACHE_TTL = int(os.environ.get("DEPLOYED_DATA_CACHE_TTL", 24 * 60 
 # immediately (alongside the runtime version counter, which only handles data freshness).
 # v9: per-commune figures count detection OBJECTS again (per-tile-set stays detections).
 # v10: detail scoped to populated communes; sitadel count is now detection-object driven.
-_CACHE_SCHEMA = "v10"
+# v11: dropped the geo-associated tile_sets list (redundant with detections_by_tile_set).
+_CACHE_SCHEMA = "v11"
 
 
 class DeployedDataService:
@@ -81,15 +82,11 @@ class DeployedDataService:
     is one object); per TILE SET it counts DETECTIONS (Detection rows — the per-tile-set
     artifact, the only level at which a tile-set link exists).
 
-    User groups, custom zones and tile sets are reported when they are associated (through
-    their `geo_zones` M2M) either to the department itself or to any of its communes.
+    User groups and custom zones are reported when they are associated (through their
+    `geo_zones` M2M) either to the department itself or to any of its communes.
 
-    Tile sets in the "fonds de carte" list are intentionally taken from that geographic
-    association and NOT from `Detection.tile_set`: a detection's tile set is merely the
-    imagery layer it was drawn/analysed on, which is not geographically scoped — the very
-    same tile set appears on detections all over the country. The per-tile-set DETECTION
-    breakdown (`detections_by_tile_set`) does use Detection.tile_set, but scoped to the
-    department's own detections, which is meaningful.
+    The per-tile-set DETECTION breakdown (`detections_by_tile_set`) uses Detection.tile_set,
+    scoped to the department's own detections.
     """
 
     @staticmethod
@@ -514,20 +511,6 @@ class DeployedDataService:
             key=lambda zone: zone["category_name"] or zone["name"],
         )
 
-        tile_sets = {
-            row["uuid"]: {
-                "uuid": row["uuid"],
-                "name": row["name"],
-                "date": row["date"],
-            }
-            for row in TileSet.objects.filter(geo_zones__id__in=all_zone_ids)
-            .values("uuid", "name", "date")
-            .distinct()
-        }
-        tile_sets_list = sorted(
-            tile_sets.values(), key=lambda tile_set: tile_set["date"], reverse=True
-        )
-
         return {
             "uuid": department["uuid"],
             "name": department["name"],
@@ -537,6 +520,5 @@ class DeployedDataService:
             "communes": communes,
             "user_groups": user_groups_list,
             "custom_zones": custom_zones_list,
-            "tile_sets": tile_sets_list,
             "detections_by_tile_set": detections_by_tile_set_list,
         }

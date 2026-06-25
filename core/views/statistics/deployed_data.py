@@ -42,12 +42,6 @@ class DeployedDataCustomZoneSerializer(serializers.Serializer):
     color = serializers.CharField(allow_null=True)
 
 
-class DeployedDataTileSetSerializer(serializers.Serializer):
-    uuid = serializers.UUIDField()
-    name = serializers.CharField()
-    date = serializers.DateField()
-
-
 class DeployedDataDetectionsByTileSetSerializer(serializers.Serializer):
     """Detection counts for one tile set (Detection.tile_set): total, and the subset
     whose detection object falls inside at least one custom zone — same criteria as the
@@ -77,7 +71,6 @@ class DeployedDataDepartmentSerializer(serializers.Serializer):
     communes = DeployedDataCommuneSerializer(many=True)
     user_groups = DeployedDataUserGroupSerializer(many=True)
     custom_zones = DeployedDataCustomZoneSerializer(many=True)
-    tile_sets = DeployedDataTileSetSerializer(many=True)
     detections_by_tile_set = DeployedDataDetectionsByTileSetSerializer(many=True)
 
 
