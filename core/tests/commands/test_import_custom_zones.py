@@ -198,7 +198,7 @@ class ImportCustomZonesCommandTests(BaseTestCase):
         gard = create_gard_department(region=self.region)
         _insert_source_row("zi", gard.insee_code)
 
-        call_command("import_custom_zones", "--department-codes", "34")
+        call_command("import_custom_zones", "--department-code", "34")
 
         zones = list(GeoCustomZone.objects.all())
         self.assertEqual(len(zones), 1)

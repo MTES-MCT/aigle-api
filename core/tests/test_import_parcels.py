@@ -162,7 +162,7 @@ class ImportDepartmentParcelsTests(BaseTestCase):
     def test_handle_dry_run_persists_nothing(self, mock_get):
         mock_get.return_value = (MagicMock(), [make_feature("34172000A0001", "34172")])
 
-        call_command("import_parcels", "--departments", "34", "--dry-run")
+        call_command("import_parcels", "--department-code", "34", "--dry-run")
 
         self.assertEqual(Parcel.objects.count(), 0)
 
@@ -171,7 +171,7 @@ class ImportDepartmentParcelsTests(BaseTestCase):
         mock_get.return_value = (MagicMock(), [make_feature("34172000A0001", "34172")])
         # First import: nothing pruned → no detection re-link triggered.
         with patch("core.management.commands.import_parcels.call_command") as mock_cc:
-            call_command("import_parcels", "--departments", "34")
+            call_command("import_parcels", "--department-code", "34")
         self.assertEqual(Parcel.objects.count(), 1)
         mock_cc.assert_not_called()
 
@@ -181,7 +181,7 @@ class ImportDepartmentParcelsTests(BaseTestCase):
             [make_feature("34172000A0002", "34172", numero="0002")],
         )
         with patch("core.management.commands.import_parcels.call_command") as mock_cc:
-            call_command("import_parcels", "--departments", "34")
+            call_command("import_parcels", "--department-code", "34")
         self.assertEqual(Parcel.objects.count(), 1)  # A1 pruned, A2 inserted
         mock_cc.assert_called_once_with(
             "update_detection_parcels", department_code="34"
@@ -194,7 +194,7 @@ class ImportDepartmentParcelsTests(BaseTestCase):
     ):
         mock_get.return_value = (MagicMock(), [make_feature("34172000A0001", "34172")])
 
-        call_command("import_parcels", "--departments", "34")
+        call_command("import_parcels", "--department-code", "34")
 
         mock_refresh.assert_called_once()
 
@@ -205,6 +205,6 @@ class ImportDepartmentParcelsTests(BaseTestCase):
     ):
         mock_get.return_value = (MagicMock(), [make_feature("34172000A0001", "34172")])
 
-        call_command("import_parcels", "--departments", "34", "--dry-run")
+        call_command("import_parcels", "--department-code", "34", "--dry-run")
 
         mock_refresh.assert_not_called()

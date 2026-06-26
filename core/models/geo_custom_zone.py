@@ -40,6 +40,12 @@ class GeoCustomZone(GeoZone):
     # the import_id on Detection / DetectionObject (see common.models.importable),
     # but BigInteger to match the bigint source column.
     import_id = models.BigIntegerField(null=True)
+    # original detections.zae_layer.layer_name at import time; null for zones created
+    # manually. Unlike `name` (admin-editable), this is a stable key for matching a
+    # zone back to its source zae layer. editable=False keeps it out of forms/serializers.
+    import_layer_name = models.CharField(
+        max_length=DEFAULT_MAX_LENGTH, null=True, editable=False
+    )
 
     class Meta:
         indexes = []

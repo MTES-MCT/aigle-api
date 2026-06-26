@@ -185,7 +185,7 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
             "communes",
             "userGroups",
             "customZones",
-            "tileSets",
+            "detectionsByTileSet",
             "parcelsCount",
         ):
             self.assertNotIn(key, herault)
@@ -470,64 +470,15 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         self.assertEqual(custom_zone["name"], "Zone sans catégorie")
         self.assertEqual(custom_zone["color"], "#FF0000")
 
-    def test_detail_tile_sets_from_geo_zone_association(self):
-        # Associated to the department but used by NO detection -> still appears.
-        associated_unused = create_tile_set(
-            name="Associée 2099", date=datetime.date(2099, 1, 1)
-        )
-        associated_unused.geo_zones.add(self.herault)
-        # Used by a detection but NOT associated via geo_zones -> must NOT appear.
-        used_unassociated = create_tile_set(
-            name="Utilisée non associée 2019", date=datetime.date(2019, 1, 1)
-        )
-        obj = create_detection_object(
-            object_type=create_object_type(name="Pool"), commune=self.montpellier
-        )
-        create_detection(detection_object=obj, tile_set=used_unassociated)
-
-        herault = self._get_detail(self.herault.uuid)
-        names = {t["name"] for t in herault["tileSets"]}
-        self.assertIn("Hérault 2024", names)
-        self.assertIn("Associée 2099", names)
-        self.assertNotIn("Utilisée non associée 2019", names)
-
-        # tile set rows carry uuid + date (for the frontend link + badge)
-        tile_set = next(t for t in herault["tileSets"] if t["name"] == "Hérault 2024")
-        self.assertEqual(tile_set["uuid"], str(self.tile_set.uuid))
-        self.assertEqual(tile_set["date"], "2024-01-09")
-
-    def test_detail_tile_set_commune_association(self):
-        # A tile set associated to a COMMUNE of the department surfaces under it.
-        commune_tile_set = create_tile_set(
-            name="Montpellier 2022", date=datetime.date(2022, 1, 1)
-        )
-        commune_tile_set.geo_zones.add(self.montpellier)
-
-        herault = self._get_detail(self.herault.uuid)
-        self.assertIn("Montpellier 2022", {t["name"] for t in herault["tileSets"]})
-
-    def test_detail_tile_sets_sorted_by_date_desc(self):
-        older = create_tile_set(name="Hérault 2018", date=datetime.date(2018, 1, 1))
-        older.geo_zones.add(self.herault)
-
-        herault = self._get_detail(self.herault.uuid)
-        dates = [t["date"] for t in herault["tileSets"]]
-        self.assertEqual(dates, sorted(dates, reverse=True))
-
     def test_detail_associations_of_other_department_not_leaked(self):
         # Associations attached only to a Gard commune must not surface under Hérault.
         gard_group = create_user_group(name="DDTM Gard", geo_zones=[self.nimes])
         add_user_to_group(self.member_1, gard_group)
-        gard_tile_set = create_tile_set(
-            name="Gard 2021", date=datetime.date(2021, 1, 1)
-        )
-        gard_tile_set.geo_zones.add(self.nimes)
 
         herault = self._get_detail(self.herault.uuid)
         self.assertNotIn(
             "DDTM Gard", {group["name"] for group in herault["userGroups"]}
         )
-        self.assertNotIn("Gard 2021", {t["name"] for t in herault["tileSets"]})
 
     def test_detail_respects_min_commune_detections(self):
         beziers_object = create_detection_object(

@@ -151,6 +151,11 @@ class LuccaAnalyticsDatabaseConnector:
         filters: Optional[List[RowFilter]] = None,
         order_bys: Optional[List[OrderBy]] = None,
     ) -> Iterable[LuccaAnalyticsTable]:
+        # table_name is interpolated into raw SQL (it is an identifier, not bindable as a
+        # parameter). Restrict it to the known set so a stray/forged value can't inject SQL.
+        if table_name not in LUCCA_ANALYTICS_TABLE_NAMES_COLUMNS_MAP:
+            raise ValueError(f"Unknown Lucca analytics table: {table_name}")
+
         self.cursor.execute(f"SELECT count(*) FROM {table_name}")
 
         count_res = self.cursor.fetchone()

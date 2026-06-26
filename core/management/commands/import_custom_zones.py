@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 from core.management.base import CommandRunTrackerMixin
 from django.db import connection, transaction
 
-from core.constants.geo import SRID
+from core.constants.geo import LAYER_TYPE_CATEGORY_NAME_MAP, SRID
 from core.models.geo_custom_zone import (
     GeoCustomZone,
     GeoCustomZoneStatus,
@@ -21,14 +21,6 @@ from core.utils.string import normalize
 
 DEFAULT_TABLE_SCHEMA = "detections"
 DEFAULT_TABLE_NAME = "zae_layer"
-
-# detections.zae_layer.layer_type -> GeoCustomZoneCategory.name
-LAYER_TYPE_CATEGORY_NAME_MAP = {
-    "zfee": "Zones à fort enjeu environnemental",
-    "zrf": "Zones à risque fort",
-    "zi": "Zones inondables",
-    "zenaf": "Zones naturelles et agricoles",
-}
 
 # Schema / table names can't be passed as query parameters, so they are validated
 # against a strict allowlist before being interpolated into the SQL (see CLAUDE.md
@@ -62,7 +54,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             ),
         )
         parser.add_argument(
-            "--department-codes",
+            "--department-code",
             action="append",
             required=False,
             help=(
@@ -106,7 +98,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         table_name = options["table_name"]
         table_schema = options["table_schema"]
         source_srid = options["source_srid"]
-        department_codes = options["department_codes"]
+        department_codes = options["department_code"]
         ids = options["ids"]
         force = options["force"]
         ignore_categories = options["ignore_categories"]
@@ -424,6 +416,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                     geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
                     geo_custom_zone_category=category,
                     import_id=item["id"],
+                    import_layer_name=item["layer_name"],
                 )
                 # save() (via GeoZone.save) sets geo_zone_type=CUSTOM and name_normalized.
                 zone.save()

@@ -66,8 +66,8 @@ class CommandMetadataTests(SimpleTestCase):
         self.assertTrue(self.params["--ids"]["multiple"])
 
     def test_repeatable_str_param_is_str_and_multiple(self):
-        self.assertEqual(self.params["--department-codes"]["type"], "str")
-        self.assertTrue(self.params["--department-codes"]["multiple"])
+        self.assertEqual(self.params["--department-code"]["type"], "str")
+        self.assertTrue(self.params["--department-code"]["multiple"])
 
 
 class ParseParametersTests(SimpleTestCase):
@@ -92,8 +92,8 @@ class ParseParametersTests(SimpleTestCase):
         self.assertEqual(parsed["--ids"], [1, 2, 3])
 
     def test_multiple_strings_kept_as_strings(self):
-        parsed = parse_parameters(self.COMMAND, {"--department-codes": "34,30"})
-        self.assertEqual(parsed["--department-codes"], ["34", "30"])
+        parsed = parse_parameters(self.COMMAND, {"--department-code": "34,30"})
+        self.assertEqual(parsed["--department-code"], ["34", "30"])
 
     def test_invalid_int_raises_bad_request(self):
         with self.assertRaises(BadRequest):
