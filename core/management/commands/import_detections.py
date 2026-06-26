@@ -112,6 +112,16 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         parser.add_argument("--tile-set-id", type=int, required=True)
         parser.add_argument("--clean-step", type=bool, default=False)
         parser.add_argument("--batch-id", type=str, required=True)
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            default=False,
+            help=(
+                "Re-import even if detections already exist for this batch_id. "
+                "Without it the command refuses to run on an already-imported batch, "
+                "so an accidental re-deploy can't duplicate detections."
+            ),
+        )
 
     def check_object_types(self, inference_filter: InferenceFilter):
         object_types = DetectionsSchemaService.get_distinct_object_types(
@@ -141,6 +151,20 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         self.batch_id = options.get("batch_id") or datetime.now().strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
+
+        # import_detections is NOT idempotent: re-running re-inserts every inference as a
+        # brand-new DetectionObject (the link step excludes the target tile set, and
+        # merge_double_detections can't collapse cross-object duplicates). The deploy flow
+        # never passes --force, so a second (accidental) deploy of an already-imported
+        # batch is blocked here; pass --force to deliberately re-import.
+        if (
+            not options["force"]
+            and Detection.objects.filter(batch_id=str(self.batch_id)).exists()
+        ):
+            raise CommandError(
+                f"Detections already imported for batch_id={self.batch_id}. "
+                "Re-running would duplicate them — pass --force to re-import anyway."
+            )
 
         inference_filter = InferenceFilter(batch_id=self.batch_id)
 

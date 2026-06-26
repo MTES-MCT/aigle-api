@@ -106,7 +106,7 @@ def _csv_reader(rows):
 
 
 class ExtractDataFromCsvFilterTests(SimpleTestCase):
-    """The --filter-dpts / --filter-coms row filtering (replaces the old
+    """The --department-code / --commune-code row filtering (replaces the old
     standalone extract_sitadel.py pre-pass)."""
 
     def test_filter_dpts_uses_dep_code_column_not_comm_prefix(self):
@@ -114,14 +114,14 @@ class ExtractDataFromCsvFilterTests(SimpleTestCase):
         row = _sitadel_row("97411", "AB", 12, "PC1")
         row["DEP_CODE"] = "974"
         data = Command.extract_data_from_csv(
-            _csv_reader([row]), filter_coms=None, filter_dpts=["974"]
+            _csv_reader([row]), commune_codes=None, department_codes=["974"]
         )
         self.assertEqual(len(data), 1)
 
     def test_filter_dpts_excludes_non_matching(self):
         row = _sitadel_row("34172", "AB", 12, "PC1")  # DEP_CODE='34'
         data = Command.extract_data_from_csv(
-            _csv_reader([row]), filter_coms=None, filter_dpts=["31"]
+            _csv_reader([row]), commune_codes=None, department_codes=["31"]
         )
         self.assertEqual(data, [])
 
@@ -131,7 +131,7 @@ class ExtractDataFromCsvFilterTests(SimpleTestCase):
             _sitadel_row("34173", "AB", 13, "PC2"),
         ]
         data = Command.extract_data_from_csv(
-            _csv_reader(rows), filter_coms=["34172"], filter_dpts=None
+            _csv_reader(rows), commune_codes=["34172"], department_codes=None
         )
         self.assertEqual([d.data_input["COMM"] for d in data], ["34172"])
 

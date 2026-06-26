@@ -140,15 +140,15 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             "https://www.statistiques.developpement-durable.gouv.fr/donnees-des-permis-de-construire-et-autres-autorisations-durbanisme",
         )
         parser.add_argument("--persist-data", type=bool, default=False)
-        parser.add_argument("--filter-coms", action="append", required=False)
-        parser.add_argument("--filter-dpts", action="append", required=False)
+        parser.add_argument("--commune-code", action="append", required=False)
+        parser.add_argument("--department-code", action="append", required=False)
 
     def handle(self, *args, **options):
         file_csv_path = options["file_csv_path"]
         dataset_id = options["dataset_id"]
         persist_data = options["persist_data"]
-        filter_coms = options["filter_coms"]
-        filter_dpts = options["filter_dpts"]
+        commune_codes = options["commune_code"]
+        department_codes = options["department_code"]
 
         # Per-run instance state: these are declared as class attributes, so a long-lived
         # Celery worker would otherwise carry one run's updates into the next (inflating
@@ -158,7 +158,9 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         self._deployed_data_dirty = False
 
         if file_csv_path:
-            self.process_file(file_csv_path, persist_data, filter_coms, filter_dpts)
+            self.process_file(
+                file_csv_path, persist_data, commune_codes, department_codes
+            )
         else:
             log_event(
                 "No --file-csv-path provided: downloading latest autorisations CSVs from DiDo"
@@ -168,7 +170,9 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             ):
                 log_event(f"Processing {label}")
                 try:
-                    self.process_file(file_path, persist_data, filter_coms, filter_dpts)
+                    self.process_file(
+                        file_path, persist_data, commune_codes, department_codes
+                    )
                 finally:
                     temp_dir.cleanup()
 
@@ -186,8 +190,8 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         self,
         file_csv_path: str,
         persist_data: bool,
-        filter_coms: Optional[List[str]],
-        filter_dpts: Optional[List[str]],
+        commune_codes: Optional[List[str]],
+        department_codes: Optional[List[str]],
     ):
         file_csv = open(file_csv_path, mode="r", encoding="utf-8")
         file_csv_reader = csv.DictReader(file_csv, delimiter=";")
@@ -213,8 +217,8 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         while True:
             csv_data = self.extract_data_from_csv(
                 file_csv_reader=file_csv_reader,
-                filter_coms=filter_coms,
-                filter_dpts=filter_dpts,
+                commune_codes=commune_codes,
+                department_codes=department_codes,
             )
 
             if not csv_data:
@@ -236,8 +240,8 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     @staticmethod
     def extract_data_from_csv(
         file_csv_reader: csv.DictReader,
-        filter_coms: Optional[List[str]],
-        filter_dpts: Optional[List[str]],
+        commune_codes: Optional[List[str]],
+        department_codes: Optional[List[str]],
     ) -> List[DataOutputRow]:
         data = []
 
@@ -249,10 +253,10 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             # Filter on the DEP_CODE column, not COMM[:2]: overseas departments
             # have 3-digit codes (Réunion 974, commune 97411), so COMM[:2] would
             # wrongly read "97" and drop every overseas row.
-            if filter_dpts and row["DEP_CODE"] not in filter_dpts:
+            if department_codes and row["DEP_CODE"] not in department_codes:
                 continue
 
-            if filter_coms and row["COMM"] not in filter_coms:
+            if commune_codes and row["COMM"] not in commune_codes:
                 continue
 
             data_output = get_data_output(row)

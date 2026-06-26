@@ -35,17 +35,18 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import communes to database from JSON"
 
     def add_arguments(self, parser):
-        parser.add_argument("--dpt-insee-codes", action="append", required=False)
+        parser.add_argument("--department-code", action="append", required=False)
 
     def handle(self, *args, **options):
-        dpt_insee_codes = options["dpt_insee_codes"]
+        department_codes = options["department_code"]
         data_communes: List[CommuneProperties] = download_json(FILE_JSON_URL)
 
         departments = GeoDepartment.objects.filter(
             insee_code__in=[
                 data_commune["dep_code"][0]
                 for data_commune in data_communes
-                if not dpt_insee_codes or data_commune["dep_code"][0] in dpt_insee_codes
+                if not department_codes
+                or data_commune["dep_code"][0] in department_codes
             ]
         )
         department_code_department_map = {

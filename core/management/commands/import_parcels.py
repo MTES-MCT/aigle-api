@@ -199,7 +199,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import parcels to database from the Etalab cadastre (latest millésime)"
 
     def add_arguments(self, parser):
-        parser.add_argument("--departments", action="append", required=False)
+        parser.add_argument("--department-code", action="append", required=False)
         parser.add_argument(
             "--dry-run",
             action="store_true",
@@ -207,7 +207,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         )
 
     def handle(self, *args, **options):
-        departments = options["departments"]
+        departments = options["department_code"]
         dry_run = options["dry_run"]
 
         log_event(f"Starting importing parcels... (dry_run={dry_run})")

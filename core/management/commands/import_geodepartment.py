@@ -49,17 +49,17 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     help = "Import departments to database from SHP"
 
     def add_arguments(self, parser):
-        parser.add_argument("--insee-codes", action="append", required=False)
+        parser.add_argument("--department-code", action="append", required=False)
 
     def handle(self, *args, **options):
-        insee_codes = options["insee_codes"]
+        department_codes = options["department_code"]
 
         log_event("Starting importing departments...")
 
-        if insee_codes:
-            log_event(f"Insee codes: {', '.join(insee_codes)}")
+        if department_codes:
+            log_event(f"Department codes: {', '.join(department_codes)}")
         else:
-            log_event("No insee codes provided, importing all departments")
+            log_event("No department codes provided, importing all departments")
 
         temp_dir, file_path = download_file(
             url=SHP_ZIP_URL, file_name="departments.zip"
@@ -96,7 +96,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
             insee_code = properties["code_insee"]
 
-            if insee_codes and insee_code not in insee_codes:
+            if department_codes and insee_code not in department_codes:
                 continue
 
             geometry = GEOSGeometry(

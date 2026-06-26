@@ -109,7 +109,7 @@ python manage.py import_geocommune
 
 # import hérault
 python manage.py import_georegion --insee-codes 76
-python manage.py import_geodepartment --insee-codes 34
+python manage.py import_geodepartment --department-code 34
 python manage.py import_geocommune
 
 # insert tiles: for montpellier and its surroundings
