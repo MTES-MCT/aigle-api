@@ -82,6 +82,16 @@ class DataDeploymentService:
                 user_group = DataDeploymentService._create_user_group(
                     geo_zone, geozone_code, user_group_type, cabanisation_category
                 )
+                # A DDTM (state service) oversees the whole department, so ensure a
+                # DDTM-level group covers the deployed geozone's department — wiring up
+                # the department's DDTM even when only a commune/epci is deployed.
+                department = GeoDepartment.objects.filter(
+                    insee_code=department_code
+                ).first()
+                if department is not None:
+                    DataDeploymentService._ensure_department_ddtm_group(
+                        department, department_code, cabanisation_category
+                    )
         except IntegrityError as error:
             # e.g. a TileSet url already owned by another (differently-named) TileSet,
             # or a concurrent run racing the unique name — surface a clean 400, not a 500.
@@ -112,20 +122,21 @@ class DataDeploymentService:
                 id=geo_zone.id
             )
             return insee_code, insee_code
-        if geo_zone.geo_zone_type == GeoZoneType.COMMUNE:
-            commune = GeoCommune.objects.values(
-                "department__insee_code", "iso_code"
-            ).get(id=geo_zone.id)
-            return commune["department__insee_code"], commune["iso_code"]
-        if geo_zone.geo_zone_type == GeoZoneType.EPCI:
-            epci = GeoEpci.objects.values("department__insee_code", "siren_code").get(
-                id=geo_zone.id
+        # commune / epci: parent department insee_code + the zone's own unique code
+        own = {
+            GeoZoneType.COMMUNE: (GeoCommune, "iso_code"),
+            GeoZoneType.EPCI: (GeoEpci, "siren_code"),
+        }.get(geo_zone.geo_zone_type)
+        if own is None:
+            raise ValueError(
+                f"Geozone type {geo_zone.geo_zone_type} is not deployable "
+                "(expected DEPARTMENT, COMMUNE or EPCI)"
             )
-            return epci["department__insee_code"], epci["siren_code"]
-        raise ValueError(
-            f"Geozone type {geo_zone.geo_zone_type} is not deployable "
-            "(expected DEPARTMENT, COMMUNE or EPCI)"
+        model, own_code_field = own
+        row = model.objects.values("department__insee_code", own_code_field).get(
+            id=geo_zone.id
         )
+        return row["department__insee_code"], row[own_code_field]
 
     @staticmethod
     def _create_batch_tile_sets(
@@ -175,22 +186,53 @@ class DataDeploymentService:
         return batch_tile_sets, skipped_batches
 
     @staticmethod
-    def _create_user_group(
-        geo_zone: GeoZone,
-        geozone_code: str,
+    def _upsert_cabanisation_group(
+        name: str,
         user_group_type: str,
+        geo_zone: GeoZone,
         cabanisation_category: ObjectTypeCategory,
     ) -> UserGroup:
-        """Idempotent "Cabanisation {geozone} ({code})" group, scoped to the geozone and
-        the Cabanisation object-type category. The code disambiguates same-named geozones
-        so a second one never reuses (and widens the access of) another's group."""
-        name = f"Cabanisation {geo_zone.name} ({geozone_code})"
+        """get_or_create a group by its (unique) name, linked to the geozone and the
+        Cabanisation category. Idempotent."""
         user_group, _ = UserGroup.objects.get_or_create(
             name=name, defaults={"user_group_type": user_group_type}
         )
         user_group.geo_zones.add(geo_zone)
         user_group.object_type_categories.add(cabanisation_category)
         return user_group
+
+    @staticmethod
+    def _create_user_group(
+        geo_zone: GeoZone,
+        geozone_code: str,
+        user_group_type: str,
+        cabanisation_category: ObjectTypeCategory,
+    ) -> UserGroup:
+        """Idempotent "Cabanisation {geozone} ({code})" group, scoped to the geozone. The
+        code disambiguates same-named geozones so a second one never reuses (and widens
+        the access of) another's group."""
+        name = f"Cabanisation {geo_zone.name} ({geozone_code})"
+        return DataDeploymentService._upsert_cabanisation_group(
+            name, user_group_type, geo_zone, cabanisation_category
+        )
+
+    @staticmethod
+    def _ensure_department_ddtm_group(
+        department: GeoDepartment,
+        department_code: str,
+        cabanisation_category: ObjectTypeCategory,
+    ) -> Optional[UserGroup]:
+        """Ensure a DDTM-level group is linked to the department. Skipped if one already
+        is — so deploying several communes of one department wires up a single shared DDTM
+        group, and a department deploy reuses the DDTM group it just created."""
+        if UserGroup.objects.filter(
+            user_group_type=UserGroupType.DDTM, geo_zones=department
+        ).exists():
+            return None
+        name = f"Cabanisation {department.name} ({department_code})"
+        return DataDeploymentService._upsert_cabanisation_group(
+            name, UserGroupType.DDTM, department, cabanisation_category
+        )
 
     @staticmethod
     def _queue_commands(

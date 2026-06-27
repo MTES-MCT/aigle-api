@@ -21,8 +21,10 @@ from django.test import SimpleTestCase
 from django.utils import timezone
 
 from core.management.commands.import_sitadel import (
+    SITADEL_DATASET_ID,
     Command,
     _select_autorisations_datafiles,
+    resolve_sitadel_dataset_id,
 )
 
 from core.models.detection_authorization import DetectionAuthorization
@@ -192,6 +194,84 @@ class SelectAutorisationsDatafilesTests(SimpleTestCase):
             ]
         }
         self.assertEqual(_select_autorisations_datafiles(dataset), [])
+
+    def test_picks_latest_already_diffused_millesime(self):
+        # DiDo lists next month's millesime before its CSV is published (downloading it
+        # 400s); pick the latest one whose date_diffusion has already passed.
+        dataset = {
+            "datafiles": [
+                {
+                    "title": "Liste des autorisations d'urbanisme créant des logements",
+                    "rid": "rid-log",
+                    "millesimes": [
+                        {
+                            "millesime": "2026-05",
+                            "date_diffusion": "2020-01-01T00:00:00.000Z",
+                        },
+                        {
+                            "millesime": "2026-06",
+                            "date_diffusion": "2099-01-01T00:00:00.000Z",
+                        },
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(
+            _select_autorisations_datafiles(dataset),
+            [
+                (
+                    "Liste des autorisations d'urbanisme créant des logements",
+                    "rid-log",
+                    "2026-05",
+                )
+            ],
+        )
+
+    def test_skips_datafile_with_no_diffused_millesime(self):
+        dataset = {
+            "datafiles": [
+                {
+                    "title": "Liste des autorisations d'urbanisme créant des logements",
+                    "rid": "rid-log",
+                    "millesimes": [
+                        {
+                            "millesime": "2026-06",
+                            "date_diffusion": "2099-01-01T00:00:00.000Z",
+                        }
+                    ],
+                }
+            ]
+        }
+        self.assertEqual(_select_autorisations_datafiles(dataset), [])
+
+
+class ResolveSitadelDatasetIdTests(SimpleTestCase):
+    """The Sitadel dataset id is resolved from the catalogue by title, with the known
+    id as a fallback if the search is unavailable or ambiguous."""
+
+    DATASET_PATH = "core.management.commands.import_sitadel.download_json"
+
+    def test_resolves_unique_title_match(self):
+        with patch(self.DATASET_PATH) as mock_json:
+            mock_json.return_value = {
+                "data": [
+                    {
+                        "id": "found",
+                        "title": "Liste des permis de construire et autres autorisations d’urbanisme",
+                    },
+                    {"id": "other", "title": "Logements autorisés, séries mensuelles"},
+                ]
+            }
+            self.assertEqual(resolve_sitadel_dataset_id(), "found")
+
+    def test_falls_back_when_search_raises(self):
+        with patch(self.DATASET_PATH, side_effect=Exception("network down")):
+            self.assertEqual(resolve_sitadel_dataset_id(), SITADEL_DATASET_ID)
+
+    def test_falls_back_when_not_exactly_one_match(self):
+        with patch(self.DATASET_PATH) as mock_json:
+            mock_json.return_value = {"data": []}
+            self.assertEqual(resolve_sitadel_dataset_id(), SITADEL_DATASET_ID)
 
 
 class ImportSitadelCommandTests(BaseTestCase):

@@ -21,29 +21,20 @@ RUN_URL = "data-deployment/<int:geozone_id>/run/"
 def _department_code_by_geozone(geozone_ids):
     """Department insee_code for each run geozone: itself if it's a department, its
     parent department if it's a commune or EPCI (zae_layer is keyed by department).
-    Mirrors DataDeploymentService._resolve_codes so EPCI runs resolve their zae layers."""
-    codes = {
-        d["id"]: d["insee_code"]
-        for d in GeoDepartment.objects.filter(id__in=geozone_ids).values(
-            "id", "insee_code"
+    Mirrors DataDeploymentService._resolve_codes so EPCI runs resolve their zae layers.
+    Geozone ids are disjoint across types, so update order doesn't matter."""
+    codes = {}
+    for model, field in (
+        (GeoDepartment, "insee_code"),
+        (GeoCommune, "department__insee_code"),
+        (GeoEpci, "department__insee_code"),
+    ):
+        codes.update(
+            {
+                row["id"]: row[field]
+                for row in model.objects.filter(id__in=geozone_ids).values("id", field)
+            }
         )
-    }
-    codes.update(
-        {
-            c["id"]: c["department__insee_code"]
-            for c in GeoCommune.objects.filter(id__in=geozone_ids).values(
-                "id", "department__insee_code"
-            )
-        }
-    )
-    codes.update(
-        {
-            e["id"]: e["department__insee_code"]
-            for e in GeoEpci.objects.filter(id__in=geozone_ids).values(
-                "id", "department__insee_code"
-            )
-        }
-    )
     return codes
 
 

@@ -176,8 +176,10 @@ class DetectionsSchemaService:
         params: List[Any] = []
         batch_conditions = []
         if q:
-            batch_conditions.append("b.batch_name ILIKE %s")
-            params.append(f"%{q}%")
+            batch_conditions.append(
+                "(b.batch_name ILIKE %s OR b.batch_tiles_url ILIKE %s)"
+            )
+            params.extend([f"%{q}%", f"%{q}%"])
         if batch_created_at_min:
             batch_conditions.append("b.created_at >= %s")
             params.append(batch_created_at_min)
