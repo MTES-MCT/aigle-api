@@ -197,6 +197,22 @@ class DataDeploymentViewTests(BaseAPITestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["uuid"], str(self.department.id))
 
+    def test_q_filters_geozones_by_batch_tiles_url(self):
+        run_dept = _insert_run(self.department.id)
+        # "herault" appears only in the tiles url, not the batch name
+        _insert_batch(
+            run_dept, "batch-a", tiles_url="s3://aigle-tiles/aerial/2024_herault"
+        )
+        run_commune = _insert_run(self.commune.id)
+        _insert_batch(
+            run_commune, "batch-b", tiles_url="s3://aigle-tiles/aerial/2024_gard"
+        )
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(ENDPOINT, {"q": "herault"}).json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["uuid"], str(self.department.id))
+
     def test_batch_created_at_min_filters_geozones(self):
         run_old = _insert_run(self.department.id)
         _insert_batch(run_old, "old", created_at="2023-01-01T00:00:00Z")
@@ -386,6 +402,14 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
             TileSet.objects.filter(name="Montpellier (34172) 2023").exists()
         )
 
+        # a DDTM-level group is ALSO created for the commune's parent department
+        ddtm = UserGroup.objects.get(name="Cabanisation Hérault (34)")
+        self.assertEqual(ddtm.user_group_type, UserGroupType.DDTM)
+        self.assertTrue(ddtm.geo_zones.filter(id=self.department.id).exists())
+        self.assertTrue(
+            ddtm.object_type_categories.filter(name="Cabanisation").exists()
+        )
+
         # department-scoped commands use the commune's PARENT department insee_code
         params = dict(
             (c.kwargs["command_name"], c.kwargs["parameters"])
@@ -393,6 +417,17 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         )
         self.assertEqual(params["import_custom_zones"], {"--department-code": "34"})
         self.assertEqual(params["import_parcels"], {"--department-code": "34"})
+
+    def test_run_reuses_existing_department_ddtm_group(self):
+        # a second deploy under the same department must reuse the one DDTM group
+        self._create_cabanisation_category()
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid"):
+            self.client.post(self._url(self.commune.id))
+            self.client.post(self._url(self.commune.id))
+        self.assertEqual(
+            UserGroup.objects.filter(name="Cabanisation Hérault (34)").count(), 1
+        )
 
     def test_run_missing_cabanisation_category_returns_400(self):
         run_id = _insert_run(self.department.id, src_image_year=2024)

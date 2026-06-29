@@ -5,10 +5,13 @@ import time
 from dataclasses import dataclass
 from functools import reduce
 from typing import List, Literal, Optional, Set, Tuple, TypedDict
+from urllib.parse import quote
 from django.core.management.base import BaseCommand, CommandError
 from core.management.base import CommandRunTrackerMixin
 from core.management.commands._common.file import download_file, download_json
 from django.db import transaction
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from core.constants.detection import CONTROLLED_DETECTION_STATUSES
 from core.models.detection_authorization import DetectionAuthorization
@@ -29,28 +32,79 @@ from core.models.detection import Detection
 BATCH_SIZE = 100
 BULK_UPDATE_BATCH_SIZE = 1000
 
-# SDES "DiDo" open-data platform. SITADEL_DATASET_ID is the "Liste des permis de
-# construire et autres autorisations d'urbanisme" dataset (created 2023-09,
-# refreshed monthly). If it ever changes, override with --dataset-id — find the
-# new id in the catalogue link on:
-# https://www.statistiques.developpement-durable.gouv.fr/donnees-des-permis-de-construire-et-autres-autorisations-durbanisme
+# SDES "DiDo" open-data platform. The Sitadel "Liste des permis de construire et
+# autres autorisations d'urbanisme" dataset is resolved by searching the catalogue
+# (so a dataset-id change doesn't break the import); SITADEL_DATASET_ID is only a
+# fallback if the search is ever unavailable, and --dataset-id forces a specific one.
 DIDO_API_BASE = "https://data.statistiques.developpement-durable.gouv.fr/dido/api/v1"
 SITADEL_DATASET_ID = "6513f0189d7d312c80ec5b5b"
+# GET /datasets?text= searches title+description; the markers must ALL be in the title.
+SITADEL_DATASET_SEARCH_TEXT = "permis de construire"
+SITADEL_DATASET_TITLE_MARKERS = ("permis de construire", "autorisation")
 
 
 def log_event(info: str):
     log_command_event(command_name="import_sitadel", info=info)
 
 
+def resolve_sitadel_dataset_id() -> str:
+    """Discover the Sitadel dataset id from the DiDo catalogue by title, instead of
+    hardcoding it. Falls back to SITADEL_DATASET_ID if the search is unavailable or
+    doesn't return exactly one matching dataset."""
+    try:
+        result = download_json(
+            f"{DIDO_API_BASE}/datasets"
+            f"?text={quote(SITADEL_DATASET_SEARCH_TEXT)}&pageSize=20"
+        )
+        matches = [
+            dataset
+            for dataset in result.get("data", [])
+            if all(
+                marker in (dataset.get("title") or "").lower()
+                for marker in SITADEL_DATASET_TITLE_MARKERS
+            )
+        ]
+    except Exception as error:  # network / unexpected payload — fall back, don't crash
+        log_event(f"Dataset search failed ({error})")
+        matches = []
+
+    if len(matches) != 1:
+        log_event(
+            f"Dataset search matched {len(matches)} datasets; "
+            f"using fallback id {SITADEL_DATASET_ID}"
+        )
+        return SITADEL_DATASET_ID
+
+    log_event(f"Resolved Sitadel dataset: {matches[0]['title']} ({matches[0]['id']})")
+    return matches[0]["id"]
+
+
+def _millesime_available(millesime: dict, now) -> bool:
+    """A millesime is downloadable only once its date_diffusion has passed. DiDo lists
+    the upcoming month's millesime before its CSV is published, and downloading it then
+    400s ("Les données de ce millésime ne seront pas disponible avant …")."""
+    date_diffusion = millesime.get("date_diffusion")
+    if not date_diffusion:  # no diffusion date advertised — assume it's available
+        return True
+    parsed = parse_datetime(date_diffusion)
+    return parsed is None or parsed <= now
+
+
 def _select_autorisations_datafiles(dataset: dict) -> List[Tuple[str, str, str]]:
-    """(title, rid, latest_millesime) for each "autorisations d'urbanisme créant
-    des …" datafile (logements / locaux non résidentiels), matched by title so
-    the permis d'aménager / démolir datafiles of the same dataset are left out."""
+    """(title, rid, latest_available_millesime) for each "autorisations d'urbanisme
+    créant des …" datafile (logements / locaux non résidentiels), matched by title so
+    the permis d'aménager / démolir datafiles of the same dataset are left out. Picks
+    the latest ALREADY-DIFFUSED millesime, skipping a not-yet-published newer one."""
+    now = timezone.now()
     selected = []
     for datafile in dataset.get("datafiles", []):
         if "autorisation" not in datafile["title"].lower():
             continue
-        millesimes = datafile.get("millesimes") or []
+        millesimes = [
+            m
+            for m in (datafile.get("millesimes") or [])
+            if _millesime_available(m, now)
+        ]
         if not millesimes:
             continue
         latest = max(millesimes, key=lambda m: m["millesime"])
@@ -133,11 +187,10 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         parser.add_argument(
             "--dataset-id",
             type=str,
-            default=SITADEL_DATASET_ID,
+            required=False,
             help="DiDo dataset id to download autorisations CSVs from when "
-            "--file-csv-path is omitted. Defaults to the Sitadel dataset; find a "
-            "new id in the catalogue link on "
-            "https://www.statistiques.developpement-durable.gouv.fr/donnees-des-permis-de-construire-et-autres-autorisations-durbanisme",
+            "--file-csv-path is omitted. If omitted, the Sitadel dataset is "
+            "auto-resolved from the catalogue by title.",
         )
         parser.add_argument("--persist-data", type=bool, default=False)
         parser.add_argument("--commune-code", action="append", required=False)
@@ -165,6 +218,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             log_event(
                 "No --file-csv-path provided: downloading latest autorisations CSVs from DiDo"
             )
+            dataset_id = dataset_id or resolve_sitadel_dataset_id()
             for label, temp_dir, file_path in download_latest_autorisations_csvs(
                 dataset_id
             ):
