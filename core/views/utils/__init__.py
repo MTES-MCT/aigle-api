@@ -23,11 +23,19 @@ urls = [
     ]
 ]
 
-# data_deployment exposes a second endpoint (POST run) alongside its GET list.
-urls.append(
-    path(
-        f"{URL_PREFIX}{data_deployment.RUN_URL}",
-        data_deployment.run_endpoint,
-        name="data-deployment-run",
-    )
-)
+# data_deployment exposes POST run endpoints (whole geozone, single batch, single
+# zae layer) alongside its GET list.
+for run_url, view, name in [
+    (data_deployment.RUN_URL, data_deployment.run_endpoint, "data-deployment-run"),
+    (
+        data_deployment.BATCH_RUN_URL,
+        data_deployment.run_batch_endpoint,
+        "data-deployment-batch-run",
+    ),
+    (
+        data_deployment.ZAE_RUN_URL,
+        data_deployment.run_zae_endpoint,
+        "data-deployment-zae-run",
+    ),
+]:
+    urls.append(path(f"{URL_PREFIX}{run_url}", view, name=name))

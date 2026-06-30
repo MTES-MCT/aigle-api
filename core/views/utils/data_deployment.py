@@ -16,6 +16,8 @@ from core.utils.permissions import SuperAdminRolePermission
 
 URL = "data-deployment/"
 RUN_URL = "data-deployment/<int:geozone_id>/run/"
+BATCH_RUN_URL = "data-deployment/<int:geozone_id>/batch/<int:batch_id>/run/"
+ZAE_RUN_URL = "data-deployment/<int:geozone_id>/zae/<int:zae_id>/run/"
 
 
 def _department_code_by_geozone(geozone_ids):
@@ -123,6 +125,7 @@ def endpoint(request):
                 "created_at": geozone["created_at"],
                 "batches": [
                     {
+                        "id": batch["id"],
                         "name": batch["batch_name"],
                         "created_at": batch["created_at"],
                         "tiles_url": batch_tiles_url_to_xyz(batch["batch_tiles_url"]),
@@ -132,6 +135,7 @@ def endpoint(request):
                 ],
                 "zae_layers": [
                     {
+                        "id": zae["id"],
                         "created_at": zae["created_at"],
                         "name": zae["layer_name"],
                         "type": zae["layer_type"],
@@ -166,5 +170,33 @@ def run_endpoint(request, geozone_id):
     except (ValueError, BadRequest) as error:
         # ValueError = our validation (geozone/category/conflict); BadRequest = a command
         # param rejected by parse_parameters during enqueue. Both are clean 400s.
+        return Response({"detail": str(error)}, status=400)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([SuperAdminRolePermission])
+def run_batch_endpoint(request, geozone_id, batch_id):
+    """Deploy a single batch (a new millesime) onto an already-deployed geozone:
+    create the batch's TileSet and queue its detections import."""
+    try:
+        result = DataDeploymentService.run_batch_deployment(
+            geozone_id=geozone_id, batch_id=batch_id
+        )
+    except (ValueError, BadRequest) as error:
+        return Response({"detail": str(error)}, status=400)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([SuperAdminRolePermission])
+def run_zae_endpoint(request, geozone_id, zae_id):
+    """Deploy a single zae layer (zone à enjeux) for an already-deployed geozone:
+    import that source row as a GeoCustomZone."""
+    try:
+        result = DataDeploymentService.run_zae_deployment(
+            geozone_id=geozone_id, zae_id=zae_id
+        )
+    except (ValueError, BadRequest) as error:
         return Response({"detail": str(error)}, status=400)
     return Response(result)
