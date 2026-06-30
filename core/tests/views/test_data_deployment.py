@@ -152,7 +152,7 @@ class DataDeploymentViewTests(BaseAPITestCase):
         self.assertEqual(batch["name"], "batch-herault")
         self.assertEqual(
             batch["tilesUrl"],
-            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.png",
+            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.webp",
         )
         self.assertEqual(batch["deployStatus"], "NOT_DEPLOYED")  # no detection imported
 
@@ -345,7 +345,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertEqual(tile_set.max_zoom, 19)
         self.assertEqual(
             tile_set.url,
-            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.png",
+            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.webp",
         )
         self.assertTrue(tile_set.geo_zones.filter(id=self.department.id).exists())
 
@@ -483,7 +483,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         # a different TileSet already owns the url this batch would generate
         create_tile_set(
             name="Conflicting",
-            url="https://tiles.aigle.beta.gouv.fr/x/2024_y/{z}/{x}/{y}.png",
+            url="https://tiles.aigle.beta.gouv.fr/x/2024_y/{z}/{x}/{y}.webp",
         )
 
         self.authenticate_user(create_super_admin())

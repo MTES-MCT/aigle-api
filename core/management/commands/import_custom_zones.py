@@ -1,4 +1,5 @@
 import re
+from collections import defaultdict
 from datetime import datetime
 from typing import Any, Dict, List, Set, Tuple
 
@@ -8,6 +9,7 @@ from core.management.base import CommandRunTrackerMixin
 from django.db import connection, transaction
 
 from core.constants.geo import LAYER_TYPE_CATEGORY_NAME_MAP, SRID
+from core.models.geo_commune import GeoCommune
 from core.models.geo_custom_zone import (
     GeoCustomZone,
     GeoCustomZoneStatus,
@@ -15,6 +17,7 @@ from core.models.geo_custom_zone import (
 )
 from core.models.geo_custom_zone_category import GeoCustomZoneCategory
 from core.models.geo_department import GeoDepartment
+from core.models.user_group import UserGroup
 from core.services.geo_custom_zone import GeoCustomZoneService
 from core.utils.logs_helpers import log_command_event
 from core.utils.string import normalize
@@ -403,6 +406,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
 
     def _create_zones(self, resolved: List[Dict[str, Any]]) -> List[int]:
         created_ids: List[int] = []
+        zone_ids_by_department_id: Dict[int, List[int]] = defaultdict(list)
         with transaction.atomic():
             for item in resolved:
                 department = item["department"]
@@ -422,9 +426,38 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 zone.save()
                 zone.geo_zones.add(department)
                 created_ids.append(zone.id)
+                zone_ids_by_department_id[department.id].append(zone.id)
+
+            self._associate_user_groups(zone_ids_by_department_id)
 
         log_event(f"Created {len(created_ids)} custom zone(s)")
         return created_ids
+
+    def _associate_user_groups(
+        self, zone_ids_by_department_id: Dict[int, List[int]]
+    ) -> None:
+        """Give every user group operating in a zone's department access to the new
+        custom zones (UserGroup.geo_custom_zones M2M) — matching the groups already
+        scoped, through their geo_zones M2M, to the department itself (DDTM) or any of
+        its communes (collectivities). Idempotent: .add() never duplicates a row."""
+        for department_id, zone_ids in zone_ids_by_department_id.items():
+            commune_ids = list(
+                GeoCommune.objects.filter(department_id=department_id).values_list(
+                    "id", flat=True
+                )
+            )
+            user_groups = list(
+                UserGroup.objects.filter(
+                    geo_zones__id__in=[department_id, *commune_ids]
+                ).distinct()
+            )
+            for user_group in user_groups:
+                user_group.geo_custom_zones.add(*zone_ids)
+            if user_groups:
+                log_event(
+                    f"Associated {len(zone_ids)} custom zone(s) to "
+                    f"{len(user_groups)} user group(s) for department id={department_id}"
+                )
 
     @staticmethod
     def _default_zone_name(item: Dict[str, Any]) -> str:

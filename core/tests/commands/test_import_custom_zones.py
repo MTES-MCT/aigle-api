@@ -25,8 +25,10 @@ from core.tests.fixtures.detection_data import (
 from core.tests.fixtures.geo_data import (
     create_gard_department,
     create_herault_department,
+    create_montpellier_commune,
     create_occitanie_region,
 )
+from core.tests.fixtures.users import create_user_group
 
 # A small valid polygon inside Hérault (department code "34"), in WGS84.
 HERAULT_POLYGON_WKT = "POLYGON((3.0 43.3, 3.2 43.3, 3.2 43.5, 3.0 43.5, 3.0 43.3))"
@@ -258,6 +260,25 @@ class ImportCustomZonesCommandTests(BaseTestCase):
         self.assertEqual(GeoCustomZone.objects.count(), 2)
         for zone in GeoCustomZone.objects.all():
             self.assertIsNone(zone.geo_custom_zone_category)
+
+    def test_import_associates_user_groups_by_department_and_commune(self):
+        _seed_categories("zfee")
+        montpellier = create_montpellier_commune(department=self.department)
+        # A DDTM group scoped to the department, and a collectivity group scoped to
+        # a commune of that department — both must get the new zone.
+        ddtm_group = create_user_group(name="DDTM 34", geo_zones=[self.department])
+        commune_group = create_user_group(name="Montpellier", geo_zones=[montpellier])
+        # A group scoped to an unrelated department must NOT get the zone.
+        gard = create_gard_department(region=self.region)
+        other_group = create_user_group(name="DDTM 30", geo_zones=[gard])
+
+        source_id = _insert_source_row("zfee", "34")
+        call_command("import_custom_zones")
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+
+        self.assertIn(zone, ddtm_group.geo_custom_zones.all())
+        self.assertIn(zone, commune_group.geo_custom_zones.all())
+        self.assertNotIn(zone, other_group.geo_custom_zones.all())
 
     def test_import_associates_detections_to_new_zones(self):
         _seed_categories("zfee")

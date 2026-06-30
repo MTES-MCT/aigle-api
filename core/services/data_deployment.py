@@ -27,11 +27,11 @@ MAX_IMAGERY_YEAR = 2100
 
 
 def batch_tiles_url_to_xyz(batch_tiles_url: Optional[str]) -> Optional[str]:
-    """s3://aigle-tiles/<path> -> https://tiles.aigle.beta.gouv.fr/<path>/{z}/{x}/{y}.png"""
+    """s3://aigle-tiles/<path> -> https://tiles.aigle.beta.gouv.fr/<path>/{z}/{x}/{y}.webp"""
     if not batch_tiles_url:
         return None
     path = batch_tiles_url.removeprefix(S3_TILES_PREFIX).strip("/")
-    return f"{TILES_BASE_URL}{path}/{{z}}/{{x}}/{{y}}.png"
+    return f"{TILES_BASE_URL}{path}/{{z}}/{{x}}/{{y}}.webp"
 
 
 def _run_command(command_name: str, parameters: Dict[str, Any]) -> Dict[str, str]:
