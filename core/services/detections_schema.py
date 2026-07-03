@@ -84,6 +84,7 @@ class InferenceFilter:
 
 # Columns read for the data-deployment listing.
 ZAE_LAYER_COLUMNS = [
+    "id",
     "layer_name",
     "layer_type",
     "layer_year",

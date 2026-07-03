@@ -28,6 +28,8 @@ from core.utils.run_command import COMMANDS_AND_PARAMETERS_MAP, parse_parameters
 
 ENDPOINT = "/api/utils/data-deployment/"
 RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/run/"
+BATCH_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/batch/{batch_id}/run/"
+ZAE_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/zae/{zae_id}/run/"
 RUN_COMMAND_PATH = "core.services.data_deployment.CommandAsyncService.run_command_async"
 
 
@@ -102,9 +104,11 @@ def _insert_zae(
     with connection.cursor() as cursor:
         cursor.execute(
             "INSERT INTO detections.zae_layer (department_code, layer_type, "
-            "layer_name, layer_year, created_at) VALUES (%s, %s, %s, %s, %s)",
+            "layer_name, layer_year, created_at) VALUES (%s, %s, %s, %s, %s) "
+            "RETURNING id",
             [department_code, layer_type, layer_name, layer_year, created_at],
         )
+        return cursor.fetchone()[0]
 
 
 class DataDeploymentViewTests(BaseAPITestCase):
@@ -148,7 +152,7 @@ class DataDeploymentViewTests(BaseAPITestCase):
         self.assertEqual(batch["name"], "batch-herault")
         self.assertEqual(
             batch["tilesUrl"],
-            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.png",
+            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.webp",
         )
         self.assertEqual(batch["deployStatus"], "NOT_DEPLOYED")  # no detection imported
 
@@ -341,7 +345,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertEqual(tile_set.max_zoom, 19)
         self.assertEqual(
             tile_set.url,
-            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.png",
+            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.webp",
         )
         self.assertTrue(tile_set.geo_zones.filter(id=self.department.id).exists())
 
@@ -479,7 +483,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         # a different TileSet already owns the url this batch would generate
         create_tile_set(
             name="Conflicting",
-            url="https://tiles.aigle.beta.gouv.fr/x/2024_y/{z}/{x}/{y}.png",
+            url="https://tiles.aigle.beta.gouv.fr/x/2024_y/{z}/{x}/{y}.webp",
         )
 
         self.authenticate_user(create_super_admin())
@@ -533,3 +537,189 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
             "import_sitadel", {"--department-code": "34", "--persist-data": True}
         )
         self.assertIs(parsed["--persist-data"], True)
+
+
+class DataDeploymentBatchRunViewTests(BaseAPITestCase):
+    """POST data-deployment/<geozone_id>/batch/<batch_id>/run/ — deploy a single new
+    millesime onto an already-deployed geozone: create only the batch's TileSet and
+    queue its import_detections (no user group, no department-wide imports)."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        self.commune = create_montpellier_commune(department=self.department)
+        _provision_schema()
+
+    def _url(self, geozone_id, batch_id):
+        return BATCH_RUN_ENDPOINT.format(geozone_id=geozone_id, batch_id=batch_id)
+
+    def test_batch_run_unauthenticated_returns_401(self):
+        response = self.client.post(self._url(self.department.id, 1))
+        self.assertEqual(response.status_code, 401)
+
+    def test_batch_run_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        response = self.client.post(self._url(self.department.id, 1))
+        self.assertEqual(response.status_code, 403)
+
+    def test_batch_run_creates_only_its_tileset_and_queues_detections(self):
+        run_id = _insert_run(self.department.id, src_image_year=2025)
+        batch_id = _insert_batch(
+            run_id, "batch-2025", tiles_url="s3://aigle-tiles/aerial/2025_herault"
+        )
+        # a second batch on the same geozone must be untouched by a single-batch deploy
+        _insert_batch(
+            run_id, "batch-other", tiles_url="s3://aigle-tiles/aerial/2024_herault"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(self._url(self.department.id, batch_id))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["tileSetsCreated"], ["Hérault (34) 2025"])
+        self.assertEqual(len(data["queuedCommands"]), 2)
+
+        tile_set = TileSet.objects.get(name="Hérault (34) 2025")
+        self.assertEqual(tile_set.tile_set_type, TileSetType.BACKGROUND)
+        self.assertEqual(tile_set.date, date(2025, 1, 1))
+        self.assertTrue(tile_set.geo_zones.filter(id=self.department.id).exists())
+        # only the targeted batch's tile set was created
+        self.assertFalse(TileSet.objects.filter(name="Hérault (34) 2024").exists())
+        # no user group is created/touched for a single-batch deploy
+        self.assertFalse(UserGroup.objects.exists())
+
+        # the batch's detections, then a department-wide sitadel refresh (new permits)
+        calls = [
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        ]
+        self.assertEqual(
+            calls,
+            [
+                (
+                    "import_detections",
+                    {"--tile-set-id": tile_set.id, "--batch-id": str(batch_id)},
+                ),
+                (
+                    "import_sitadel",
+                    {"--department-code": "34", "--persist-data": True},
+                ),
+            ],
+        )
+
+    def test_batch_run_commune_names_tileset_after_commune(self):
+        run_id = _insert_run(self.commune.id, src_image_year=2023)
+        batch_id = _insert_batch(
+            run_id, "batch-mtp", tiles_url="s3://aigle-tiles/aerial/2023_mtp"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid"):
+            data = self.client.post(self._url(self.commune.id, batch_id)).json()
+        self.assertEqual(data["tileSetsCreated"], ["Montpellier (34172) 2023"])
+
+    def test_batch_run_batch_not_in_geozone_returns_400(self):
+        run_id = _insert_run(self.commune.id, src_image_year=2024)
+        batch_id = _insert_batch(run_id, "batch", tiles_url="s3://aigle-tiles/x/2024_y")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            # batch exists, but under the commune — not under the department in the URL
+            response = self.client.post(self._url(self.department.id, batch_id))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.json()["detail"].lower())
+        run_command.assert_not_called()
+
+    def test_batch_run_nonexistent_geozone_returns_400(self):
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self.client.post(self._url(99999999, 1))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.json()["detail"].lower())
+        run_command.assert_not_called()
+
+    def test_batch_run_undeployable_batch_returns_400(self):
+        run_id = _insert_run(self.department.id, src_image_year=None)  # no year
+        batch_id = _insert_batch(run_id, "no-year", tiles_url="s3://aigle-tiles/x/none")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self.client.post(self._url(self.department.id, batch_id))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("cannot be deployed", response.json()["detail"].lower())
+        run_command.assert_not_called()
+        self.assertFalse(TileSet.objects.exists())
+
+
+class DataDeploymentZaeRunViewTests(BaseAPITestCase):
+    """POST data-deployment/<geozone_id>/zae/<zae_id>/run/ — deploy a single zae layer
+    by importing that source row as a GeoCustomZone (import_custom_zones --ids)."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)  # insee_code 34
+        self.commune = create_montpellier_commune(department=self.department)
+        _provision_schema()
+
+    def _url(self, geozone_id, zae_id):
+        return ZAE_RUN_ENDPOINT.format(geozone_id=geozone_id, zae_id=zae_id)
+
+    def test_zae_run_unauthenticated_returns_401(self):
+        response = self.client.post(self._url(self.department.id, 1))
+        self.assertEqual(response.status_code, 401)
+
+    def test_zae_run_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        response = self.client.post(self._url(self.department.id, 1))
+        self.assertEqual(response.status_code, 403)
+
+    def test_zae_run_queues_import_custom_zones_for_that_row(self):
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(self._url(self.department.id, zae_id))
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["zaeLayerName"], "ZFEE Hérault")
+        self.assertEqual(len(data["queuedCommands"]), 1)
+
+        calls = [
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        ]
+        self.assertEqual(calls, [("import_custom_zones", {"--ids": zae_id})])
+
+    def test_zae_run_via_commune_resolves_parent_department(self):
+        # the zae belongs to the parent department; deploying through the commune works
+        zae_id = _insert_zae("34", "zrf", "ZRF Hérault")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(self._url(self.commune.id, zae_id))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_command.call_args.kwargs["parameters"], {"--ids": zae_id})
+
+    def test_zae_run_layer_in_other_department_returns_400(self):
+        # a zae of department 30 is out of scope for the Hérault (34) geozone
+        zae_id = _insert_zae("30", "zfee", "ZFEE Gard")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self.client.post(self._url(self.department.id, zae_id))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.json()["detail"].lower())
+        run_command.assert_not_called()
+
+    def test_zae_run_nonexistent_geozone_returns_400(self):
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self.client.post(self._url(99999999, 1))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.json()["detail"].lower())
+        run_command.assert_not_called()

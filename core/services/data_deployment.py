@@ -27,11 +27,34 @@ MAX_IMAGERY_YEAR = 2100
 
 
 def batch_tiles_url_to_xyz(batch_tiles_url: Optional[str]) -> Optional[str]:
-    """s3://aigle-tiles/<path> -> https://tiles.aigle.beta.gouv.fr/<path>/{z}/{x}/{y}.png"""
+    """s3://aigle-tiles/<path> -> https://tiles.aigle.beta.gouv.fr/<path>/{z}/{x}/{y}.webp"""
     if not batch_tiles_url:
         return None
     path = batch_tiles_url.removeprefix(S3_TILES_PREFIX).strip("/")
-    return f"{TILES_BASE_URL}{path}/{{z}}/{{x}}/{{y}}.png"
+    return f"{TILES_BASE_URL}{path}/{{z}}/{{x}}/{{y}}.webp"
+
+
+def _run_command(command_name: str, parameters: Dict[str, Any]) -> Dict[str, str]:
+    """Queue one command on the sequential_commands queue, return its trace record."""
+    return {
+        "command_name": command_name,
+        "command_run_uuid": CommandAsyncService.run_command_async(
+            command_name=command_name, parameters=parameters
+        ),
+    }
+
+
+def _queue_detection_imports(
+    batch_tile_sets: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    """One import_detections per batch, each scoped to its TileSet + batch id."""
+    return [
+        _run_command(
+            "import_detections",
+            {"--tile-set-id": bts["tile_set_id"], "--batch-id": str(bts["batch_id"])},
+        )
+        for bts in batch_tile_sets
+    ]
 
 
 class DataDeploymentService:
@@ -109,6 +132,88 @@ class DataDeploymentService:
             "tile_sets_created": [bts["name"] for bts in batch_tile_sets],
             "skipped_batches": skipped_batches,
             "queued_commands": queued_commands,
+        }
+
+    @staticmethod
+    def run_batch_deployment(geozone_id: int, batch_id: int) -> Dict[str, Any]:
+        """Deploy a single batch (a new imagery millesime) onto an already-deployed
+        geozone: create the batch's TileSet, queue its detections import, then refresh
+        sitadel for the department (building permits gain new millesimes too). The other
+        department-wide steps (custom zones, parcels, user group, tiles) are
+        year-independent and already done by the initial geozone deploy —
+        import_detections self-creates missing tiles and re-links custom zones."""
+        geo_zone = GeoZone.objects.filter(id=geozone_id).first()
+        if geo_zone is None:
+            raise ValueError(f"Geozone {geozone_id} not found")
+
+        department_code, geozone_code = DataDeploymentService._resolve_codes(geo_zone)
+
+        batch = next(
+            (
+                b
+                for b in DetectionsSchemaService.get_batches_by_geozone([geozone_id])
+                if b["id"] == batch_id
+            ),
+            None,
+        )
+        if batch is None:
+            raise ValueError(f"Batch {batch_id} not found for geozone {geozone_id}")
+
+        try:
+            with transaction.atomic():
+                batch_tile_sets, _ = DataDeploymentService._create_batch_tile_sets(
+                    geo_zone, geozone_code, [batch]
+                )
+        except IntegrityError as error:
+            raise ValueError(f"Deployment conflict: {error}")
+
+        if not batch_tile_sets:
+            raise ValueError(
+                f'Batch "{batch.get("batch_name")}" cannot be deployed '
+                "(missing tiles url or imagery year)"
+            )
+
+        queued_commands = _queue_detection_imports(batch_tile_sets)
+        # --persist-data is mandatory: without it import_sitadel is a dry run.
+        queued_commands.append(
+            _run_command(
+                "import_sitadel",
+                {"--department-code": department_code, "--persist-data": True},
+            )
+        )
+
+        return {
+            "geozone_name": geo_zone.name,
+            "tile_sets_created": [bts["name"] for bts in batch_tile_sets],
+            "queued_commands": queued_commands,
+        }
+
+    @staticmethod
+    def run_zae_deployment(geozone_id: int, zae_id: int) -> Dict[str, Any]:
+        """Deploy a single zae layer (zone à enjeux) for an already-deployed geozone:
+        import just that source row as a GeoCustomZone (import_custom_zones --ids). The
+        command resolves the department itself from the row's department_code."""
+        geo_zone = GeoZone.objects.filter(id=geozone_id).first()
+        if geo_zone is None:
+            raise ValueError(f"Geozone {geozone_id} not found")
+
+        department_code, _ = DataDeploymentService._resolve_codes(geo_zone)
+
+        zae = next(
+            (
+                z
+                for z in DetectionsSchemaService.get_zae_layers([department_code])
+                if z["id"] == zae_id
+            ),
+            None,
+        )
+        if zae is None:
+            raise ValueError(f"Zae layer {zae_id} not found for geozone {geozone_id}")
+
+        return {
+            "geozone_name": geo_zone.name,
+            "zae_layer_name": zae["layer_name"],
+            "queued_commands": [_run_command("import_custom_zones", {"--ids": zae_id})],
         }
 
     @staticmethod
@@ -242,32 +347,18 @@ class DataDeploymentService:
     ) -> List[Dict[str, str]]:
         """Enqueue the import commands in dependency order. The sequential_commands
         queue (concurrency 1) runs them one at a time in this exact order."""
-        queued: List[Dict[str, str]] = []
-
-        def enqueue(command_name: str, parameters: Dict[str, Any]) -> None:
-            queued.append(
-                {
-                    "command_name": command_name,
-                    "command_run_uuid": CommandAsyncService.run_command_async(
-                        command_name=command_name, parameters=parameters
-                    ),
-                }
-            )
-
-        enqueue("import_custom_zones", {"--department-code": department_code})
-        enqueue("create_tile", {"--geozone-uuid": str(geo_zone.uuid)})
-        enqueue("import_parcels", {"--department-code": department_code})
-        for bts in batch_tile_sets:
-            enqueue(
-                "import_detections",
-                {
-                    "--tile-set-id": bts["tile_set_id"],
-                    "--batch-id": str(bts["batch_id"]),
-                },
-            )
+        # Order matters and _run_command dispatches eagerly, so build the list in place.
+        queued = [
+            _run_command("import_custom_zones", {"--department-code": department_code}),
+            _run_command("create_tile", {"--geozone-uuid": str(geo_zone.uuid)}),
+            _run_command("import_parcels", {"--department-code": department_code}),
+        ]
+        queued += _queue_detection_imports(batch_tile_sets)
         # --persist-data is mandatory: without it import_sitadel is a dry run.
-        enqueue(
-            "import_sitadel",
-            {"--department-code": department_code, "--persist-data": True},
+        queued.append(
+            _run_command(
+                "import_sitadel",
+                {"--department-code": department_code, "--persist-data": True},
+            )
         )
         return queued
