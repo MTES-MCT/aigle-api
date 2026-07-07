@@ -554,6 +554,111 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertIn("not deployable", response.json()["detail"].lower())
         run_command.assert_not_called()
 
+    def test_run_with_selected_batches_deploys_only_those(self):
+        self._create_cabanisation_category()
+        run_keep = _insert_run(self.department.id, src_image_year=2024)
+        keep = _insert_batch(run_keep, "keep", tiles_url="s3://aigle-tiles/x/2024_keep")
+        run_drop = _insert_run(self.department.id, src_image_year=2025)
+        _insert_batch(run_drop, "drop", tiles_url="s3://aigle-tiles/x/2025_drop")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id), {"batchIds": [keep]}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        # only the selected batch's tile set is created
+        self.assertEqual(data["tileSetsCreated"], ["Hérault (34) 2024"])
+        self.assertFalse(TileSet.objects.filter(name="Hérault (34) 2025").exists())
+
+        calls = [
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        ]
+        detection_batch_ids = [
+            params["--batch-id"]
+            for name, params in calls
+            if name == "import_detections"
+        ]
+        self.assertEqual(detection_batch_ids, [str(keep)])
+
+    def test_run_with_empty_batch_selection_skips_tilesets_and_detections(self):
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id), {"batchIds": []}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["tileSetsCreated"], [])
+        self.assertFalse(TileSet.objects.filter(name="Hérault (34) 2024").exists())
+        names = [c.kwargs["command_name"] for c in run_command.call_args_list]
+        self.assertNotIn("import_detections", names)
+        # department-wide steps still run regardless of batch selection
+        self.assertIn("create_tile", names)
+        self.assertIn("import_parcels", names)
+        self.assertIn("import_sitadel", names)
+
+    def test_run_with_selected_zae_layers_imports_only_those_ids(self):
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        keep = _insert_zae("34", "zfee", "Keep zone")
+        _insert_zae("34", "zrf", "Drop zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id), {"zaeLayerIds": [keep]}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        params = dict(
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        )
+        # only the selected id is imported, via --ids (not the whole department)
+        self.assertEqual(params["import_custom_zones"], {"--ids": [keep]})
+
+    def test_run_with_empty_zae_selection_skips_import_custom_zones(self):
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        _insert_zae("34", "zfee", "A zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id), {"zaeLayerIds": []}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        names = [c.kwargs["command_name"] for c in run_command.call_args_list]
+        self.assertNotIn("import_custom_zones", names)
+
+    def test_run_ignores_zae_id_from_another_department(self):
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        foreign = _insert_zae("30", "zfee", "Gard zone")  # department 30, not 34
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id), {"zaeLayerIds": [foreign]}, format="json"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        names = [c.kwargs["command_name"] for c in run_command.call_args_list]
+        # the foreign id is out of scope for department 34 -> nothing to import, skipped
+        self.assertNotIn("import_custom_zones", names)
+
     def test_queued_command_flags_match_real_argparse_specs(self):
         """The flags we queue must actually exist on each command. parse_parameters does
         NOT reject unknown/typo'd non-required flags, so assert membership against the
@@ -617,7 +722,7 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["tileSetsCreated"], ["Hérault (34) 2025"])
-        self.assertEqual(len(data["queuedCommands"]), 2)
+        self.assertEqual(len(data["queuedCommands"]), 3)
 
         tile_set = TileSet.objects.get(name="Hérault (34) 2025")
         self.assertEqual(tile_set.tile_set_type, TileSetType.BACKGROUND)
@@ -628,7 +733,8 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
         # no user group is created/touched for a single-batch deploy
         self.assertFalse(UserGroup.objects.exists())
 
-        # the batch's detections, then a department-wide sitadel refresh (new permits)
+        # tiles (idempotent), then the batch's detections, then a department-wide
+        # sitadel refresh (new permits)
         calls = [
             (c.kwargs["command_name"], c.kwargs["parameters"])
             for c in run_command.call_args_list
@@ -636,6 +742,10 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
         self.assertEqual(
             calls,
             [
+                (
+                    "create_tile",
+                    {"--geozone-uuid": str(self.department.uuid)},
+                ),
                 (
                     "import_detections",
                     {"--tile-set-id": tile_set.id, "--batch-id": str(batch_id)},
