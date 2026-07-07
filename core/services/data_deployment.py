@@ -244,6 +244,15 @@ class DataDeploymentService:
         return row["department__insee_code"], row[own_code_field]
 
     @staticmethod
+    def _effective_geo_zones(geo_zone: GeoZone) -> List[GeoZone]:
+        """Geo zones to actually scope TileSets / UserGroups to. EPCI isn't a concept in
+        the app, so an EPCI expands to its communes; a department / commune maps to itself.
+        Assumes the EPCI's communes are already imported (import_geocommune)."""
+        if geo_zone.geo_zone_type == GeoZoneType.EPCI:
+            return list(GeoCommune.objects.filter(epci_id=geo_zone.id))
+        return [geo_zone]
+
+    @staticmethod
     def _create_batch_tile_sets(
         geo_zone: GeoZone, geozone_code: str, batches: List[Dict[str, Any]]
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -254,6 +263,7 @@ class DataDeploymentService:
         Returns records of {batch_id, tile_set_id, name} for the detections import."""
         batch_tile_sets: List[Dict[str, Any]] = []
         skipped_batches: List[Dict[str, Any]] = []
+        effective_geo_zones = DataDeploymentService._effective_geo_zones(geo_zone)
 
         for batch in batches:
             year = batch["src_image_year"]
@@ -283,7 +293,7 @@ class DataDeploymentService:
                     "max_zoom": DEPLOYMENT_TILE_SET_MAX_ZOOM,
                 },
             )
-            tile_set.geo_zones.add(geo_zone)
+            tile_set.geo_zones.add(*effective_geo_zones)
             batch_tile_sets.append(
                 {"batch_id": batch["id"], "tile_set_id": tile_set.id, "name": name}
             )
@@ -294,15 +304,15 @@ class DataDeploymentService:
     def _upsert_cabanisation_group(
         name: str,
         user_group_type: str,
-        geo_zone: GeoZone,
+        geo_zones: List[GeoZone],
         cabanisation_category: ObjectTypeCategory,
     ) -> UserGroup:
-        """get_or_create a group by its (unique) name, linked to the geozone and the
+        """get_or_create a group by its (unique) name, linked to the geozones and the
         Cabanisation category. Idempotent."""
         user_group, _ = UserGroup.objects.get_or_create(
             name=name, defaults={"user_group_type": user_group_type}
         )
-        user_group.geo_zones.add(geo_zone)
+        user_group.geo_zones.add(*geo_zones)
         user_group.object_type_categories.add(cabanisation_category)
         return user_group
 
@@ -318,7 +328,10 @@ class DataDeploymentService:
         the access of) another's group."""
         name = f"Cabanisation {geo_zone.name} ({geozone_code})"
         return DataDeploymentService._upsert_cabanisation_group(
-            name, user_group_type, geo_zone, cabanisation_category
+            name,
+            user_group_type,
+            DataDeploymentService._effective_geo_zones(geo_zone),
+            cabanisation_category,
         )
 
     @staticmethod
@@ -336,7 +349,7 @@ class DataDeploymentService:
             return None
         name = f"Cabanisation {department.name} ({department_code})"
         return DataDeploymentService._upsert_cabanisation_group(
-            name, UserGroupType.DDTM, department, cabanisation_category
+            name, UserGroupType.DDTM, [department], cabanisation_category
         )
 
     @staticmethod

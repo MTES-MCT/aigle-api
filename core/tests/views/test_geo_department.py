@@ -70,3 +70,21 @@ class GeoDepartmentViewSetTests(BaseAPITestCase):
         url = reverse("GeoDepartmentViewSet-list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_codes_filter_returns_exact_matches_and_ignores_unknown(self):
+        self.authenticate_user(self.super_admin)
+        url = reverse("GeoDepartmentViewSet-list")
+        response = self.client.get(url, {"codes": "34, 99 ,30"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34", "30"})
+
+    def test_uuids_filter_resolves_entities_with_their_codes(self):
+        self.authenticate_user(self.super_admin)
+        url = reverse("GeoDepartmentViewSet-list")
+        response = self.client.get(
+            url, {"uuids": f"{self.herault.uuid},{self.paris.uuid}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34", "75"})

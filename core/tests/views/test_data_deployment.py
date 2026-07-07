@@ -19,8 +19,10 @@ from core.models.user_group import UserGroup, UserGroupType
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import create_detection, create_tile_set
 from core.tests.fixtures.geo_data import (
+    create_beziers_commune,
     create_herault_department,
     create_montpellier_commune,
+    create_montpellier_mediterranee_epci,
     create_occitanie_region,
 )
 from core.tests.fixtures.users import create_regular_user, create_super_admin
@@ -421,6 +423,41 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         )
         self.assertEqual(params["import_custom_zones"], {"--department-code": "34"})
         self.assertEqual(params["import_parcels"], {"--department-code": "34"})
+
+    def test_run_epci_scopes_tileset_and_group_to_its_communes(self):
+        # EPCI isn't a concept in the app: deploying one must scope the TileSet and the
+        # collectivity group to the EPCI's communes, not to the (invisible) EPCI zone.
+        self._create_cabanisation_category()
+        beziers = create_beziers_commune(department=self.department)
+        epci = create_montpellier_mediterranee_epci(
+            department=self.department, communes=[self.commune, beziers]
+        )
+        run_id = _insert_run(epci.id, src_image_year=2024)
+        _insert_batch(
+            run_id, "batch-epci", tiles_url="s3://aigle-tiles/aerial/2024_epci"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid"):
+            response = self.client.post(self._url(epci.id))
+
+        self.assertEqual(response.status_code, 200)
+        commune_ids = {self.commune.id, beziers.id}
+
+        # TileSet scoped to the communes, not the EPCI
+        tile_set = TileSet.objects.get(
+            name="Montpellier Méditerranée Métropole (243400017) 2024"
+        )
+        self.assertEqual(
+            set(tile_set.geo_zones.values_list("id", flat=True)), commune_ids
+        )
+
+        # Collectivity group scoped to the communes, not the EPCI
+        group = UserGroup.objects.get(
+            name="Cabanisation Montpellier Méditerranée Métropole (243400017)"
+        )
+        self.assertEqual(group.user_group_type, UserGroupType.COLLECTIVITY)
+        self.assertEqual(set(group.geo_zones.values_list("id", flat=True)), commune_ids)
 
     def test_run_reuses_existing_department_ddtm_group(self):
         # a second deploy under the same department must reuse the one DDTM group

@@ -117,3 +117,45 @@ class GeoCommuneViewSetTests(BaseAPITestCase):
         self.assertGreater(len(response.data), 0)
         commune_names = [r["name"] for r in response.data]
         self.assertIn("Boulogne-Billancourt", commune_names)
+
+    def test_codes_filter_returns_exact_matches(self):
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"codes": "34172,34032"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34172", "34032"})
+
+    def test_codes_filter_ignores_unknown_codes(self):
+        # Unknown codes are simply absent from the result; the caller computes rejects.
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"codes": "34172, 00000 ,34032"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34172", "34032"})
+
+    def test_codes_filter_empty_returns_nothing(self):
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"codes": " , "})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 0)
+
+    def test_uuids_filter_resolves_entities_with_their_codes(self):
+        # Backs raw mode: uuids in -> entities (so the caller can read their codes).
+        beziers = self.geo_data["communes"]["beziers"]
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(
+            url, {"uuids": f"{self.montpellier.uuid},{beziers.uuid}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {r["uuid"] for r in response.data},
+            {str(self.montpellier.uuid), str(beziers.uuid)},
+        )
+        self.assertEqual({r["code"] for r in response.data}, {"34172", "34032"})
+
+    def test_uuids_filter_invalid_uuid_returns_400(self):
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"uuids": "not-a-uuid"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
