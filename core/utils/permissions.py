@@ -2,6 +2,7 @@ from typing import List, Optional
 from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from core.models.user import UserRole
+from core.models.user_group import UserGroupType
 
 
 class IsActiveAuthenticated(BasePermission):
@@ -101,3 +102,18 @@ class SuperAdminRolePermission(BasePermission):
             and not request.user.is_anonymous
             and request.user.user_role == UserRole.SUPER_ADMIN
         )
+
+
+class DdtmGroupPermission(BasePermission):
+    """Members of a DDTM-type user group only — regardless of role (a SUPER_ADMIN
+    without a DDTM group is denied too)."""
+
+    message = "Vous devez être membre d'un groupe DDTM pour accéder à cette ressource"
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or user.is_anonymous or user.user_role == UserRole.DEACTIVATED:
+            return False
+        return user.user_user_groups.filter(
+            user_group__user_group_type=UserGroupType.DDTM
+        ).exists()

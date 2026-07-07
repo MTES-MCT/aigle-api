@@ -5,6 +5,7 @@ from typing import Dict, Any, Optional
 from django.http import HttpResponse, JsonResponse
 from django.conf import settings
 from django.db import transaction
+from simple_history.utils import bulk_update_with_history
 
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus
@@ -74,8 +75,20 @@ class PriorLetterService:
                 detections_to_update.append(detection.detection_data)
 
         if detections_to_update:
-            DetectionData.objects.bulk_update(
-                detections_to_update, ["detection_control_status", "user_last_update"]
+            # bulk_update_with_history so the control-status change is traced like
+            # interface edits (detection history, DDTM activity stats). The validation
+            # and prescription columns are persisted too because
+            # set_detection_control_status cascades to them.
+            bulk_update_with_history(
+                detections_to_update,
+                DetectionData,
+                [
+                    "detection_control_status",
+                    "detection_validation_status",
+                    "detection_prescription_status",
+                    "user_last_update",
+                ],
+                default_user=self.user,
             )
             # bulk_update bypasses post_save; invalidate the count cache explicitly.
             transaction.on_commit(invalidate_count_caches)

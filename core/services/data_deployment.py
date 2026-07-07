@@ -67,7 +67,14 @@ class DataDeploymentService:
     """
 
     @staticmethod
-    def run_deployment(geozone_id: int) -> Dict[str, Any]:
+    def run_deployment(
+        geozone_id: int,
+        batch_ids: Optional[List[int]] = None,
+        zae_layer_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """batch_ids / zae_layer_ids restrict the deploy to the selected batches / zae
+        layers (None = all of them). Both are intersected with what actually belongs to
+        the geozone, so an out-of-scope id is ignored, never deployed."""
         geo_zone = GeoZone.objects.filter(id=geozone_id).first()
         if geo_zone is None:
             raise ValueError(f"Geozone {geozone_id} not found")
@@ -92,6 +99,9 @@ class DataDeploymentService:
             )
 
         batches = DetectionsSchemaService.get_batches_by_geozone([geozone_id])
+        if batch_ids is not None:
+            wanted = set(batch_ids)
+            batches = [batch for batch in batches if batch["id"] in wanted]
 
         # Inline writes are atomic; commands are queued only after they commit, so a
         # rollback can't leave detached Celery tasks pointing at missing TileSets.
@@ -124,6 +134,7 @@ class DataDeploymentService:
             geo_zone=geo_zone,
             department_code=department_code,
             batch_tile_sets=batch_tile_sets,
+            zae_layer_ids=zae_layer_ids,
         )
 
         return {
@@ -137,11 +148,11 @@ class DataDeploymentService:
     @staticmethod
     def run_batch_deployment(geozone_id: int, batch_id: int) -> Dict[str, Any]:
         """Deploy a single batch (a new imagery millesime) onto an already-deployed
-        geozone: create the batch's TileSet, queue its detections import, then refresh
-        sitadel for the department (building permits gain new millesimes too). The other
-        department-wide steps (custom zones, parcels, user group, tiles) are
-        year-independent and already done by the initial geozone deploy —
-        import_detections self-creates missing tiles and re-links custom zones."""
+        geozone: create the batch's TileSet, (re)create the geozone's tiles, queue its
+        detections import, then refresh sitadel for the department (building permits gain
+        new millesimes too). create_tile is idempotent, so re-running is safe. The other
+        department-wide steps (custom zones, parcels, user group) are year-independent and
+        already done by the initial geozone deploy."""
         geo_zone = GeoZone.objects.filter(id=geozone_id).first()
         if geo_zone is None:
             raise ValueError(f"Geozone {geozone_id} not found")
@@ -173,7 +184,13 @@ class DataDeploymentService:
                 "(missing tiles url or imagery year)"
             )
 
-        queued_commands = _queue_detection_imports(batch_tile_sets)
+        # create_tile first: detections import onto these tiles, so they must exist.
+        # Idempotent (INSERT ... ON CONFLICT (x,y,z) DO NOTHING), so re-deploying a batch
+        # never duplicates tiles.
+        queued_commands = [
+            _run_command("create_tile", {"--geozone-uuid": str(geo_zone.uuid)})
+        ]
+        queued_commands += _queue_detection_imports(batch_tile_sets)
         # --persist-data is mandatory: without it import_sitadel is a dry run.
         queued_commands.append(
             _run_command(
@@ -244,6 +261,15 @@ class DataDeploymentService:
         return row["department__insee_code"], row[own_code_field]
 
     @staticmethod
+    def _effective_geo_zones(geo_zone: GeoZone) -> List[GeoZone]:
+        """Geo zones to actually scope TileSets / UserGroups to. EPCI isn't a concept in
+        the app, so an EPCI expands to its communes; a department / commune maps to itself.
+        Assumes the EPCI's communes are already imported (import_geocommune)."""
+        if geo_zone.geo_zone_type == GeoZoneType.EPCI:
+            return list(GeoCommune.objects.filter(epci_id=geo_zone.id))
+        return [geo_zone]
+
+    @staticmethod
     def _create_batch_tile_sets(
         geo_zone: GeoZone, geozone_code: str, batches: List[Dict[str, Any]]
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -254,6 +280,7 @@ class DataDeploymentService:
         Returns records of {batch_id, tile_set_id, name} for the detections import."""
         batch_tile_sets: List[Dict[str, Any]] = []
         skipped_batches: List[Dict[str, Any]] = []
+        effective_geo_zones = DataDeploymentService._effective_geo_zones(geo_zone)
 
         for batch in batches:
             year = batch["src_image_year"]
@@ -283,7 +310,7 @@ class DataDeploymentService:
                     "max_zoom": DEPLOYMENT_TILE_SET_MAX_ZOOM,
                 },
             )
-            tile_set.geo_zones.add(geo_zone)
+            tile_set.geo_zones.add(*effective_geo_zones)
             batch_tile_sets.append(
                 {"batch_id": batch["id"], "tile_set_id": tile_set.id, "name": name}
             )
@@ -294,15 +321,15 @@ class DataDeploymentService:
     def _upsert_cabanisation_group(
         name: str,
         user_group_type: str,
-        geo_zone: GeoZone,
+        geo_zones: List[GeoZone],
         cabanisation_category: ObjectTypeCategory,
     ) -> UserGroup:
-        """get_or_create a group by its (unique) name, linked to the geozone and the
+        """get_or_create a group by its (unique) name, linked to the geozones and the
         Cabanisation category. Idempotent."""
         user_group, _ = UserGroup.objects.get_or_create(
             name=name, defaults={"user_group_type": user_group_type}
         )
-        user_group.geo_zones.add(geo_zone)
+        user_group.geo_zones.add(*geo_zones)
         user_group.object_type_categories.add(cabanisation_category)
         return user_group
 
@@ -318,7 +345,10 @@ class DataDeploymentService:
         the access of) another's group."""
         name = f"Cabanisation {geo_zone.name} ({geozone_code})"
         return DataDeploymentService._upsert_cabanisation_group(
-            name, user_group_type, geo_zone, cabanisation_category
+            name,
+            user_group_type,
+            DataDeploymentService._effective_geo_zones(geo_zone),
+            cabanisation_category,
         )
 
     @staticmethod
@@ -336,7 +366,7 @@ class DataDeploymentService:
             return None
         name = f"Cabanisation {department.name} ({department_code})"
         return DataDeploymentService._upsert_cabanisation_group(
-            name, UserGroupType.DDTM, department, cabanisation_category
+            name, UserGroupType.DDTM, [department], cabanisation_category
         )
 
     @staticmethod
@@ -344,15 +374,24 @@ class DataDeploymentService:
         geo_zone: GeoZone,
         department_code: str,
         batch_tile_sets: List[Dict[str, Any]],
+        zae_layer_ids: Optional[List[int]] = None,
     ) -> List[Dict[str, str]]:
         """Enqueue the import commands in dependency order. The sequential_commands
         queue (concurrency 1) runs them one at a time in this exact order."""
-        # Order matters and _run_command dispatches eagerly, so build the list in place.
-        queued = [
-            _run_command("import_custom_zones", {"--department-code": department_code}),
-            _run_command("create_tile", {"--geozone-uuid": str(geo_zone.uuid)}),
-            _run_command("import_parcels", {"--department-code": department_code}),
-        ]
+        # Resolve the custom-zones args first (pure reads); _run_command dispatches
+        # eagerly, so the enqueue order below must stay the dependency order.
+        custom_zones_params = DataDeploymentService._resolve_custom_zones_params(
+            department_code, zae_layer_ids
+        )
+        queued: List[Dict[str, str]] = []
+        if custom_zones_params is not None:
+            queued.append(_run_command("import_custom_zones", custom_zones_params))
+        queued.append(
+            _run_command("create_tile", {"--geozone-uuid": str(geo_zone.uuid)})
+        )
+        queued.append(
+            _run_command("import_parcels", {"--department-code": department_code})
+        )
         queued += _queue_detection_imports(batch_tile_sets)
         # --persist-data is mandatory: without it import_sitadel is a dry run.
         queued.append(
@@ -362,3 +401,22 @@ class DataDeploymentService:
             )
         )
         return queued
+
+    @staticmethod
+    def _resolve_custom_zones_params(
+        department_code: str, zae_layer_ids: Optional[List[int]]
+    ) -> Optional[Dict[str, Any]]:
+        """Args for import_custom_zones, or None to skip it entirely.
+        zae_layer_ids None -> every zae layer of the department (--department-code).
+        zae_layer_ids list -> only the ids that actually belong to the department
+        (--ids), so an out-of-scope id is never imported; an empty selection skips it."""
+        if zae_layer_ids is None:
+            return {"--department-code": department_code}
+        dept_zae_ids = {
+            zae["id"]
+            for zae in DetectionsSchemaService.get_zae_layers([department_code])
+        }
+        selected = [zae_id for zae_id in zae_layer_ids if zae_id in dept_zae_ids]
+        if not selected:
+            return None
+        return {"--ids": selected}

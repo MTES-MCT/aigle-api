@@ -1,6 +1,8 @@
 from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet, CharFilter
 
+from core.utils.filters import UuidInFilter
+
 from django.db.models import Q
 
 from core.models.geo_commune import GeoCommune
@@ -17,14 +19,21 @@ from core.utils.string import normalize
 
 class GeoCommuneFilter(FilterSet):
     q = CharFilter(method="search")
+    # Exact-match resolution of a comma-separated list (raw mode in the admin forms):
+    # codes -> entities, and uuids -> entities (to read back their codes).
+    codes = CharFilter(method="filter_codes")
+    uuids = UuidInFilter(method="filter_uuids")
 
     class Meta:
         model = GeoCommune
         fields = ["q"]
 
-    def search(self, queryset, name, value):
-        value_normalized = normalize(value)
+    def filter_uuids(self, queryset, name, value):
+        if not value:
+            return queryset.none()
+        return self._scope_by_collectivity(queryset).filter(uuid__in=value)
 
+    def _scope_by_collectivity(self, queryset):
         collectivity_filter = UserPermission.from_request(
             self.request
         ).get_collectivity_filter()
@@ -35,6 +44,19 @@ class GeoCommuneFilter(FilterSet):
                 | Q(department__id__in=collectivity_filter.department_ids or [])
                 | Q(department__region__id__in=collectivity_filter.region_ids or [])
             )
+
+        return queryset
+
+    def filter_codes(self, queryset, name, value):
+        codes = [code.strip() for code in value.split(",") if code.strip()]
+        if not codes:
+            return queryset.none()
+        return self._scope_by_collectivity(queryset).filter(iso_code__in=codes)
+
+    def search(self, queryset, name, value):
+        value_normalized = normalize(value)
+
+        queryset = self._scope_by_collectivity(queryset)
 
         queryset = queryset.annotate(
             match_score=Case(

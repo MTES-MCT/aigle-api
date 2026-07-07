@@ -1,5 +1,6 @@
 from django.contrib.gis.geos import Polygon
 from core.models import GeoRegion, GeoDepartment, GeoCommune, Parcel
+from core.models.geo_epci import GeoEpci
 
 
 def create_occitanie_region():
@@ -310,6 +311,23 @@ def create_nanterre_commune(department=None):
         },
     )
     return commune
+
+
+def create_montpellier_mediterranee_epci(department=None, communes=None):
+    """An EPCI grouping the given communes (each gets its epci FK set)."""
+    if department is None:
+        department = create_herault_department()
+    epci, _ = GeoEpci.objects.get_or_create(
+        siren_code="243400017",
+        defaults={
+            "name": "Montpellier Méditerranée Métropole",
+            "department": department,
+        },
+    )
+    for commune in communes or []:
+        commune.epci = epci
+        commune.save()
+    return epci
 
 
 def create_parcel(commune=None, id_parcellaire="000000", x=None, y=None):

@@ -16,6 +16,12 @@ from core.views.object_type import ObjectTypeViewSet
 from core.views.object_type_category import ObjectTypeCategoryViewSet
 from core.views.parcel import ParcelViewSet
 from core.views.run_command import CommandAsyncViewSet
+from core.views.statistics.ddtm_activity import (
+    StatisticsDdtmActivitySummaryView,
+    StatisticsDdtmActivityUserGroupsView,
+    StatisticsDdtmActivityUserGroupUsersView,
+    StatisticsDdtmActivityUserGroupView,
+)
 from core.views.statistics.deployed_data import (
     StatisticsDeployedDataDetailView,
     StatisticsDeployedDataView,
@@ -90,6 +96,26 @@ urlpatterns += [
         "statistics/deployed-data/<uuid:uuid>/",
         StatisticsDeployedDataDetailView.as_view(),
         name="StatisticsDeployedDataDetailView",
+    ),
+    path(
+        "statistics/ddtm-activity/",
+        StatisticsDdtmActivitySummaryView.as_view(),
+        name="StatisticsDdtmActivitySummaryView",
+    ),
+    path(
+        "statistics/ddtm-activity/user-groups/",
+        StatisticsDdtmActivityUserGroupsView.as_view(),
+        name="StatisticsDdtmActivityUserGroupsView",
+    ),
+    path(
+        "statistics/ddtm-activity/user-group/<uuid:uuid>/users/",
+        StatisticsDdtmActivityUserGroupUsersView.as_view(),
+        name="StatisticsDdtmActivityUserGroupUsersView",
+    ),
+    path(
+        "statistics/ddtm-activity/user-group/<uuid:uuid>/",
+        StatisticsDdtmActivityUserGroupView.as_view(),
+        name="StatisticsDdtmActivityUserGroupView",
     ),
 ]
 

@@ -69,6 +69,15 @@ def _parse_int(value):
         return None
 
 
+def _parse_id_list(value):
+    """Absent / non-list -> None = deploy all. A JSON list -> its parseable ints (an
+    empty list stays [] = deploy none). The parser camelizes, so the body's `batchIds`
+    reaches here as request.data["batch_ids"]."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    return [parsed for parsed in map(_parse_int, value) if parsed is not None]
+
+
 def _parse_date_or_none(value):
     """parse_date raises ValueError on a well-formed but calendar-invalid date
     (e.g. "2024-02-31"), not just None on a regex miss — treat both as no filter."""
@@ -164,9 +173,15 @@ def endpoint(request):
 @permission_classes([SuperAdminRolePermission])
 def run_endpoint(request, geozone_id):
     """Deploy a geozone's detections-schema data: create its per-batch TileSets and
-    Cabanisation UserGroup inline, then queue the import commands."""
+    Cabanisation UserGroup inline, then queue the import commands. Optional body
+    `batchIds` / `zaeLayerIds` restrict the deploy to the selected batches / zae layers
+    (absent = all); only the specified, in-scope items are deployed."""
     try:
-        result = DataDeploymentService.run_deployment(geozone_id=geozone_id)
+        result = DataDeploymentService.run_deployment(
+            geozone_id=geozone_id,
+            batch_ids=_parse_id_list(request.data.get("batch_ids")),
+            zae_layer_ids=_parse_id_list(request.data.get("zae_layer_ids")),
+        )
     except (ValueError, BadRequest) as error:
         # ValueError = our validation (geozone/category/conflict); BadRequest = a command
         # param rejected by parse_parameters during enqueue. Both are clean 400s.

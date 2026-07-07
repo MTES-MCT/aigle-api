@@ -7,6 +7,7 @@ from core.permissions.user import UserPermission
 from core.serializers.geo_region import GeoRegionDetailSerializer, GeoRegionSerializer
 from django_filters import FilterSet, CharFilter
 
+from core.utils.filters import UuidInFilter
 from core.utils.permissions import AdminRolePermission
 
 from django.db.models import Case, IntegerField, Value, When
@@ -17,14 +18,21 @@ from core.utils.string import normalize
 
 class GeoRegionFilter(FilterSet):
     q = CharFilter(method="search")
+    # Exact-match resolution of a comma-separated list (raw mode in the admin forms):
+    # codes -> entities, and uuids -> entities (to read back their codes).
+    codes = CharFilter(method="filter_codes")
+    uuids = UuidInFilter(method="filter_uuids")
 
     class Meta:
         model = GeoRegion
         fields = ["q"]
 
-    def search(self, queryset, name, value):
-        value_normalized = normalize(value)
+    def filter_uuids(self, queryset, name, value):
+        if not value:
+            return queryset.none()
+        return self._scope_by_collectivity(queryset).filter(uuid__in=value)
 
+    def _scope_by_collectivity(self, queryset):
         collectivity_filter = UserPermission.from_request(
             self.request
         ).get_collectivity_filter()
@@ -35,6 +43,19 @@ class GeoRegionFilter(FilterSet):
                 | Q(departments__id__in=collectivity_filter.department_ids or [])
                 | Q(id__in=collectivity_filter.region_ids or [])
             )
+
+        return queryset
+
+    def filter_codes(self, queryset, name, value):
+        codes = [code.strip() for code in value.split(",") if code.strip()]
+        if not codes:
+            return queryset.none()
+        return self._scope_by_collectivity(queryset).filter(insee_code__in=codes)
+
+    def search(self, queryset, name, value):
+        value_normalized = normalize(value)
+
+        queryset = self._scope_by_collectivity(queryset)
 
         queryset = queryset.annotate(
             match_score=Case(

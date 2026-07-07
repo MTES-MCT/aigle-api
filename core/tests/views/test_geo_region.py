@@ -79,3 +79,21 @@ class GeoRegionViewSetTests(BaseAPITestCase):
         url = reverse("GeoRegionViewSet-list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_codes_filter_returns_exact_matches_and_ignores_unknown(self):
+        self.authenticate_user(self.super_admin)
+        url = reverse("GeoRegionViewSet-list")
+        response = self.client.get(url, {"codes": "76, 00 ,11"})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"76", "11"})
+
+    def test_uuids_filter_resolves_entities_with_their_codes(self):
+        self.authenticate_user(self.super_admin)
+        url = reverse("GeoRegionViewSet-list")
+        response = self.client.get(
+            url, {"uuids": f"{self.occitanie.uuid},{self.ile_de_france.uuid}"}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"76", "11"})
