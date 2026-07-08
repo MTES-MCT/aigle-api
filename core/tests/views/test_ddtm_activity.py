@@ -32,6 +32,7 @@ from core.tests.fixtures.users import (
 
 SUMMARY_URL = "/api/statistics/ddtm-activity/"
 GROUPS_URL = "/api/statistics/ddtm-activity/user-groups/"
+GROUPS_ACTIVITY_URL = "/api/statistics/ddtm-activity/groups-activity/"
 
 
 def group_url(uuid):
@@ -240,6 +241,7 @@ class DdtmActivityViewTests(BaseAPITestCase):
 
     def test_groups_unauthenticated(self):
         self.assertEqual(self.client.get(GROUPS_URL).status_code, 401)
+        self.assertEqual(self.client.get(GROUPS_ACTIVITY_URL).status_code, 401)
 
     def test_monthly_unauthenticated(self):
         self.assertEqual(self.client.get(group_url(self.group_a.uuid)).status_code, 401)
@@ -251,6 +253,7 @@ class DdtmActivityViewTests(BaseAPITestCase):
         self.authenticate_user(self.alice)
         self.assertEqual(self.client.get(SUMMARY_URL).status_code, 403)
         self.assertEqual(self.client.get(GROUPS_URL).status_code, 403)
+        self.assertEqual(self.client.get(GROUPS_ACTIVITY_URL).status_code, 403)
         self.assertEqual(self.client.get(group_url(self.group_a.uuid)).status_code, 403)
         self.assertEqual(self.client.get(users_url(self.group_a.uuid)).status_code, 403)
 
@@ -258,6 +261,7 @@ class DdtmActivityViewTests(BaseAPITestCase):
         self.authenticate_user(create_super_admin())
         self.assertEqual(self.client.get(SUMMARY_URL).status_code, 403)
         self.assertEqual(self.client.get(GROUPS_URL).status_code, 403)
+        self.assertEqual(self.client.get(GROUPS_ACTIVITY_URL).status_code, 403)
         self.assertEqual(self.client.get(users_url(self.group_a.uuid)).status_code, 403)
 
     # ----------------------------------------------------------------- summary
@@ -294,8 +298,9 @@ class DdtmActivityViewTests(BaseAPITestCase):
         group_a = next(row for row in rows if row["name"] == self.group_a.name)
         # Staff (dave) and DDTM members (eve) are excluded.
         self.assertEqual(group_a["usersCount"], 4)
+        # pilot = >= 7 ops (alice); active = >= 1 op (alice + frank + bob).
         self.assertEqual(group_a["pilotUsersCount"], 1)
-        self.assertEqual(group_a["activeUsersCount"], 1)
+        self.assertEqual(group_a["activeUsersCount"], 3)
 
     def test_groups_deployed_since_weeks(self):
         self.authenticate_user(self.ddtm_user)
@@ -335,12 +340,13 @@ class DdtmActivityViewTests(BaseAPITestCase):
         self.assertEqual(by_email["alice@test.com"]["connectionsCount"], 0)
         self.assertEqual(by_email["alice@test.com"]["activityStatus"], "PILOT")
 
-        # 3 actions but no connection: below the pilot threshold -> INACTIVE.
+        # 3 operational actions (>= 1, < 7) -> ACTIVE, connection irrelevant here.
         self.assertEqual(by_email["frank@test.com"]["operationalActionsCount"], 3)
         self.assertEqual(by_email["frank@test.com"]["connectionsCount"], 0)
-        self.assertEqual(by_email["frank@test.com"]["activityStatus"], "INACTIVE")
+        self.assertEqual(by_email["frank@test.com"]["activityStatus"], "ACTIVE")
 
         # Bob's out-of-window transition/connection don't count; the recent ones do.
+        # 1 operational action -> ACTIVE.
         self.assertEqual(by_email["bob@test.com"]["operationalActionsCount"], 1)
         self.assertEqual(by_email["bob@test.com"]["connectionsCount"], 1)
         self.assertEqual(by_email["bob@test.com"]["activityStatus"], "ACTIVE")
@@ -349,69 +355,174 @@ class DdtmActivityViewTests(BaseAPITestCase):
         self.assertEqual(by_email["carol@test.com"]["connectionsCount"], 0)
         self.assertEqual(by_email["carol@test.com"]["activityStatus"], "INACTIVE")
 
-    # ----------------------------------------------------------------- monthly
+    # --------------------------------------------------- per-period (group detail)
 
-    def test_monthly_buckets(self):
+    def test_activity_by_period_default_month(self):
         self.authenticate_user(self.ddtm_user)
         response = self.client.get(group_url(self.group_a.uuid))
         self.assertEqual(response.status_code, 200)
         data = response.json()
 
         self.assertEqual(data["name"], self.group_a.name)
-        months = data["months"]
-        self.assertEqual(len(months), 12)
+        self.assertEqual(data["granularity"], "MONTH")
+        periods = data["activityByPeriod"]
+        self.assertEqual(len(periods), 12)
         now = timezone.localtime()
-        self.assertEqual(months[-1]["month"], f"{now.year:04d}-{now.month:02d}")
+        self.assertEqual(periods[-1]["period"], f"{now.year:04d}-{now.month:02d}")
 
-        # Current month: alice, frank and bob all acted (monthly pilot = >= 1 action);
-        # carol did nothing.
-        current = months[-1]
-        self.assertEqual(current["pilotUsersCount"], 3)
-        self.assertEqual(current["activeUsersCount"], 0)
-        self.assertEqual(current["inactiveUsersCount"], 1)
+        deployment_month = timezone.localtime(self.group_a_deployment).strftime("%Y-%m")
+        self.assertEqual(
+            data["deploymentDate"],
+            timezone.localtime(self.group_a_deployment).date().isoformat(),
+        )
+        # no_data_until_period = last month entirely before deployment.
+        self.assertIsNotNone(data["noDataUntilPeriod"])
+        self.assertLess(data["noDataUntilPeriod"], deployment_month)
 
-        # Two months ago: alice acted, bob only connected; carol and frank nothing.
-        two_months_ago = months[-3]
-        self.assertEqual(two_months_ago["pilotUsersCount"], 1)
-        self.assertEqual(two_months_ago["activeUsersCount"], 1)
-        self.assertEqual(two_months_ago["inactiveUsersCount"], 2)
+        # Periods before deployment are empty (rendered as striped columns).
+        for period in periods:
+            if period["period"] < deployment_month:
+                self.assertEqual(
+                    (
+                        period["pilotCount"],
+                        period["recurrentCount"],
+                        period["activeCount"],
+                        period["inactiveCount"],
+                        period["totalCount"],
+                    ),
+                    (0, 0, 0, 0, 0),
+                )
 
-        # Oldest bucket: nobody was active — inactive == the 4 members.
-        self.assertEqual(months[0]["pilotUsersCount"], 0)
-        self.assertEqual(months[0]["activeUsersCount"], 0)
-        self.assertEqual(months[0]["inactiveUsersCount"], 4)
+        # Current month: alice pilot (7 ops); frank (3) + bob (1) active (>= 1 action,
+        # < 4); carol inactive. Nobody hits the recurrent threshold (>= 4 ops).
+        current = periods[-1]
+        self.assertEqual(current["pilotCount"], 1)
+        self.assertEqual(current["recurrentCount"], 0)
+        self.assertEqual(current["activeCount"], 2)
+        self.assertEqual(current["inactiveCount"], 1)
+        self.assertEqual(current["totalCount"], 4)
 
-    def test_monthly_control_status_changes(self):
+        # One month ago: deployed but no activity -> everyone inactive (NOT striped).
+        one_month_ago = periods[-2]
+        self.assertEqual(
+            (
+                one_month_ago["pilotCount"],
+                one_month_ago["recurrentCount"],
+                one_month_ago["activeCount"],
+                one_month_ago["inactiveCount"],
+            ),
+            (0, 0, 0, 4),
+        )
+
+        # Two months ago: alice (1 op) and bob (1 connection) are active; frank and
+        # carol inactive. "active" now merges "did an action" and "connected".
+        two_months_ago = periods[-3]
+        self.assertEqual(two_months_ago["pilotCount"], 0)
+        self.assertEqual(two_months_ago["recurrentCount"], 0)
+        self.assertEqual(two_months_ago["activeCount"], 2)
+        self.assertEqual(two_months_ago["inactiveCount"], 2)
+
+    def test_activity_by_period_quarter(self):
+        self.authenticate_user(self.ddtm_user)
+        data = self.client.get(
+            group_url(self.group_a.uuid) + "?granularity=QUARTER"
+        ).json()
+
+        self.assertEqual(data["granularity"], "QUARTER")
+        periods = data["activityByPeriod"]
+        self.assertEqual(len(periods), 8)
+        for period in periods:
+            self.assertRegex(period["period"], r"^\d{4}-Q[1-4]$")
+        # Thresholds are fixed (not scaled by period length): alice's 7 ops this quarter
+        # make her a pilot in the current quarter.
+        self.assertEqual(periods[-1]["pilotCount"], 1)
+        # Every non-empty period's tiers sum to the total member count.
+        for period in periods:
+            if period["totalCount"]:
+                self.assertEqual(
+                    period["pilotCount"]
+                    + period["recurrentCount"]
+                    + period["activeCount"]
+                    + period["inactiveCount"],
+                    period["totalCount"],
+                )
+
+    def test_control_status_changes_by_period(self):
         self.authenticate_user(self.ddtm_user)
         data = self.client.get(group_url(self.group_a.uuid)).json()
-        changes = data["controlStatusChangesByMonth"]
-        self.assertEqual(len(changes), 12)
+        changes = data["controlStatusChangesByPeriod"]
+        self.assertEqual(len(changes), len(data["activityByPeriod"]))
 
         # Current month: CONTROLLED_FIELD on 10 distinct objects (alice 6 + frank 3 +
         # bob 1); PRIOR_LETTER_SENT on 1 object (alice's bulk, 2 detection datas deduped).
-        # dave (staff) is excluded. No-op re-save doesn't add a change.
         current = {row["status"]: row["count"] for row in changes[-1]["counts"]}
         self.assertEqual(current, {"CONTROLLED_FIELD": 10, "PRIOR_LETTER_SENT": 1})
         # Two months ago: alice's single TO_CONTROL change.
         two_months_ago = {row["status"]: row["count"] for row in changes[-3]["counts"]}
         self.assertEqual(two_months_ago, {"TO_CONTROL": 1})
 
-    def test_monthly_report_downloads_and_connections(self):
+    def test_report_downloads_and_connections_by_period(self):
         self.authenticate_user(self.ddtm_user)
         data = self.client.get(group_url(self.group_a.uuid)).json()
         now = timezone.localtime()
         current_key = f"{now.year:04d}-{now.month:02d}"
 
         downloads = {
-            row["month"]: row["count"] for row in data["reportDownloadsByMonth"]
+            row["period"]: row["count"] for row in data["reportDownloadsByPeriod"]
         }
-        connections = {row["month"]: row["count"] for row in data["connectionsByMonth"]}
-        self.assertEqual(len(downloads), 12)
-        self.assertEqual(len(connections), 12)
+        connections = {
+            row["period"]: row["count"] for row in data["connectionsByPeriod"]
+        }
+        self.assertEqual(len(downloads), len(data["activityByPeriod"]))
+        self.assertEqual(len(connections), len(data["activityByPeriod"]))
         # bob's 2 report downloads this month; dave (staff) is excluded.
         self.assertEqual(downloads[current_key], 2)
         # bob's 1 connection this month; dave (staff) and eve (DDTM) are excluded.
         self.assertEqual(connections[current_key], 1)
+
+    # ------------------------------------------------- groups activity (global)
+
+    def test_groups_activity(self):
+        self.authenticate_user(self.ddtm_user)
+        response = self.client.get(GROUPS_ACTIVITY_URL)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertEqual(data["granularity"], "MONTH")
+        periods = data["activityByPeriod"]
+        self.assertEqual(len(periods), 12)
+
+        # Members are created during the test (created_at ~ now), so only the current
+        # month counts the groups; earlier periods have no data (not "inactive").
+        current = periods[-1]
+        self.assertEqual(current["totalCount"], 2)
+        # group_a's members total 11 ops -> pilot; group_b (idle carol) -> inactive.
+        self.assertEqual(current["pilotCount"], 1)
+        self.assertEqual(current["inactiveCount"], 1)
+
+        # A period before the members existed: no groups counted (not inactive).
+        self.assertEqual(periods[0]["totalCount"], 0)
+        self.assertEqual(periods[0]["inactiveCount"], 0)
+
+    def test_groups_activity_quarter_period_count(self):
+        self.authenticate_user(self.ddtm_user)
+        data = self.client.get(GROUPS_ACTIVITY_URL + "?granularity=SEMESTER").json()
+        self.assertEqual(data["granularity"], "SEMESTER")
+        self.assertEqual(len(data["activityByPeriod"]), 6)
+        for period in data["activityByPeriod"]:
+            self.assertRegex(period["period"], r"^\d{4}-S[1-2]$")
+
+    def test_invalid_granularity_is_bad_request(self):
+        self.authenticate_user(self.ddtm_user)
+        self.assertEqual(
+            self.client.get(
+                group_url(self.group_a.uuid) + "?granularity=WEEK"
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get(GROUPS_ACTIVITY_URL + "?granularity=WEEK").status_code, 400
+        )
 
     def test_group_detail_outside_department_is_not_found(self):
         self.authenticate_user(self.ddtm_user)

@@ -5,17 +5,22 @@ Definitions:
 - "connection": one AnalyticLog USER_ACCESS row — written on every authenticated app
   load (GET /api/users/me), the only per-event login signal the system records.
 - "operational action": one control-status transition on a detection object. Sourced
-  from the DetectionData history table and deduped per (object, new status) — see
-  _actions_count_by_user.
+  from the DetectionData history table and deduped per (object, new status).
 Stats cover non-staff users that do not belong to any DDTM group.
 
-Read paths share the same cheap scoping helpers; only the paths that need per-user
-status run the expensive control-status history scan:
-- get_summary: department name + group/active-group counts + (uuid, name) list for the
-  section-2 select. Connections only.
-- get_user_group_rows: the per-group table rows (counts only, no nested users).
-- get_user_group_users: one group's per-user detail rows for the group-detail table.
-- get_user_group_monthly_activity: the 12-month breakdown for one group's chart.
+Activity tiers (mutually exclusive, most to least engaged), evaluated over a period for
+one entity (a user, or a group = the aggregate of its members):
+- pilot     : operational actions >= 7
+- recurrent : operational actions >= 4
+- active    : at least 1 operational action OR 1 connection
+- inactive  : no action and no connection
+Thresholds are fixed (not scaled by period length).
+
+Read paths:
+- get_summary / get_user_group_rows: section-1 overview (30-day window, legacy 3-tier).
+- get_user_group_users: one group's per-user detail rows (30-day window, 4 tiers).
+- get_user_group_activity: one group's charts, per-user tiers, at the chosen granularity.
+- get_groups_activity: department-wide chart, per-group tiers, at the chosen granularity.
 """
 
 from collections import defaultdict
@@ -28,9 +33,12 @@ from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
 from core.constants.statistics import (
-    DDTM_ACTIVITY_MONTHS_COUNT,
+    DDTM_ACTIVITY_MONTHS_PER_PERIOD,
+    DDTM_ACTIVITY_PERIOD_COUNT,
     DDTM_ACTIVITY_PILOT_MIN_ACTIONS,
+    DDTM_ACTIVITY_RECURRENT_MIN_ACTIONS,
     DDTM_ACTIVITY_WINDOW_DAYS,
+    DdtmActivityGranularity,
 )
 from core.models.analytic_log import AnalyticLog, AnalyticLogType
 from core.models.detection import Detection
@@ -42,9 +50,10 @@ from core.models.user_group import UserGroup, UserGroupType, UserUserGroup
 
 DAYS_PER_WEEK = 7
 
-USER_ACTIVITY_STATUS_PILOT = "PILOT"
-USER_ACTIVITY_STATUS_ACTIVE = "ACTIVE"
-USER_ACTIVITY_STATUS_INACTIVE = "INACTIVE"
+ACTIVITY_TIER_PILOT = "PILOT"
+ACTIVITY_TIER_RECURRENT = "RECURRENT"
+ACTIVITY_TIER_ACTIVE = "ACTIVE"
+ACTIVITY_TIER_INACTIVE = "INACTIVE"
 
 _HISTORY_TABLE = DetectionData.history.model._meta.db_table
 
@@ -139,22 +148,24 @@ class DdtmActivityService:
             deployment = DdtmActivityService._deployment_datetime(
                 member_ids, first_login_by_user
             )
+            statuses = [
+                DdtmActivityService._classify_tier(
+                    users_data[user_id]["operational_actions_count"],
+                    users_data[user_id]["connections_count"],
+                )
+                for user_id in member_ids
+            ]
             rows.append(
                 {
                     "uuid": group.uuid,
                     "name": group.name,
                     "users_count": len(member_ids),
+                    # Active = any tier above inactive (>= 1 action or connection).
                     "active_users_count": sum(
-                        1
-                        for user_id in member_ids
-                        if users_data[user_id]["activity_status"]
-                        == USER_ACTIVITY_STATUS_ACTIVE
+                        1 for status in statuses if status != ACTIVITY_TIER_INACTIVE
                     ),
                     "pilot_users_count": sum(
-                        1
-                        for user_id in member_ids
-                        if users_data[user_id]["activity_status"]
-                        == USER_ACTIVITY_STATUS_PILOT
+                        1 for status in statuses if status == ACTIVITY_TIER_PILOT
                     ),
                     "deployment_date": (
                         timezone.localtime(deployment).date() if deployment else None
@@ -168,8 +179,8 @@ class DdtmActivityService:
 
     @staticmethod
     def get_user_group_users(user, user_group_uuid) -> Optional[List[dict]]:
-        """One group's per-user rows, ordered by operational actions desc, then
-        connections desc, then email. None if the group is not in the DDTM's scope."""
+        """One group's per-user rows (30-day window, 4 tiers), ordered by operational
+        actions desc, then connections desc, then email. None if out of the DDTM scope."""
         group = DdtmActivityService._get_scoped_group(user, user_group_uuid)
         if group is None:
             return None
@@ -191,92 +202,121 @@ class DdtmActivityService:
         return members
 
     @staticmethod
-    def get_user_group_monthly_activity(user, user_group_uuid) -> Optional[dict]:
-        """The group's charts over the last DDTM_ACTIVITY_MONTHS_COUNT months:
-        - months: per bucket each member is counted once — pilot (>= 1 operational
-          action that month), else active (>= 1 connection), else inactive.
-        - control_status_changes_by_month: control-status transitions split by the new
-          status (deduped per object+status+month).
-        - report_downloads_by_month / connections_by_month: AnalyticLog counts.
+    def get_user_group_activity(user, user_group_uuid, granularity) -> Optional[dict]:
+        """One group's charts at the chosen granularity. Periods before the group's
+        deployment are returned empty (all zero) and flagged via no_data_until_period so
+        the UI can grey them out.
+        - activity_by_period: each member classified into one tier per period, + total.
+        - control_status_changes_by_period: transitions split by the new status.
+        - report_downloads_by_period / connections_by_period: AnalyticLog counts.
         All series cover the same non-staff, non-DDTM members."""
         group = DdtmActivityService._get_scoped_group(user, user_group_uuid)
         if group is None:
             return None
 
-        month_keys = DdtmActivityService._get_month_keys()
-        since = timezone.make_aware(
-            datetime(int(month_keys[0][:4]), int(month_keys[0][5:]), 1)
-        )
-
         members_by_group, _ = DdtmActivityService._get_memberships([group])
         member_ids = members_by_group.get(group.id, [])
 
-        transitions = DdtmActivityService._control_status_transitions(member_ids, since)
+        periods = DdtmActivityService._get_periods(granularity)
+        since = DdtmActivityService._periods_start(periods)
+        ops_by_user_month, transitions = DdtmActivityService._ops_count_by_user_month(
+            member_ids, since
+        )
+        conns_by_user_month = DdtmActivityService._conns_count_by_user_month(
+            member_ids, since
+        )
 
-        connected_months = set()
-        if member_ids:
-            for user_id, month in (
-                AnalyticLog.objects.filter(
-                    analytic_log_type=AnalyticLogType.USER_ACCESS,
-                    user_id__in=member_ids,
-                    created_at__gte=since,
-                )
-                .annotate(month=TruncMonth("created_at"))
-                .values_list("user_id", "month")
-                .distinct()
-            ):
-                connected_months.add(
-                    (user_id, timezone.localtime(month).strftime("%Y-%m"))
-                )
-
-        acted_months = {
-            (user_id, timezone.localtime(history_date).strftime("%Y-%m"))
-            for user_id, _, _, history_date in transitions
-        }
-
-        months = []
-        for month_key in month_keys:
-            pilots = {
-                user_id
-                for user_id in member_ids
-                if (user_id, month_key) in acted_months
-            }
-            actives = {
-                user_id
-                for user_id in member_ids
-                if (user_id, month_key) in connected_months
-            } - pilots
-            months.append(
-                {
-                    "month": month_key,
-                    "pilot_users_count": len(pilots),
-                    "active_users_count": len(actives),
-                    "inactive_users_count": len(member_ids)
-                    - len(pilots)
-                    - len(actives),
-                }
+        deployment = DdtmActivityService._deployment_datetime(
+            member_ids, DdtmActivityService._first_login_by_user(member_ids)
+        )
+        deployment_period = (
+            DdtmActivityService._period_key_of_month(
+                timezone.localtime(deployment).strftime("%Y-%m"), granularity
             )
+            if deployment
+            else None
+        )
+        pre_deploy_keys = [
+            period["key"]
+            for period in periods
+            if deployment_period is None or period["key"] < deployment_period
+        ]
+
+        activity = DdtmActivityService._activity_tiers_by_period(
+            [[user_id] for user_id in member_ids],
+            periods,
+            ops_by_user_month,
+            conns_by_user_month,
+            empty_period_keys=set(pre_deploy_keys),
+        )
 
         return {
             "uuid": group.uuid,
             "name": group.name,
-            "months": months,
-            "control_status_changes_by_month": (
-                DdtmActivityService._control_status_changes_by_month(
-                    transitions, month_keys
+            "granularity": granularity,
+            "deployment_date": (
+                timezone.localtime(deployment).date() if deployment else None
+            ),
+            "no_data_until_period": pre_deploy_keys[-1] if pre_deploy_keys else None,
+            "activity_by_period": activity,
+            "control_status_changes_by_period": (
+                DdtmActivityService._control_status_changes_by_period(
+                    transitions, periods
                 )
             ),
-            "report_downloads_by_month": (
-                DdtmActivityService._analytic_logs_count_by_month(
-                    member_ids, AnalyticLogType.REPORT_DOWNLOAD, since, month_keys
+            "report_downloads_by_period": (
+                DdtmActivityService._analytic_logs_by_period(
+                    member_ids, AnalyticLogType.REPORT_DOWNLOAD, since, periods
                 )
             ),
-            "connections_by_month": (
-                DdtmActivityService._analytic_logs_count_by_month(
-                    member_ids, AnalyticLogType.USER_ACCESS, since, month_keys
+            "connections_by_period": (
+                DdtmActivityService._analytic_logs_by_period(
+                    member_ids, AnalyticLogType.USER_ACCESS, since, periods
                 )
             ),
         }
+
+    @staticmethod
+    def get_groups_activity(user, granularity) -> Optional[dict]:
+        """Department-wide chart: each collectivity group classified into one tier per
+        period (its members' activity aggregated), + the total group count. None if no
+        department is linked to the user's DDTM group."""
+        department = DdtmActivityService._get_department(user)
+        if department is None:
+            return None
+
+        groups = list(DdtmActivityService._get_scoped_groups(department))
+        members_by_group, users_info = DdtmActivityService._get_memberships(groups)
+
+        periods = DdtmActivityService._get_periods(granularity)
+        since = DdtmActivityService._periods_start(periods)
+        ops_by_user_month, _ = DdtmActivityService._ops_count_by_user_month(
+            list(users_info.keys()), since
+        )
+        conns_by_user_month = DdtmActivityService._conns_count_by_user_month(
+            list(users_info.keys()), since
+        )
+
+        # A group exists (has data) from the earliest creation of one of its members;
+        # before that it is not counted, not shown as inactive.
+        created_month_by_user = DdtmActivityService._created_month_by_user(
+            list(users_info.keys())
+        )
+        existence_months = [
+            DdtmActivityService._earliest_existence_month(
+                members_by_group.get(group.id, []), created_month_by_user
+            )
+            for group in groups
+        ]
+
+        activity = DdtmActivityService._activity_tiers_by_period(
+            [members_by_group.get(group.id, []) for group in groups],
+            periods,
+            ops_by_user_month,
+            conns_by_user_month,
+            existence_months=existence_months,
+        )
+        return {"granularity": granularity, "activity_by_period": activity}
 
     # ------------------------------------------------------------------- scoping
 
@@ -285,12 +325,16 @@ class DdtmActivityService:
         return timezone.now() - timedelta(days=DDTM_ACTIVITY_WINDOW_DAYS)
 
     @staticmethod
-    def _classify_status(actions_count: int, connections_count: int) -> str:
+    def _classify_tier(actions_count: int, connections_count: int) -> str:
+        """Tier of one entity over a period from its operational-action and connection
+        totals (see the module docstring)."""
         if actions_count >= DDTM_ACTIVITY_PILOT_MIN_ACTIONS:
-            return USER_ACTIVITY_STATUS_PILOT
-        if connections_count > 0:
-            return USER_ACTIVITY_STATUS_ACTIVE
-        return USER_ACTIVITY_STATUS_INACTIVE
+            return ACTIVITY_TIER_PILOT
+        if actions_count >= DDTM_ACTIVITY_RECURRENT_MIN_ACTIONS:
+            return ACTIVITY_TIER_RECURRENT
+        if actions_count > 0 or connections_count > 0:
+            return ACTIVITY_TIER_ACTIVE
+        return ACTIVITY_TIER_INACTIVE
 
     @staticmethod
     def _get_department(user) -> Optional[GeoDepartment]:
@@ -350,7 +394,8 @@ class DdtmActivityService:
 
     @staticmethod
     def _build_users_data(users_info: Dict[int, dict], since) -> Dict[int, dict]:
-        """Per-user activity dict keyed by user id, for the members in users_info."""
+        """Per-user activity dict keyed by user id, for the members in users_info. The
+        30-day tier (4 tiers) backs the per-user detail badge."""
         user_ids = list(users_info.keys())
         connections = DdtmActivityService._connections_count_by_user(user_ids, since)
         actions = DdtmActivityService._actions_count_by_user(user_ids, since)
@@ -360,12 +405,193 @@ class DdtmActivityService:
                 "email": info["email"],
                 "operational_actions_count": actions.get(user_id, 0),
                 "connections_count": connections.get(user_id, 0),
-                "activity_status": DdtmActivityService._classify_status(
+                "activity_status": DdtmActivityService._classify_tier(
                     actions.get(user_id, 0), connections.get(user_id, 0)
                 ),
             }
             for user_id, info in users_info.items()
         }
+
+    # ------------------------------------------------------------------- periods
+
+    @staticmethod
+    def _get_periods(granularity) -> List[dict]:
+        """The last DDTM_ACTIVITY_PERIOD_COUNT calendar periods, oldest first, current
+        period last. Each is {"key", "month_keys": ["YYYY-MM", ...]}. Quarters and
+        semesters are calendar-aligned (Q1 = Jan-Mar, S1 = Jan-Jun)."""
+        months_per = DDTM_ACTIVITY_MONTHS_PER_PERIOD[granularity]
+        count = DDTM_ACTIVITY_PERIOD_COUNT[granularity]
+        periods_per_year = 12 // months_per
+        now = timezone.localtime()
+        year = now.year
+        ordinal = (now.month - 1) // months_per
+
+        periods = []
+        for _ in range(count):
+            month_start = ordinal * months_per + 1
+            periods.append(
+                {
+                    "key": DdtmActivityService._period_key(year, ordinal, granularity),
+                    "month_keys": [
+                        f"{year:04d}-{month:02d}"
+                        for month in range(month_start, month_start + months_per)
+                    ],
+                }
+            )
+            ordinal -= 1
+            if ordinal < 0:
+                year -= 1
+                ordinal = periods_per_year - 1
+        periods.reverse()
+        return periods
+
+    @staticmethod
+    def _period_key(year: int, ordinal: int, granularity) -> str:
+        if granularity == DdtmActivityGranularity.MONTH:
+            return f"{year:04d}-{ordinal + 1:02d}"
+        prefix = "Q" if granularity == DdtmActivityGranularity.QUARTER else "S"
+        return f"{year:04d}-{prefix}{ordinal + 1}"
+
+    @staticmethod
+    def _period_key_of_month(month_key: str, granularity) -> str:
+        year, month = int(month_key[:4]), int(month_key[5:7])
+        ordinal = (month - 1) // DDTM_ACTIVITY_MONTHS_PER_PERIOD[granularity]
+        return DdtmActivityService._period_key(year, ordinal, granularity)
+
+    @staticmethod
+    def _periods_start(periods: List[dict]):
+        first_month = periods[0]["month_keys"][0]
+        return timezone.make_aware(
+            datetime(int(first_month[:4]), int(first_month[5:7]), 1)
+        )
+
+    # --------------------------------------------------------------- period series
+
+    @staticmethod
+    def _activity_tiers_by_period(
+        entities: List[List[int]],
+        periods: List[dict],
+        ops_by_user_month: Dict[Tuple[int, str], int],
+        conns_by_user_month: Dict[Tuple[int, str], int],
+        empty_period_keys=frozenset(),
+        existence_months: Optional[List[Optional[str]]] = None,
+    ) -> List[dict]:
+        """For each period, classify every entity (a list of member ids) into one tier
+        from its members' aggregated ops/connections, and count entities per tier.
+        `empty_period_keys` are returned all-zero (pre-deployment). `existence_months`
+        (parallel to entities): an entity is skipped for periods ending before its
+        existence month — it has no data yet, rather than counting as inactive."""
+        result = []
+        for period in periods:
+            if period["key"] in empty_period_keys:
+                result.append(
+                    {
+                        "period": period["key"],
+                        "pilot_count": 0,
+                        "recurrent_count": 0,
+                        "active_count": 0,
+                        "inactive_count": 0,
+                        "total_count": 0,
+                    }
+                )
+                continue
+            period_last_month = period["month_keys"][-1]
+            tiers = defaultdict(int)
+            total = 0
+            for index, member_ids in enumerate(entities):
+                if existence_months is not None:
+                    existence = existence_months[index]
+                    if existence is None or existence > period_last_month:
+                        continue
+                ops = sum(
+                    ops_by_user_month.get((user_id, month), 0)
+                    for user_id in member_ids
+                    for month in period["month_keys"]
+                )
+                conns = sum(
+                    conns_by_user_month.get((user_id, month), 0)
+                    for user_id in member_ids
+                    for month in period["month_keys"]
+                )
+                tiers[DdtmActivityService._classify_tier(ops, conns)] += 1
+                total += 1
+            result.append(
+                {
+                    "period": period["key"],
+                    "pilot_count": tiers[ACTIVITY_TIER_PILOT],
+                    "recurrent_count": tiers[ACTIVITY_TIER_RECURRENT],
+                    "active_count": tiers[ACTIVITY_TIER_ACTIVE],
+                    "inactive_count": tiers[ACTIVITY_TIER_INACTIVE],
+                    "total_count": total,
+                }
+            )
+        return result
+
+    @staticmethod
+    def _control_status_changes_by_period(transitions, periods) -> List[dict]:
+        """Per period, the count of control-status changes for each new status (deduped
+        per detection object + new status + month, then summed over the period's months)."""
+        counts_by_month = DdtmActivityService._control_status_counts_by_month(
+            transitions
+        )
+        result = []
+        for period in periods:
+            aggregated = defaultdict(int)
+            for month in period["month_keys"]:
+                for status, count in counts_by_month.get(month, {}).items():
+                    aggregated[status] += count
+            result.append(
+                {
+                    "period": period["key"],
+                    "counts": [
+                        {"status": status, "count": count}
+                        for status, count in sorted(aggregated.items())
+                    ],
+                }
+            )
+        return result
+
+    @staticmethod
+    def _control_status_counts_by_month(transitions) -> Dict[str, Dict[str, int]]:
+        object_key_by_detection_data = (
+            DdtmActivityService._object_key_by_detection_data(transitions)
+        )
+        seen = set()
+        counts = defaultdict(lambda: defaultdict(int))
+        for _user_id, detection_data_id, status, history_date in transitions:
+            month = timezone.localtime(history_date).strftime("%Y-%m")
+            key = (object_key_by_detection_data[detection_data_id], status, month)
+            if key in seen:
+                continue
+            seen.add(key)
+            counts[month][status] += 1
+        return counts
+
+    @staticmethod
+    def _analytic_logs_by_period(member_ids, log_type, since, periods) -> List[dict]:
+        counts_by_month = defaultdict(int)
+        if member_ids:
+            for row in (
+                AnalyticLog.objects.filter(
+                    analytic_log_type=log_type,
+                    user_id__in=member_ids,
+                    created_at__gte=since,
+                )
+                .annotate(month=TruncMonth("created_at"))
+                .values("month")
+                .annotate(count=Count("id"))
+            ):
+                month = timezone.localtime(row["month"]).strftime("%Y-%m")
+                counts_by_month[month] += row["count"]
+        return [
+            {
+                "period": period["key"],
+                "count": sum(
+                    counts_by_month.get(month, 0) for month in period["month_keys"]
+                ),
+            }
+            for period in periods
+        ]
 
     # ----------------------------------------------------------------- deployment
 
@@ -393,56 +619,28 @@ class DdtmActivityService:
         ]
         return min(logins) if logins else None
 
-    # --------------------------------------------------------------- monthly series
+    @staticmethod
+    def _created_month_by_user(user_ids: List[int]) -> Dict[int, str]:
+        """{user_id: "YYYY-MM" of account creation}."""
+        if not user_ids:
+            return {}
+        return {
+            user_id: timezone.localtime(created_at).strftime("%Y-%m")
+            for user_id, created_at in User.objects.filter(id__in=user_ids).values_list(
+                "id", "created_at"
+            )
+        }
 
     @staticmethod
-    def _control_status_changes_by_month(transitions, month_keys) -> List[dict]:
-        """Per month, the count of control-status changes for each new status, deduped
-        per (detection object, new status, month) so a bulk write counts once."""
-        object_key_by_detection_data = (
-            DdtmActivityService._object_key_by_detection_data(transitions)
-        )
-
-        seen = set()
-        counts = defaultdict(lambda: defaultdict(int))
-        for _user_id, detection_data_id, status, history_date in transitions:
-            month = timezone.localtime(history_date).strftime("%Y-%m")
-            key = (object_key_by_detection_data[detection_data_id], status, month)
-            if key in seen:
-                continue
-            seen.add(key)
-            counts[month][status] += 1
-
-        return [
-            {
-                "month": month,
-                "counts": [
-                    {"status": status, "count": count}
-                    for status, count in sorted(counts[month].items())
-                ],
-            }
-            for month in month_keys
+    def _earliest_existence_month(member_ids, created_month_by_user) -> Optional[str]:
+        """Earliest member creation month for a group ("YYYY-MM"), None if it has no
+        member (never has data)."""
+        months = [
+            created_month_by_user[user_id]
+            for user_id in member_ids
+            if user_id in created_month_by_user
         ]
-
-    @staticmethod
-    def _analytic_logs_count_by_month(
-        member_ids, log_type, since, month_keys
-    ) -> List[dict]:
-        counts = defaultdict(int)
-        if member_ids:
-            for row in (
-                AnalyticLog.objects.filter(
-                    analytic_log_type=log_type,
-                    user_id__in=member_ids,
-                    created_at__gte=since,
-                )
-                .annotate(month=TruncMonth("created_at"))
-                .values("month")
-                .annotate(count=Count("id"))
-            ):
-                month = timezone.localtime(row["month"]).strftime("%Y-%m")
-                counts[month] += row["count"]
-        return [{"month": month, "count": counts.get(month, 0)} for month in month_keys]
+        return min(months) if months else None
 
     # ------------------------------------------------------------------- signals
 
@@ -462,24 +660,62 @@ class DdtmActivityService:
         }
 
     @staticmethod
+    def _conns_count_by_user_month(member_ids, since) -> Dict[Tuple[int, str], int]:
+        """{(user_id, "YYYY-MM"): connection count}."""
+        counts = defaultdict(int)
+        if member_ids:
+            for row in (
+                AnalyticLog.objects.filter(
+                    analytic_log_type=AnalyticLogType.USER_ACCESS,
+                    user_id__in=member_ids,
+                    created_at__gte=since,
+                )
+                .annotate(month=TruncMonth("created_at"))
+                .values("user_id", "month")
+                .annotate(count=Count("id"))
+            ):
+                month = timezone.localtime(row["month"]).strftime("%Y-%m")
+                counts[(row["user_id"], month)] += row["count"]
+        return counts
+
+    @staticmethod
     def _actions_count_by_user(user_ids: List[int], since) -> Dict[int, int]:
-        """Control-status transitions deduped per (detection object, new status): a
-        prior letter or multi-edit writes one history row per detection of an object
-        and must count as one action, not N."""
-        transitions = DdtmActivityService._control_status_transitions(user_ids, since)
+        """Control-status transitions over the whole window, deduped per (user, detection
+        object, new status). Backs the 30-day per-user table."""
+        counts_by_user_month, _ = DdtmActivityService._ops_count_by_user_month(
+            user_ids, since
+        )
+        counts = defaultdict(int)
+        for (user_id, _month), count in counts_by_user_month.items():
+            counts[user_id] += count
+        return counts
+
+    @staticmethod
+    def _ops_count_by_user_month(
+        member_ids, since
+    ) -> Tuple[Dict[Tuple[int, str], int], List[Tuple]]:
+        """({(user_id, "YYYY-MM"): operational-action count}, raw transitions). Actions
+        are deduped per (user, detection object, new status, month) so a bulk write (one
+        history row per detection of an object) counts once per month."""
+        transitions = DdtmActivityService._control_status_transitions(member_ids, since)
         object_key_by_detection_data = (
             DdtmActivityService._object_key_by_detection_data(transitions)
         )
-
         counts = defaultdict(int)
         seen = set()
-        for user_id, detection_data_id, status, _history_date in transitions:
-            key = (user_id, object_key_by_detection_data[detection_data_id], status)
+        for user_id, detection_data_id, status, history_date in transitions:
+            month = timezone.localtime(history_date).strftime("%Y-%m")
+            key = (
+                user_id,
+                object_key_by_detection_data[detection_data_id],
+                status,
+                month,
+            )
             if key in seen:
                 continue
             seen.add(key)
-            counts[user_id] += 1
-        return counts
+            counts[(user_id, month)] += 1
+        return counts, transitions
 
     @staticmethod
     def _control_status_transitions(user_ids: List[int], since) -> List[Tuple]:
@@ -510,18 +746,3 @@ class DdtmActivityService:
             )
             for detection_data_id in detection_data_ids
         }
-
-    @staticmethod
-    def _get_month_keys() -> List[str]:
-        """The last DDTM_ACTIVITY_MONTHS_COUNT month keys ("YYYY-MM"), oldest first,
-        current month included."""
-        now = timezone.localtime()
-        year, month = now.year, now.month
-        keys = []
-        for _ in range(DDTM_ACTIVITY_MONTHS_COUNT):
-            keys.append(f"{year:04d}-{month:02d}")
-            month -= 1
-            if month == 0:
-                year, month = year - 1, 12
-        keys.reverse()
-        return keys
