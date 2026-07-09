@@ -194,9 +194,7 @@ class DetectionService:
         )
 
         commune = (
-            GeoCommune.objects.filter(geometry__contains=centroid)
-            .only("id", "department__id", "department__region__id")
-            .first()
+            GeoCommune.objects.filter(geometry__contains=centroid).only("id").first()
         )
 
         if commune is None:
@@ -206,20 +204,19 @@ class DetectionService:
         detection_object.commune_id = commune.id
         detection_object.save()
 
-        # only zones fully covering the geometry, not merely intersecting it
-        geo_custom_zones = GeoCustomZone.objects.filter(
-            geo_zones__id__in=[
-                commune.id,
-                commune.department.id,
-                commune.department.region.id,
-            ],
-            geometry__covers=geometry,
-        )
-        geo_custom_zones = list(geo_custom_zones)
+        # A detection belongs to every custom zone whose geometry fully covers it
+        # (deliberate rule: the zone must contain the whole detection, not merely clip
+        # it). Matched purely spatially through the GiST index on GeoZone.geometry —
+        # no filter on the zone's geo_zones M2M, which is only a coarse collectivity
+        # label (a ZAE zone lists just its department, a hand-drawn zone may list
+        # nothing); gating on it silently dropped zones that actually cover the
+        # detection. Same scope as the bulk recompute
+        # GeoCustomZoneService.associate_detections_to_custom_zones.
+        geo_custom_zones = list(GeoCustomZone.objects.filter(geometry__covers=geometry))
         detection_object.geo_custom_zones.add(*geo_custom_zones)
 
         geo_sub_custom_zones = GeoSubCustomZone.objects.filter(
-            custom_zone__id__in=[gcz.id for gcz in geo_custom_zones],
+            custom_zone__in=geo_custom_zones,
             geometry__covers=geometry,
         )
         detection_object.geo_sub_custom_zones.add(*geo_sub_custom_zones)

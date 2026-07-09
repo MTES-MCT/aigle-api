@@ -535,13 +535,13 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                     WHERE
                         detec.batch_id = %s AND
                         detec.tile_set_id = %s AND
-                        ST_Within(
-                            detec.geometry,
+                        ST_Covers(
                             (
                                 SELECT geozone.geometry
                                 FROM core_geozone geozone
                                 WHERE id = %s
-                            )
+                            ),
+                            detec.geometry
                         )
                     ON CONFLICT DO NOTHING
                     """,

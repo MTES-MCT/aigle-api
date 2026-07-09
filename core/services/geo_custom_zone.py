@@ -163,8 +163,10 @@ class GeoCustomZoneService:
         log_event: Callable[[str], None] = _noop_log,
     ) -> None:
         """Populate the DetectionObject ↔ GeoCustomZone (and ↔ GeoSubCustomZone)
-        M2M tables for the given custom zones, based on spatial intersection
-        between each zone geometry and its detections' geometry.
+        M2M tables for the given custom zones. A detection belongs to a zone when the
+        zone geometry fully covers it (ST_Covers) — the same rule the on-insert path
+        uses (DetectionService._create_or_find_detection_object), so an object gets
+        the same zones however it was created.
 
         Filters detections by `batch_ids` (Detection.batch_id values) and
         `tile_set_uuids` (TileSet.uuid values). Either, when omitted, defaults to
@@ -234,9 +236,9 @@ class GeoCustomZoneService:
                     WHERE
                         detec.batch_id = ANY(%s)
                         AND detec.tile_set_id = ANY(%s)
-                        AND ST_Intersects(
-                            detec.geometry,
-                            (SELECT geometry FROM core_geozone WHERE id = %s)
+                        AND ST_Covers(
+                            (SELECT geometry FROM core_geozone WHERE id = %s),
+                            detec.geometry
                         )
                     ON CONFLICT DO NOTHING
                     """,
@@ -261,9 +263,9 @@ class GeoCustomZoneService:
                     WHERE
                         detec.batch_id = ANY(%s)
                         AND detec.tile_set_id = ANY(%s)
-                        AND ST_Intersects(
-                            detec.geometry,
-                            (SELECT geometry FROM core_geozone WHERE id = %s)
+                        AND ST_Covers(
+                            (SELECT geometry FROM core_geozone WHERE id = %s),
+                            detec.geometry
                         )
                     ON CONFLICT DO NOTHING
                     """,
