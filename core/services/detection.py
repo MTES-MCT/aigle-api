@@ -103,8 +103,10 @@ class DetectionService:
         # guard, a caller reusing a detection_object across tile sets (the "force visible
         # on every background" flow) can attach a geometry to a tile set thousands of km
         # away — the source of cross-region junk detections. Only enforced when the tile
-        # set declares geo_zones (some background tile sets legitimately have none).
-        tile_set_zones = tile_set.geo_zones.all()
+        # set declares geo_zones with a geometry (some background tile sets legitimately
+        # have none, and GeoZone.geometry is nullable — a NULL-geometry zone must not
+        # turn the guard into a blanket rejection).
+        tile_set_zones = tile_set.geo_zones.filter(geometry__isnull=False)
         if (
             tile_set_zones.exists()
             and not tile_set_zones.filter(geometry__intersects=geometry).exists()

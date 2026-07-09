@@ -1,10 +1,44 @@
 from django.contrib.gis.geos import Polygon
 
+from core.models.geo_commune import GeoCommune
 from core.services.detection import DetectionService
 from core.tests.base import BaseAPITestCase
-from core.tests.fixtures.detection_data import create_object_type, create_tile_set
+from core.tests.fixtures.detection_data import (
+    create_object_type,
+    create_tile,
+    create_tile_set,
+)
 from core.tests.fixtures.geo_data import create_montpellier_commune
 from core.tests.fixtures.users import create_super_admin
+
+COVERAGE_ERROR = "outside the tile set coverage"
+
+
+def far_geometry():
+    # ~9500 km from Montpellier (La Réunion) — cannot intersect the tile set coverage
+    return Polygon(
+        [
+            (55.5000, -20.9000),
+            (55.5010, -20.9000),
+            (55.5010, -20.8990),
+            (55.5000, -20.8990),
+            (55.5000, -20.9000),
+        ],
+        srid=4326,
+    )
+
+
+def montpellier_geometry():
+    return Polygon(
+        [
+            (3.8799, 43.6099),
+            (3.8801, 43.6099),
+            (3.8801, 43.6101),
+            (3.8799, 43.6101),
+            (3.8799, 43.6099),
+        ],
+        srid=4326,
+    )
 
 
 class CreateDetectionCoverageGuardTestCase(BaseAPITestCase):
@@ -23,45 +57,50 @@ class CreateDetectionCoverageGuardTestCase(BaseAPITestCase):
         self.tile_set = create_tile_set(name="Montpellier 2024")
         self.tile_set.geo_zones.add(self.commune)
 
-    def test_rejects_geometry_outside_tile_set_coverage(self):
-        # ~9500 km from Montpellier (La Réunion) — cannot intersect the tile set coverage
-        far_geometry = Polygon(
-            [
-                (55.5000, -20.9000),
-                (55.5010, -20.9000),
-                (55.5010, -20.8990),
-                (55.5000, -20.8990),
-                (55.5000, -20.9000),
-            ],
-            srid=4326,
+    def create_detection(self, geometry, tile_set):
+        return DetectionService.create_detection(
+            geometry=geometry,
+            user=self.user,
+            tile_set_uuid=str(tile_set.uuid),
+            detection_object_data={"object_type_uuid": str(self.object_type.uuid)},
         )
-        with self.assertRaises(ValueError):
-            DetectionService.create_detection(
-                geometry=far_geometry,
-                user=self.user,
-                tile_set_uuid=str(self.tile_set.uuid),
-                detection_object_data={"object_type_uuid": str(self.object_type.uuid)},
-            )
+
+    def test_rejects_geometry_outside_tile_set_coverage(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.create_detection(far_geometry(), self.tile_set)
+        # the guard must be what rejects it — a far geometry also fails the later
+        # z19-tile lookup with a ValueError, which would mask a deleted guard
+        self.assertIn(COVERAGE_ERROR, str(ctx.exception))
+
+    def test_accepts_geometry_inside_tile_set_coverage(self):
+        # z19 slippy tile containing the Montpellier geometry's centroid
+        create_tile(x=267794, y=191428, z=19)
+
+        detection = self.create_detection(montpellier_geometry(), self.tile_set)
+
+        self.assertEqual(detection.tile_set_id, self.tile_set.id)
+        self.assertEqual(detection.detection_object.commune_id, self.commune.id)
 
     def test_zoneless_tile_set_is_not_guarded(self):
         # A tile set with no geo_zones keeps its previous behaviour (guard skipped);
         # far geometry then fails later (no z19 tile), NOT on the coverage check.
         zoneless = create_tile_set(name="Zoneless 2024")
-        far_geometry = Polygon(
-            [
-                (55.5000, -20.9000),
-                (55.5010, -20.9000),
-                (55.5010, -20.8990),
-                (55.5000, -20.8990),
-                (55.5000, -20.9000),
-            ],
-            srid=4326,
-        )
         with self.assertRaises(ValueError) as ctx:
-            DetectionService.create_detection(
-                geometry=far_geometry,
-                user=self.user,
-                tile_set_uuid=str(zoneless.uuid),
-                detection_object_data={"object_type_uuid": str(self.object_type.uuid)},
-            )
-        self.assertNotIn("outside the tile set coverage", str(ctx.exception))
+            self.create_detection(far_geometry(), zoneless)
+        self.assertNotIn(COVERAGE_ERROR, str(ctx.exception))
+
+    def test_null_geometry_zones_are_not_guarded(self):
+        # GeoZone.geometry is nullable; a tile set whose only zones lack a geometry
+        # must behave like a zoneless one, not reject every detection.
+        null_geometry_commune = GeoCommune.objects.create(
+            name="Sans géométrie",
+            iso_code="34999",
+            department=self.commune.department,
+            geometry=None,
+        )
+        tile_set = create_tile_set(name="Null geometry 2024")
+        tile_set.geo_zones.add(null_geometry_commune)
+
+        with self.assertRaises(ValueError) as ctx:
+            self.create_detection(far_geometry(), tile_set)
+        self.assertNotIn(COVERAGE_ERROR, str(ctx.exception))
