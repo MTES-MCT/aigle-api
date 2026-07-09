@@ -10,6 +10,7 @@ from core.models.detection import Detection
 from core.models.tile_set import TileSet, TileSetType
 from core.permissions.user import UserPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
+from django.db import transaction
 from dateutil.relativedelta import relativedelta
 from simple_history.utils import bulk_create_with_history
 from rest_framework import serializers
@@ -89,55 +90,63 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             == DetectionPrescriptionStatus.PRESCRIBED
         ):
             prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
-            date_max = instance.detection.tile_set.date
-            date_min = date_max - relativedelta(years=prescription_duration_years)
-            existing_tile_set_ids = []
-
-            for (
-                existing_detection
-            ) in instance.detection.detection_object.detections.filter(
-                tile_set__date__gte=date_min,
-                tile_set__date__lt=date_max,
-            ).all():
-                existing_tile_set_ids.append(existing_detection.tile_set.id)
-
-            # Two independent exclusions: a single .exclude(A, B) would only skip
-            # tile sets matching BOTH (it excludes the conjunction), letting
-            # prescription create duplicate detections on tile sets that already
-            # have one, and copies on indicative tile sets.
-            tile_sets = (
-                TileSet.objects.filter(
-                    date__gte=date_min,
-                    date__lt=date_max,
+            # object types without a prescription duration have no window to fan out over
+            # (and relativedelta(years=None) would crash)
+            if prescription_duration_years:
+                date_max = instance.detection.tile_set.date
+                date_min = date_max - relativedelta(years=prescription_duration_years)
+                existing_tile_set_ids = list(
+                    instance.detection.detection_object.detections.filter(
+                        tile_set__date__gte=date_min,
+                        tile_set__date__lt=date_max,
+                    ).values_list("tile_set_id", flat=True)
                 )
-                .exclude(tile_set_type=TileSetType.INDICATIVE)
-                .exclude(id__in=existing_tile_set_ids)
-            )
 
-            if tile_sets:
-                detections_to_insert = []
-
-                for tile_set in tile_sets:
-                    detection_data = DetectionData(
-                        detection_control_status=instance.detection.detection_data.detection_control_status,
-                        detection_validation_status=instance.detection.detection_data.detection_validation_status,
-                        detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED,
-                        user_last_update=request.user,
+                # Only tile sets whose coverage actually contains this detection.
+                # Without this geographic scope, prescription copied the detection onto
+                # EVERY tile set in the date window across the whole country.
+                # Two independent exclusions: a single .exclude(A, B) would only skip
+                # tile sets matching BOTH (it excludes the conjunction), letting
+                # prescription create duplicate detections on tile sets that already
+                # have one, and copies on indicative tile sets.
+                tile_sets = (
+                    TileSet.objects.filter(
+                        date__gte=date_min,
+                        date__lt=date_max,
+                        geo_zones__geometry__intersects=instance.detection.geometry,
                     )
-                    detection_data.save()
-                    detection = Detection(
-                        geometry=instance.detection.geometry,
-                        score=1,
-                        detection_source=instance.detection.detection_source,
-                        detection_object=instance.detection.detection_object,
-                        detection_data=detection_data,
-                        auto_prescribed=False,
-                        tile=instance.detection.tile,
-                        tile_set=tile_set,
-                    )
-                    detections_to_insert.append(detection)
+                    .exclude(tile_set_type=TileSetType.INDICATIVE)
+                    .exclude(id__in=existing_tile_set_ids)
+                    .distinct()
+                )
 
-                bulk_create_with_history(detections_to_insert, Detection)
+                if tile_sets:
+                    detections_to_insert = []
+
+                    # atomic: a mid-loop failure must not leave detection_data rows
+                    # without their detection (the FK cascade only goes the other way)
+                    with transaction.atomic():
+                        for tile_set in tile_sets:
+                            detection_data = DetectionData(
+                                detection_control_status=instance.detection.detection_data.detection_control_status,
+                                detection_validation_status=instance.detection.detection_data.detection_validation_status,
+                                detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED,
+                                user_last_update=request.user,
+                            )
+                            detection_data.save()
+                            detection = Detection(
+                                geometry=instance.detection.geometry,
+                                score=1,
+                                detection_source=instance.detection.detection_source,
+                                detection_object=instance.detection.detection_object,
+                                detection_data=detection_data,
+                                auto_prescribed=False,
+                                tile=instance.detection.tile,
+                                tile_set=tile_set,
+                            )
+                            detections_to_insert.append(detection)
+
+                        bulk_create_with_history(detections_to_insert, Detection)
 
         # if object gets unprescribed, we invalidate the detections of the previously
         # prescribed years. Detections are NEVER hard-deleted from the database:
@@ -153,30 +162,31 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
             == DetectionPrescriptionStatus.NOT_PRESCRIBED
         ):
             prescription_duration_years = instance.detection.detection_object.object_type.prescription_duration_years
-            date_max = instance.detection.tile_set.date
-            date_min = date_max - relativedelta(years=prescription_duration_years)
+            if prescription_duration_years:
+                date_max = instance.detection.tile_set.date
+                date_min = date_max - relativedelta(years=prescription_duration_years)
 
-            detections_to_invalidate = (
-                instance.detection.detection_object.detections.filter(
-                    tile_set__date__gte=date_min,
-                    tile_set__date__lt=date_max,
-                ).select_related("detection_data")
-            )
-
-            for detection_to_invalidate in detections_to_invalidate:
-                detection_data = detection_to_invalidate.detection_data
-                if detection_data is None:
-                    continue
-
-                detection_data.detection_validation_status = (
-                    DetectionValidationStatus.INVALIDATED
+                detections_to_invalidate = (
+                    instance.detection.detection_object.detections.filter(
+                        tile_set__date__gte=date_min,
+                        tile_set__date__lt=date_max,
+                    ).select_related("detection_data")
                 )
-                # mirror of the prescribe branch above, which creates them PRESCRIBED
-                detection_data.detection_prescription_status = (
-                    DetectionPrescriptionStatus.NOT_PRESCRIBED
-                )
-                detection_data.user_last_update = request.user
-                detection_data.save()
+
+                for detection_to_invalidate in detections_to_invalidate:
+                    detection_data = detection_to_invalidate.detection_data
+                    if detection_data is None:
+                        continue
+
+                    detection_data.detection_validation_status = (
+                        DetectionValidationStatus.INVALIDATED
+                    )
+                    # mirror of the prescribe branch above, which creates them PRESCRIBED
+                    detection_data.detection_prescription_status = (
+                        DetectionPrescriptionStatus.NOT_PRESCRIBED
+                    )
+                    detection_data.user_last_update = request.user
+                    detection_data.save()
 
         detection_control_status = (
             validated_data.get("detection_control_status")

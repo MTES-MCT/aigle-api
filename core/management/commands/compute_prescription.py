@@ -42,7 +42,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 .prefetch_related(
                     "detections", "detections__detection_data", "detections__tile_set"
                 )
-                .all()[offset : offset + BATCH_SIZE]
+                .order_by("id")[offset : offset + BATCH_SIZE]
             )
 
             if not detection_objects:
