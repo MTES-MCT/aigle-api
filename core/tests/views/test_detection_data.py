@@ -20,7 +20,10 @@ from core.tests.fixtures.detection_data import (
     create_object_type,
     create_tile_set,
 )
-from core.tests.fixtures.geo_data import create_complete_geo_hierarchy
+from core.tests.fixtures.geo_data import (
+    create_complete_geo_hierarchy,
+    create_montpellier_commune,
+)
 
 
 class DetectionDataViewSetTests(BaseAPITestCase):
@@ -156,12 +159,17 @@ class DetectionDataPrescriptionTests(BaseAPITestCase):
             name="Prescriptible Pool", prescription_duration_years=10
         )
         self.detection_object = create_detection_object(object_type=self.object_type)
+        # The default detection geometry (3.88, 43.61) sits in Montpellier; prescription
+        # only copies onto tile sets whose geo_zones cover the detection.
+        self.commune = create_montpellier_commune()
         self.tile_set_2024 = create_tile_set(
             name="Background 2024", date=datetime.date(2024, 1, 1)
         )
+        self.tile_set_2024.geo_zones.add(self.commune)
         self.tile_set_2020 = create_tile_set(
             name="Background 2020", date=datetime.date(2020, 1, 1)
         )
+        self.tile_set_2020.geo_zones.add(self.commune)
 
         self.current_data = create_detection_data(
             detection_control_status=DetectionControlStatus.NOT_CONTROLLED,
@@ -234,6 +242,7 @@ class DetectionDataPrescriptionTests(BaseAPITestCase):
         tile_set_2022 = create_tile_set(
             name="Background 2022", date=datetime.date(2022, 1, 1)
         )
+        tile_set_2022.geo_zones.add(self.commune)
         create_detection(
             detection_object=self.detection_object,
             tile_set=tile_set_2022,

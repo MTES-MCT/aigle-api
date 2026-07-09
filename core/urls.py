@@ -17,6 +17,7 @@ from core.views.object_type_category import ObjectTypeCategoryViewSet
 from core.views.parcel import ParcelViewSet
 from core.views.run_command import CommandAsyncViewSet
 from core.views.statistics.ddtm_activity import (
+    StatisticsDdtmActivityGroupsActivityView,
     StatisticsDdtmActivitySummaryView,
     StatisticsDdtmActivityUserGroupsView,
     StatisticsDdtmActivityUserGroupUsersView,
@@ -106,6 +107,11 @@ urlpatterns += [
         "statistics/ddtm-activity/user-groups/",
         StatisticsDdtmActivityUserGroupsView.as_view(),
         name="StatisticsDdtmActivityUserGroupsView",
+    ),
+    path(
+        "statistics/ddtm-activity/groups-activity/",
+        StatisticsDdtmActivityGroupsActivityView.as_view(),
+        name="StatisticsDdtmActivityGroupsActivityView",
     ),
     path(
         "statistics/ddtm-activity/user-group/<uuid:uuid>/users/",

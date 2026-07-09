@@ -1,10 +1,22 @@
 from rest_framework import serializers
-from rest_framework.exceptions import NotFound
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.constants.statistics import DdtmActivityGranularity
 from core.services.ddtm_activity import DdtmActivityService
 from core.utils.permissions import DdtmGroupPermission
+
+
+def parse_granularity(request) -> str:
+    """Read ?granularity= (MONTH default). 400 on an unknown value."""
+    value = request.query_params.get("granularity", DdtmActivityGranularity.MONTH)
+    if value not in DdtmActivityGranularity.values:
+        raise ValidationError(
+            f"Invalid granularity '{value}'. "
+            f"Expected one of {DdtmActivityGranularity.values}."
+        )
+    return value
 
 
 class DdtmActivityUserGroupOptionSerializer(serializers.Serializer):
@@ -36,14 +48,18 @@ class DdtmActivityUserSerializer(serializers.Serializer):
     email = serializers.EmailField()
     operational_actions_count = serializers.IntegerField()
     connections_count = serializers.IntegerField()
+    # PILOT | RECURRENT | ACTIVE | INACTIVE over the 30-day window.
     activity_status = serializers.CharField()
 
 
-class DdtmActivityMonthSerializer(serializers.Serializer):
-    month = serializers.CharField()
-    pilot_users_count = serializers.IntegerField()
-    active_users_count = serializers.IntegerField()
-    inactive_users_count = serializers.IntegerField()
+class DdtmActivityPeriodTierSerializer(serializers.Serializer):
+    # `period` is a period key: "YYYY-MM", "YYYY-Q<n>" or "YYYY-S<n>".
+    period = serializers.CharField()
+    pilot_count = serializers.IntegerField()
+    recurrent_count = serializers.IntegerField()
+    active_count = serializers.IntegerField()
+    inactive_count = serializers.IntegerField()
+    total_count = serializers.IntegerField()
 
 
 class DdtmActivityStatusCountSerializer(serializers.Serializer):
@@ -53,25 +69,35 @@ class DdtmActivityStatusCountSerializer(serializers.Serializer):
     count = serializers.IntegerField()
 
 
-class DdtmActivityControlStatusMonthSerializer(serializers.Serializer):
-    month = serializers.CharField()
+class DdtmActivityControlStatusPeriodSerializer(serializers.Serializer):
+    period = serializers.CharField()
     counts = DdtmActivityStatusCountSerializer(many=True)
 
 
-class DdtmActivityCountMonthSerializer(serializers.Serializer):
-    month = serializers.CharField()
+class DdtmActivityCountPeriodSerializer(serializers.Serializer):
+    period = serializers.CharField()
     count = serializers.IntegerField()
 
 
-class DdtmActivityUserGroupMonthlySerializer(serializers.Serializer):
+class DdtmActivityUserGroupActivitySerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     name = serializers.CharField()
-    months = DdtmActivityMonthSerializer(many=True)
-    control_status_changes_by_month = DdtmActivityControlStatusMonthSerializer(
+    granularity = serializers.CharField()
+    deployment_date = serializers.DateField(allow_null=True)
+    # Last period key entirely before deployment (grey "not deployed" zone boundary).
+    no_data_until_period = serializers.CharField(allow_null=True)
+    activity_by_period = DdtmActivityPeriodTierSerializer(many=True)
+    control_status_changes_by_period = DdtmActivityControlStatusPeriodSerializer(
         many=True
     )
-    report_downloads_by_month = DdtmActivityCountMonthSerializer(many=True)
-    connections_by_month = DdtmActivityCountMonthSerializer(many=True)
+    report_downloads_by_period = DdtmActivityCountPeriodSerializer(many=True)
+    connections_by_period = DdtmActivityCountPeriodSerializer(many=True)
+
+
+class DdtmActivityGroupsActivitySerializer(serializers.Serializer):
+    granularity = serializers.CharField()
+    # Each collectivity group of the department classified into one tier per period.
+    activity_by_period = DdtmActivityPeriodTierSerializer(many=True)
 
 
 class StatisticsDdtmActivitySummaryView(APIView):
@@ -106,6 +132,22 @@ class StatisticsDdtmActivityUserGroupsView(APIView):
         return Response(serializer.data)
 
 
+class StatisticsDdtmActivityGroupsActivityView(APIView):
+    """Department-wide activity chart: each collectivity group classified into one tier
+    (pilot/active/connected/inactive) per period, at the requested granularity."""
+
+    permission_classes = [DdtmGroupPermission]
+
+    def get(self, request):
+        granularity = parse_granularity(request)
+        activity = DdtmActivityService.get_groups_activity(request.user, granularity)
+        if activity is None:
+            raise NotFound("No department is linked to your DDTM group.")
+
+        serializer = DdtmActivityGroupsActivitySerializer(activity)
+        return Response(serializer.data)
+
+
 class StatisticsDdtmActivityUserGroupUsersView(APIView):
     """Per-user activity rows for one group of the DDTM's department (the group-detail
     table). Served as a bare array for the frontend DataTable."""
@@ -122,17 +164,18 @@ class StatisticsDdtmActivityUserGroupUsersView(APIView):
 
 
 class StatisticsDdtmActivityUserGroupView(APIView):
-    """Monthly breakdown (pilot/active/inactive members) for one user group of the
-    DDTM's department."""
+    """Per-period charts for one user group of the DDTM's department, at the requested
+    granularity (each member classified into one tier per period)."""
 
     permission_classes = [DdtmGroupPermission]
 
     def get(self, request, uuid):
-        activity = DdtmActivityService.get_user_group_monthly_activity(
-            request.user, uuid
+        granularity = parse_granularity(request)
+        activity = DdtmActivityService.get_user_group_activity(
+            request.user, uuid, granularity
         )
         if activity is None:
             raise NotFound("User group not found in your department.")
 
-        serializer = DdtmActivityUserGroupMonthlySerializer(activity)
+        serializer = DdtmActivityUserGroupActivitySerializer(activity)
         return Response(serializer.data)
