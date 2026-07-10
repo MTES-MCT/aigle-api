@@ -143,8 +143,17 @@ class DetectionInputSerializer(DetectionSerializer):
 
     def create(self, validated_data):
         from core.permissions.scope import resolve_scoped_user_group
+        from core.permissions.geo_custom_zone import GeoCustomZonePermission
+        from rest_framework.exceptions import PermissionDenied
 
         request = self.context["request"]
+
+        if not GeoCustomZonePermission.from_request(request).covers_geometry(
+            validated_data["geometry"]
+        ):
+            raise PermissionDenied(
+                "Impossible de créer une détection en dehors d'une zone à enjeux (zone urbaine)"
+            )
 
         detection_object_uuid = validated_data.pop("detection_object_uuid", None)
         tile_set_uuid = validated_data.pop("tile_set_uuid")

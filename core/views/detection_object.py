@@ -3,7 +3,9 @@ from typing import Any, Dict
 from common.views.base import BaseViewSetMixin
 
 from rest_framework.response import Response
-from rest_framework import serializers
+from rest_framework import serializers, status
+from django.contrib.gis.geos import Point
+from core.constants.geo import SRID
 from core.models.detection import Detection
 from core.models.detection_object import DetectionObject
 from core.models.tile_set import TileSetType
@@ -24,6 +26,10 @@ from core.services.detection_object import DetectionObjectService
 from core.services.tile_set import TileSetService
 from django.contrib.gis.db.models.functions import Centroid
 from django_filters import FilterSet
+
+# Kept in sync with the frontend (Map/index.tsx): signals a click in a "zone urbaine"
+# (outside every custom zone the user can access) so the UI can show a specific toast.
+OUTSIDE_CUSTOM_ZONE_CODE = "OUTSIDE_CUSTOM_ZONE"
 
 
 class GetFromCoordinatesParamsSerializer(serializers.Serializer):
@@ -147,6 +153,13 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
         x = params_serializer.data["lng"]
         y = params_serializer.data["lat"]
+
+        point = Point(x, y, srid=SRID)
+        if not GeoCustomZonePermission.from_request(request).covers_geometry(point):
+            return Response(
+                {"code": OUTSIDE_CUSTOM_ZONE_CODE},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         tile_set = TileSetService.find_tile_set_by_coordinates(
             x=x,
