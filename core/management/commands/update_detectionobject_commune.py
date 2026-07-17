@@ -29,17 +29,24 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             help="Number of records to process per batch.",
         )
         parser.add_argument("--tile-set-uuids", action="append", required=False)
+        parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Update all detection objects, not only those without a commune.",
+        )
 
     def handle(self, *args, **options):
         batch_size = options["batch_size"]
         tile_set_uuids = options["tile_set_uuids"]
+        force = options["force"]
         log_event("Starting updating commune_id...")
 
-        detection_objects_queryset = (
-            DetectionObject.objects.prefetch_related("detections")
-            .filter(commune=None)
-            .order_by("id")
-        )
+        detection_objects_queryset = DetectionObject.objects.prefetch_related(
+            "detections"
+        ).order_by("id")
+
+        if not force:
+            detection_objects_queryset = detection_objects_queryset.filter(commune=None)
 
         if tile_set_uuids:
             detection_objects_queryset = detection_objects_queryset.filter(
@@ -47,7 +54,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             )
 
         total = detection_objects_queryset.count()
-        log_event(f"Detection objects without commune associated: {total}")
+        log_event(f"Detection objects to update: {total}")
 
         all_ids = list(detection_objects_queryset.values_list("id", flat=True))
 
