@@ -3,15 +3,36 @@ import time
 from django.core.management.base import BaseCommand
 from core.management.base import CommandRunTrackerMixin
 from core.models.detection_object import DetectionObject
-from core.models.geo_zone import GeoZone, GeoZoneType
-from django.contrib.gis.geos import GEOSGeometry
-from django.db import transaction
+from django.db import connection
 
+from core.services.deployed_data import DeployedDataService
 from core.utils.cache import invalidate_count_caches
 
 from core.utils.logs_helpers import log_command_event, log_command_progress
 
 BATCH_SIZE_DEFAULT = 1000
+
+# Set-based form of "take each object's first detection, find the commune containing
+# its centroid". The spatial join stays in PostGIS on purpose: resolving it in Python
+# cost one query per object to load the detection and one more to match the commune.
+UPDATE_SQL = """
+WITH first_detection AS (
+    SELECT DISTINCT ON (d.detection_object_id)
+        d.detection_object_id AS object_id,
+        ST_Centroid(d.geometry) AS centroid
+    FROM core_detection d
+    WHERE d.detection_object_id = ANY(%s)
+    ORDER BY d.detection_object_id, d.id
+)
+UPDATE core_detectionobject o
+SET commune_id = z.id
+FROM first_detection fd
+JOIN core_geozone z
+    ON z.geo_zone_type = 'COMMUNE'
+    AND ST_Contains(z.geometry, fd.centroid)
+WHERE o.id = fd.object_id
+    AND o.commune_id IS DISTINCT FROM z.id
+"""
 
 
 def log_event(info: str):
@@ -41,9 +62,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         force = options["force"]
         log_event("Starting updating commune_id...")
 
-        detection_objects_queryset = DetectionObject.objects.prefetch_related(
-            "detections"
-        ).order_by("id")
+        detection_objects_queryset = DetectionObject.objects.order_by("id")
 
         if not force:
             detection_objects_queryset = detection_objects_queryset.filter(commune=None)
@@ -51,72 +70,51 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         if tile_set_uuids:
             detection_objects_queryset = detection_objects_queryset.filter(
                 tile_sets__uuid__in=tile_set_uuids
-            )
+            ).distinct()
 
         total = detection_objects_queryset.count()
         log_event(f"Detection objects to update: {total}")
 
-        all_ids = list(detection_objects_queryset.values_list("id", flat=True))
-
         start_time = time.monotonic()
         processed_count = 0
         updated_count = 0
+        last_id = 0
 
-        for i in range(0, len(all_ids), batch_size):
-            batch_ids = all_ids[i : i + batch_size]
-            detection_objects = DetectionObject.objects.prefetch_related(
-                "detections"
-            ).filter(id__in=batch_ids)
+        # Keyset pagination: batches stay stable as rows drop out of the commune=None
+        # filter, and no full id list is held in memory.
+        while True:
+            batch_ids = list(
+                detection_objects_queryset.filter(id__gt=last_id).values_list(
+                    "id", flat=True
+                )[:batch_size]
+            )
 
-            updated_detection_objects = []
+            if not batch_ids:
+                break
 
-            for detection_object in detection_objects:
-                if not detection_object.detections.exists():
-                    continue
+            last_id = batch_ids[-1]
 
-                detection = detection_object.detections.first()
-                if not detection or not detection.geometry:
-                    continue
-
-                try:
-                    geom = detection.geometry
-                    if not isinstance(geom, GEOSGeometry):
-                        geom = GEOSGeometry(geom)
-
-                    centroid = geom.centroid
-
-                    commune = GeoZone.objects.filter(
-                        geo_zone_type=GeoZoneType.COMMUNE, geometry__contains=centroid
-                    ).first()
-
-                    if not commune:
-                        continue
-
-                    detection_object.commune_id = commune.id
-                    updated_detection_objects.append(detection_object)
-
-                except Exception as e:
-                    log_event(
-                        f"Error processing detection object {detection_object.id}: {e}"
-                    )
-                    continue
-
-            if updated_detection_objects:
-                with transaction.atomic():
-                    DetectionObject.objects.bulk_update(
-                        updated_detection_objects, ["commune_id"]
-                    )
-                    # bulk_update bypasses post_save; invalidate counts explicitly.
-                    transaction.on_commit(invalidate_count_caches)
-                updated_count += len(updated_detection_objects)
+            with connection.cursor() as cursor:
+                cursor.execute(UPDATE_SQL, [batch_ids])
+                updated_count += cursor.rowcount
 
             processed_count += len(batch_ids)
             log_command_progress(
                 "update_detectionobject_commune", processed_count, total, start_time
             )
 
-            if processed_count >= total:
-                break
+        if updated_count:
+            # Raw SQL bypasses post_save; invalidate counts explicitly, once.
+            invalidate_count_caches()
+
+            # The SUPER_ADMIN deployed-data dashboard aggregates detections per commune,
+            # which is exactly what this command rewrites. Its cache is version-gated and
+            # otherwise only refreshed by warm_deployed_data_cache, so without this the
+            # dashboard serves pre-run figures until the TTL. refresh_cache invalidates
+            # AND recomputes — never leaving it cold. Once at the end: it's a
+            # full-dataset recompute.
+            log_event("Refreshing deployed-data cache after commune update")
+            DeployedDataService.refresh_cache()
 
         log_event(
             f"Finished updating commune_id. Total updated: {updated_count}/{total}"
