@@ -1,6 +1,7 @@
 from django.contrib.gis.geos import Polygon
 
 from core.models.geo_commune import GeoCommune
+from core.models.geo_custom_zone import GeoCustomZone
 from core.services.detection import DetectionService
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import (
@@ -88,6 +89,32 @@ class CreateDetectionCoverageGuardTestCase(BaseAPITestCase):
         with self.assertRaises(ValueError) as ctx:
             self.create_detection(far_geometry(), zoneless)
         self.assertNotIn(COVERAGE_ERROR, str(ctx.exception))
+
+    def test_associates_covering_custom_zone_without_geo_zones_link(self):
+        # Regression: a custom zone whose geometry covers the detection must be
+        # associated on insert even when its geo_zones M2M does not list the
+        # detection's commune / department / region (a hand-drawn zone with no
+        # collectivities, or a ZAE zone straddling a department border). The old
+        # geo_zones__id__in pre-filter silently dropped these. `covers` still gates:
+        # a zone that does not cover the detection stays unassociated.
+        create_tile(x=267794, y=191428, z=19)
+
+        covering_zone = GeoCustomZone.objects.create(
+            name="Covering zone",
+            geometry=self.create_bbox_polygon(3.87, 43.60, 3.89, 43.62),
+        )  # deliberately no geo_zones association
+        far_zone = GeoCustomZone.objects.create(
+            name="Far zone",
+            geometry=self.create_bbox_polygon(4.10, 43.60, 4.12, 43.62),
+        )
+
+        detection = self.create_detection(montpellier_geometry(), self.tile_set)
+
+        associated = set(
+            detection.detection_object.geo_custom_zones.values_list("id", flat=True)
+        )
+        self.assertIn(covering_zone.id, associated)
+        self.assertNotIn(far_zone.id, associated)
 
     def test_null_geometry_zones_are_not_guarded(self):
         # GeoZone.geometry is nullable; a tile set whose only zones lack a geometry

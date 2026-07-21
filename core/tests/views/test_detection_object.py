@@ -5,9 +5,15 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
 
+from core.models.geo_custom_zone import GeoCustomZone
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.geo_data import create_complete_geo_hierarchy
-from core.tests.fixtures.users import create_regular_user
+from core.tests.fixtures.users import (
+    add_user_to_group,
+    create_regular_user,
+    create_super_admin,
+    create_user_group,
+)
 from core.tests.fixtures.detection_data import (
     create_complete_detection_setup,
     create_detection_with_object,
@@ -167,3 +173,74 @@ class DetectionObjectViewSetTests(BaseAPITestCase):
 
             if new_obj_index is not None and old_obj_index is not None:
                 self.assertLess(new_obj_index, old_obj_index)
+
+
+class FromCoordinatesCustomZoneTests(BaseAPITestCase):
+    """A point outside every accessible custom zone (zone urbaine) cannot be searched."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_super_admin(email="fromcoord@test.com")
+        self.authenticate_user(self.user)
+        self.url = reverse("DetectionObjectViewSet-get-from-coordinates")
+
+    def _is_urban_block(self, response):
+        return (
+            response.status_code == status.HTTP_403_FORBIDDEN
+            and isinstance(response.data, dict)
+            and response.data.get("code") == "OUTSIDE_CUSTOM_ZONE"
+        )
+
+    def test_returns_outside_custom_zone_in_urban_area(self):
+        # an active zone exists elsewhere, but the queried point is covered by none
+        GeoCustomZone.objects.create(
+            name="Elsewhere",
+            geometry=self.create_bbox_polygon(4.10, 43.60, 4.12, 43.62),
+        )
+        response = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
+        self.assertTrue(self._is_urban_block(response))
+
+    def test_no_active_zone_anywhere_blocks_search(self):
+        response = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
+        self.assertTrue(self._is_urban_block(response))
+
+    def test_point_inside_custom_zone_is_not_blocked_as_urban(self):
+        GeoCustomZone.objects.create(
+            name="Covering",
+            geometry=self.create_bbox_polygon(3.87, 43.60, 3.89, 43.62),
+        )
+        response = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
+        # passes the custom-zone gate; downstream may 403 (no tile set) or 200/null,
+        # but it must NOT be the urban block.
+        self.assertFalse(self._is_urban_block(response))
+
+    def test_inactive_covering_zone_still_blocks(self):
+        GeoCustomZone.objects.create(
+            name="Inactive covering",
+            geometry=self.create_bbox_polygon(3.87, 43.60, 3.89, 43.62),
+            geo_custom_zone_status="INACTIVE",
+        )
+        response = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
+        self.assertTrue(self._is_urban_block(response))
+
+    def test_scoped_to_user_groups_custom_zones(self):
+        # The covering zone is real and active, but a regular user only reaches it if
+        # one of their user groups grants it — the heart of "accessible by the user".
+        covering_zone = GeoCustomZone.objects.create(
+            name="Group covering",
+            geometry=self.create_bbox_polygon(3.87, 43.60, 3.89, 43.62),
+        )
+        with_access = create_regular_user(email="withzone@test.com")
+        group = create_user_group(name="Zone group")
+        group.geo_custom_zones.add(covering_zone)
+        add_user_to_group(with_access, group)
+
+        without_access = create_regular_user(email="nozone@test.com")
+
+        self.authenticate_user(without_access)
+        blocked = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
+        self.assertTrue(self._is_urban_block(blocked))
+
+        self.authenticate_user(with_access)
+        allowed = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
+        self.assertFalse(self._is_urban_block(allowed))

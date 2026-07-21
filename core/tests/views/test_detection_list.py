@@ -1,6 +1,7 @@
 from django.urls import reverse
 from rest_framework import status
 
+from core.models.geo_custom_zone import GeoCustomZone
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.users import (
     create_super_admin,
@@ -27,6 +28,10 @@ class DetectionListViewSetTests(BaseAPITestCase):
         )
         add_user_to_group(self.regular, group)
         add_user_to_group(self.super_admin, group)
+        self.custom_zone = GeoCustomZone.objects.create(
+            name="Zone DL",
+            geometry=self.create_bbox_polygon(3.0, 43.0, 4.0, 44.0),
+        )
 
     def test_list_unauthenticated(self):
         url = reverse("DetectionListViewSet-list")
@@ -36,6 +41,14 @@ class DetectionListViewSetTests(BaseAPITestCase):
     def test_list_authenticated(self):
         self.authenticate_user(self.regular)
         url = reverse("DetectionListViewSet-list")
-        response = self.client.get(url)
+        response = self.client.get(
+            url, {"customZonesUuids": str(self.custom_zone.uuid)}
+        )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_list_without_custom_zones_returns_400(self):
+        self.authenticate_user(self.regular)
+        url = reverse("DetectionListViewSet-list")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

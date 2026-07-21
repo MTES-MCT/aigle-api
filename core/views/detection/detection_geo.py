@@ -29,6 +29,7 @@ from core.views.detection.utils import (
     BOOLEAN_CHOICES,
     filter_prescripted,
     filter_score,
+    require_custom_zones,
 )
 
 
@@ -91,6 +92,10 @@ class DetectionGeoFilter(FilterSet):
 
 class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
     filterset_class = DetectionGeoFilter
+
+    def list(self, request, *args, **kwargs):
+        require_custom_zones(request.query_params)
+        return super().list(request, *args, **kwargs)
 
     @action(methods=["post"], detail=False, url_path="multiple")
     def edit_multiple(self, request):

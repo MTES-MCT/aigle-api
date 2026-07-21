@@ -5,7 +5,7 @@ test database, so each test provisions that table (DDL is rolled back with the
 surrounding test transaction) and seeds it with rows before invoking the command.
 """
 
-from django.contrib.gis.geos import Point
+from django.contrib.gis.geos import Point, Polygon
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
@@ -302,6 +302,42 @@ class ImportCustomZonesCommandTests(BaseTestCase):
         zone = GeoCustomZone.objects.get(import_id=source_id)
         # The M2M is populated by associate_detections_to_custom_zones.
         self.assertIn(
+            detection_object.id,
+            list(zone.detection_objects.values_list("id", flat=True)),
+        )
+
+    def test_import_does_not_associate_detection_straddling_zone_boundary(self):
+        # The zone is HERAULT_POLYGON_WKT ((3.0,43.3)-(3.2,43.5)). A detection that
+        # crosses the x=3.2 edge is only partially inside — ST_Covers is false, so it
+        # must NOT be associated. Locks the fully-inside rule on the bulk recompute
+        # (a plain intersects would wrongly associate it).
+        _seed_categories("zfee")
+        source_id = _insert_source_row("zfee", "34")
+
+        tile_set = create_tile_set(name="Straddle TS")
+        tile = create_tile(x=2, y=2, z=18)
+        detection_object = create_detection_object()
+        create_detection(
+            detection_object=detection_object,
+            tile=tile,
+            tile_set=tile_set,
+            geometry=Polygon(
+                (
+                    (3.15, 43.35),
+                    (3.25, 43.35),
+                    (3.25, 43.45),
+                    (3.15, 43.45),
+                    (3.15, 43.35),
+                ),
+                srid=4326,
+            ),
+            batch_id="batch-straddle",
+        )
+
+        call_command("import_custom_zones")
+
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertNotIn(
             detection_object.id,
             list(zone.detection_objects.values_list("id", flat=True)),
         )

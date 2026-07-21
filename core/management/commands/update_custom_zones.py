@@ -11,7 +11,10 @@ def log_event(info: str):
 
 
 class Command(CommandRunTrackerMixin, BaseCommand):
-    help = "Refresh data after update geometry of a custom zone"
+    help = (
+        "Refresh data after update geometry of a custom zone: links the detections the "
+        "zone now covers and removes the links it does not cover anymore"
+    )
 
     def add_arguments(self, parser):
         parser.add_argument("--zones-uuids", action="append", required=False)
@@ -41,5 +44,6 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             custom_zone_ids=custom_zone_ids,
             batch_ids=batch_uuids,
             tile_set_uuids=tile_set_uuids,
+            remove_outdated=True,
             log_event=log_event,
         )

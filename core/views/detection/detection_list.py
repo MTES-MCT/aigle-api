@@ -45,6 +45,7 @@ from core.utils.string import to_array, to_bool, to_enum_array
 from core.views.detection.utils import (
     BOOLEAN_CHOICES,
     INTERFACE_DRAWN_CHOICES,
+    require_custom_zones,
 )
 from rest_framework.decorators import action
 from rest_framework import serializers
@@ -225,6 +226,8 @@ class DetectionListFilter(FilterSet):
         return queryset
 
     def filter_queryset(self, queryset):
+        require_custom_zones(self.data)
+
         collectivity_filter = UserPermission.from_request(
             self.request
         ).get_collectivity_filter(

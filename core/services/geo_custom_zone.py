@@ -20,6 +20,26 @@ def _noop_log(info: str) -> None:  # noqa: ARG001
     pass
 
 
+# Inverse of the association INSERT: drops the links of a zone that no detection of the
+# object is covered by anymore (zone geometry shrank/moved). The zone row is joined with
+# USING so a zone whose geometry is NULL matches nothing and keeps all its links.
+_DELETE_OUTDATED_LINKS_SQL = """
+    DELETE FROM {table} AS link
+    USING core_geozone zone
+    WHERE
+        zone.id = %s
+        AND zone.geometry IS NOT NULL
+        AND link.{zone_column} = zone.id
+        AND NOT EXISTS (
+            SELECT 1
+            FROM core_detection detec
+            WHERE
+                detec.detection_object_id = link.detectionobject_id
+                AND ST_Covers(zone.geometry, detec.geometry)
+        )
+"""
+
+
 class GeoCustomZoneService:
     @staticmethod
     def create_custom_zone(
@@ -160,16 +180,24 @@ class GeoCustomZoneService:
         custom_zone_ids: Iterable[int],
         batch_ids: Optional[List[str]] = None,
         tile_set_uuids: Optional[List[str]] = None,
+        remove_outdated: bool = False,
         log_event: Callable[[str], None] = _noop_log,
     ) -> None:
         """Populate the DetectionObject ↔ GeoCustomZone (and ↔ GeoSubCustomZone)
-        M2M tables for the given custom zones, based on spatial intersection
-        between each zone geometry and its detections' geometry.
+        M2M tables for the given custom zones. A detection belongs to a zone when the
+        zone geometry fully covers it (ST_Covers) — the same rule the on-insert path
+        uses (DetectionService._create_or_find_detection_object), so an object gets
+        the same zones however it was created.
 
         Filters detections by `batch_ids` (Detection.batch_id values) and
         `tile_set_uuids` (TileSet.uuid values). Either, when omitted, defaults to
         the full population: all distinct batches / all non-INDICATIVE-DEACTIVATED
         tile sets.
+
+        With `remove_outdated`, links the zone geometry no longer covers are deleted
+        too. Deletion is deliberately NOT scoped by batch/tile set: the M2M is per
+        DetectionObject, so a link survives as long as one detection of the object —
+        any batch, any tile set — is still covered.
 
         Writes the M2M directly via raw SQL (bypasses the m2m_changed signal), so
         this helper also schedules a count-cache invalidation on commit — the
@@ -234,14 +262,26 @@ class GeoCustomZoneService:
                     WHERE
                         detec.batch_id = ANY(%s)
                         AND detec.tile_set_id = ANY(%s)
-                        AND ST_Intersects(
-                            detec.geometry,
-                            (SELECT geometry FROM core_geozone WHERE id = %s)
+                        AND ST_Covers(
+                            (SELECT geometry FROM core_geozone WHERE id = %s),
+                            detec.geometry
                         )
                     ON CONFLICT DO NOTHING
                     """,
                     [zone.id, batch_ids, tile_set_ids, zone.id],
                 )
+
+                if remove_outdated:
+                    cursor.execute(
+                        _DELETE_OUTDATED_LINKS_SQL.format(
+                            table="core_detectionobject_geo_custom_zones",
+                            zone_column="geocustomzone_id",
+                        ),
+                        [zone.id],
+                    )
+                    log_event(
+                        f"Removed {cursor.rowcount} outdated link(s) from custom zone: {zone.name}"
+                    )
 
         sub_zones = [
             sub_zone for zone in zones for sub_zone in zone.sub_custom_zones.all()
@@ -261,14 +301,26 @@ class GeoCustomZoneService:
                     WHERE
                         detec.batch_id = ANY(%s)
                         AND detec.tile_set_id = ANY(%s)
-                        AND ST_Intersects(
-                            detec.geometry,
-                            (SELECT geometry FROM core_geozone WHERE id = %s)
+                        AND ST_Covers(
+                            (SELECT geometry FROM core_geozone WHERE id = %s),
+                            detec.geometry
                         )
                     ON CONFLICT DO NOTHING
                     """,
                     [sub_zone.id, batch_ids, tile_set_ids, sub_zone.id],
                 )
+
+                if remove_outdated:
+                    cursor.execute(
+                        _DELETE_OUTDATED_LINKS_SQL.format(
+                            table="core_detectionobject_geo_sub_custom_zones",
+                            zone_column="geosubcustomzone_id",
+                        ),
+                        [sub_zone.id],
+                    )
+                    log_event(
+                        f"Removed {cursor.rowcount} outdated link(s) from sub-custom zone: {sub_zone.name}"
+                    )
 
         # Raw-SQL M2M writes bypass m2m_changed; bump the count cache once for
         # the whole operation. on_commit defers under an open atomic block and

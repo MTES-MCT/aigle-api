@@ -21,6 +21,7 @@ from rest_framework import status
 
 from core.constants.geo import SRID
 from core.models.detection import Detection
+from core.models.geo_custom_zone import GeoCustomZone
 from core.models.tile_set import TileSetStatus, TileSetType
 from core.permissions.tile_set import TileSetPermission
 from core.permissions.user import UserPermission
@@ -114,6 +115,13 @@ class CacheDetectionVisibilityTests(BaseAPITestCase):
             detection_data=create_detection_data(),
         )
 
+        # the map list endpoint now requires at least one custom zone; associate det_a
+        self.custom_zone_mtp = GeoCustomZone.objects.create(
+            name="Zone MTP cache",
+            geometry=_bbox_polygon(MONTPELLIER_BBOX),
+        )
+        self.det_a.detection_object.geo_custom_zones.add(self.custom_zone_mtp)
+
     def _service_ids(self, user, bbox, **extra):
         params = {
             **bbox,
@@ -175,6 +183,7 @@ class CacheDetectionVisibilityTests(BaseAPITestCase):
             **MONTPELLIER_BBOX,
             "objectTypesUuids": str(self.object_type.uuid),
             "interfaceDrawn": "ALL",
+            "customZonesUuids": str(self.custom_zone_mtp.uuid),
         }
         self.authenticate_user(self.user_a)
         a_features = self.client.get(url, params).json().get("features", [])
@@ -239,6 +248,7 @@ class CacheDetectionVisibilityTests(BaseAPITestCase):
             **MONTPELLIER_BBOX,
             "objectTypesUuids": str(self.object_type.uuid),
             "interfaceDrawn": "ALL",
+            "customZonesUuids": str(self.custom_zone_mtp.uuid),
         }
         healthy = self.client.get(url, params)
         self.assertEqual(healthy.status_code, status.HTTP_200_OK)

@@ -1,4 +1,5 @@
 from django.db.models import Q
+from rest_framework.exceptions import ValidationError
 
 from core.models.detection import DetectionSource
 from core.models.detection_data import DetectionPrescriptionStatus
@@ -10,6 +11,16 @@ INTERFACE_DRAWN_CHOICES = (
     ("INSIDE_SELECTED_ZONES", "INSIDE_SELECTED_ZONES"),
     ("NONE", "NONE"),
 )
+
+
+def require_custom_zones(data) -> None:
+    """At least one zone à enjeux must be selected to list detections — detections
+    outside every custom zone (zones urbaines) must never be shown. The frontend
+    enforces this too (last zone can't be unticked)."""
+    if not data.get("customZonesUuids"):
+        raise ValidationError(
+            {"customZonesUuids": ["Au moins une zone à enjeux doit être sélectionnée."]}
+        )
 
 
 def filter_score(queryset, name, value):
