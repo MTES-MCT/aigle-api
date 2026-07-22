@@ -9,8 +9,12 @@ from core.models.detection_data import (
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from rest_framework.status import HTTP_200_OK, HTTP_202_ACCEPTED
+from core.constants.detection import DETECTION_EDIT_PERMISSION_DENIED_MESSAGE
+from core.permissions.detection import DetectionPermission
 from core.repository.detection import (
     RepoFilterInterfaceDrawn,
 )
@@ -102,11 +106,13 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         serializer = DetectionMultipleInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        detections_queryset = self.get_queryset()
-        detections_queryset = detections_queryset.filter(
-            uuid__in=serializer.validated_data["uuids"]
-        )
-        detections = detections_queryset.all()
+        uuids = set(serializer.validated_data["uuids"])
+        detections = list(self.get_queryset().filter(uuid__in=uuids))
+
+        # All or nothing: a uuid matching no row must deny the whole selection instead
+        # of being silently dropped into a partial write.
+        if len(detections) != len(uuids):
+            raise PermissionDenied(DETECTION_EDIT_PERMISSION_DENIED_MESSAGE)
 
         from core.permissions.scope import resolve_scoped_user_group
         from core.services.detection_bulk_update import DetectionBulkUpdateService
@@ -148,10 +154,13 @@ class DetectionGeoViewSet(BaseViewSetMixin[Detection]):
         return queryset
 
     @action(methods=["patch"], detail=True, url_path="force-visible")
-    def force_visible(self, request, uuid):  # noqa: ARG002
-        queryset = self.get_queryset()
-        queryset = queryset.filter(uuid=uuid)
-        detection = queryset.first()
+    def force_visible(self, request, uuid):
+        # get_queryset() is unscoped and filter_queryset is not applied to @action
+        # routes, so this write has to be scoped explicitly.
+        detection = get_object_or_404(self.get_queryset(), uuid=uuid)
+        DetectionPermission.from_request(request).validate_detections_edit_permission(
+            detections=[detection]
+        )
 
         detection.detection_source = DetectionSource.INTERFACE_FORCED_VISIBLE
         detection.save()

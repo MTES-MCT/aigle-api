@@ -8,7 +8,7 @@ from core.models.detection_data import (
 )
 from core.models.detection import Detection
 from core.models.tile_set import TileSet, TileSetType
-from core.permissions.user import UserPermission
+from core.permissions.detection import DetectionPermission
 from core.serializers import UuidTimestampedModelSerializerMixin
 from django.db import transaction
 from dateutil.relativedelta import relativedelta
@@ -77,8 +77,8 @@ class DetectionDataInputSerializer(DetectionDataSerializer):
     def update(self, instance: DetectionData, validated_data):
         request = self.context["request"]
 
-        UserPermission.from_request(request).can_edit(
-            geometry=instance.detection.geometry, raise_exception=True
+        DetectionPermission.from_request(request).validate_detections_edit_permission(
+            detections=[instance.detection]
         )
 
         # if object get prescribed, we add data for the prescribed years

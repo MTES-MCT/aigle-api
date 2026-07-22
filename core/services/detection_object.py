@@ -8,6 +8,7 @@ from core.models.tile_set import TileSet, TileSetType
 from core.models.user_group import UserGroup
 from core.permissions.tile_set import TileSetPermission, TileSetPreview
 from core.services.prescription import PrescriptionService
+from core.permissions.detection import DetectionPermission
 from core.permissions.user import UserPermission
 
 
@@ -183,14 +184,15 @@ class DetectionObjectService:
         from core.services.detection import DetectionService
         from core.models.object_type import ObjectType
 
+        # Checked on the object, not on its most recent detection: an object whose tile
+        # sets are all deactivated has none, and would then be edited with no check.
+        DetectionPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).validate_detection_object_edit_permission(detection_object=detection_object)
+
         latest_detection = DetectionService.get_most_recent_detection(
             detection_object=detection_object
         )
-
-        if latest_detection:
-            UserPermission(user=user, scoped_user_group=scoped_user_group).can_edit(
-                geometry=latest_detection.geometry, raise_exception=True
-            )
 
         with transaction.atomic():
             if address is not None:

@@ -1,6 +1,6 @@
 import logging
 from collections import defaultdict
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List, Optional, Tuple
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.object_type_category import ObjectTypeCategoryObjectTypeStatus
@@ -17,14 +17,11 @@ from core.utils.cache import (
 
 from django.contrib.gis.geos import Point
 from django.contrib.gis.geos.collections import MultiPolygon
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 from django.contrib.gis.db.models.aggregates import Union
 from django.contrib.gis.db.models.functions import Intersection
 from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
-
-if TYPE_CHECKING:
-    from django.contrib.gis.geos import GEOSGeometry
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +53,7 @@ class UserPermission(
             scoped_user_group=resolve_scoped_user_group(request),
         )
 
-    def _is_unrestricted(self) -> bool:
+    def is_unrestricted(self) -> bool:
         return (
             self.user.user_role == UserRole.SUPER_ADMIN
             and self.scoped_user_group is None
@@ -68,7 +65,7 @@ class UserPermission(
         departments_uuids: Optional[List[str]] = None,
         regions_uuids: Optional[List[str]] = None,
     ) -> Optional[CollectivityRepoFilter]:
-        if self._is_unrestricted() and (
+        if self.is_unrestricted() and (
             communes_uuids is None
             and departments_uuids is None
             and regions_uuids is None
@@ -95,7 +92,7 @@ class UserPermission(
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
                 user_groups=self.scoped_user_group
             )
-        elif not self._is_unrestricted():
+        elif not self.is_unrestricted():
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
                 user_groups__user_user_groups__user=self.user
             )
@@ -117,22 +114,39 @@ class UserPermission(
             region_ids=sorted(region_ids) if region_ids else region_ids,
         )
 
-        if not self._is_unrestricted() and collectivity_filter.is_empty():
+        if not self.is_unrestricted() and collectivity_filter.is_empty():
             raise BadRequest("User do not have access to any collectivity")
 
         return collectivity_filter
 
-    def _accessible_geo_zones(self) -> QuerySet:
-        """Geo zones accessible to the user (or the impersonated group)."""
+    def accessible_geo_zones(
+        self, user_group_right: Optional[UserGroupRight] = None
+    ) -> QuerySet[GeoZone]:
+        """Geo zones accessible to the user, optionally restricted to those they hold
+        the given right on. Impersonation ignores the right: it implies full rights on
+        the impersonated group's zones."""
         if self.scoped_user_group:
             return GeoZone.objects.filter(user_groups=self.scoped_user_group)
-        return GeoZone.objects.filter(user_groups__user_user_groups__user=self.user)
+
+        if user_group_right is None:
+            return GeoZone.objects.filter(user_groups__user_user_groups__user=self.user)
+
+        # Both conditions MUST stay inside a single filter() call: split into chained
+        # filters, Django joins the multi-valued relation twice, so a user holding only
+        # READ on a group would be granted its zones through ANOTHER user's WRITE
+        # membership of that same group.
+        return GeoZone.objects.filter(
+            user_groups__user_user_groups__user=self.user,
+            user_groups__user_user_groups__user_group_rights__contains=[
+                user_group_right
+            ],
+        )
 
     def _compute_accessible_union(self) -> Optional[MultiPolygon]:
         """Union of the user's accessible geo-zone geometries (the cached value).
         Returns None for an empty/absent union so it is not cached."""
         union = (
-            self._accessible_geo_zones()
+            self.accessible_geo_zones()
             .aggregate(result=Union("geometry"))
             .get("result")
         )
@@ -145,7 +159,7 @@ class UserPermission(
         intersects_geometry: Optional[MultiPolygon] = None,
         bbox: Optional[bool] = False,
     ) -> Optional[MultiPolygon]:
-        if self._is_unrestricted():
+        if self.is_unrestricted():
             return intersects_geometry
 
         scoped_group_id = self.scoped_user_group.id if self.scoped_user_group else None
@@ -171,7 +185,7 @@ class UserPermission(
                     self.user.id,
                 )
                 result = (
-                    self._accessible_geo_zones()
+                    self.accessible_geo_zones()
                     .aggregate(
                         result=Intersection(Union("geometry"), intersects_geometry)
                     )
@@ -188,46 +202,10 @@ class UserPermission(
 
         return result
 
-    def _has_rights(
-        self,
-        geometry: MultiPolygon,
-        user_group_right: UserGroupRight,
-        raise_exception: bool = False,
-    ):
-        if self._is_unrestricted():
-            return True
-
-        if self.scoped_user_group:
-            geo_zones_editables = GeoZone.objects.filter(
-                user_groups=self.scoped_user_group,
-            )
-        else:
-            geo_zones_editables = GeoZone.objects.filter(
-                user_groups__user_user_groups__user=self.user,
-                user_groups__user_user_groups__user_group_rights__contains=[
-                    user_group_right
-                ],
-            )
-        geo_zones_editables = geo_zones_editables.annotate(
-            geometry_union=Union("geometry"),
-        )
-        geo_zones_editables = geo_zones_editables.filter(
-            geometry_union__contains=geometry
-        )
-
-        can_edit = geo_zones_editables.exists()
-
-        if raise_exception and not can_edit:
-            raise PermissionDenied(
-                "Vous n'avez pas les droits suffisants sur ces détections"
-            )
-
-        return can_edit
-
     def get_user_object_types_with_status(
         self,
     ) -> List[Tuple[ObjectType, ObjectTypeCategoryObjectTypeStatus]]:
-        if self._is_unrestricted():
+        if self.is_unrestricted():
             object_types = ObjectType.objects.order_by("name").all()
             return [
                 (object_type, ObjectTypeCategoryObjectTypeStatus.VISIBLE)
@@ -291,7 +269,7 @@ class UserPermission(
         points: List[Point],
         raise_if_has_no_right: Optional[UserGroupRight] = None,
     ) -> List[UserGroupRight]:
-        if self._is_unrestricted():
+        if self.is_unrestricted():
             return [
                 UserGroupRight.WRITE,
                 UserGroupRight.ANNOTATE,
@@ -299,7 +277,6 @@ class UserPermission(
             ]
 
         if self.scoped_user_group:
-            from django.db.models import Q
             from functools import reduce
             from operator import or_
 
@@ -328,7 +305,6 @@ class UserPermission(
 
             return res
 
-        from django.db.models import Q
         from functools import reduce
         from operator import or_
 
@@ -353,31 +329,6 @@ class UserPermission(
             raise PermissionDenied("Vous n'avez pas les droits pour éditer cette zone")
 
         return res
-
-    def can_edit(
-        self,
-        geometry: MultiPolygon,
-        raise_exception: bool = False,
-    ) -> bool:
-        return self._has_rights(
-            geometry=geometry,
-            user_group_right=UserGroupRight.WRITE,
-            raise_exception=raise_exception,
-        )
-
-    def can_read(
-        self,
-        geometry: MultiPolygon,
-        raise_exception: bool = False,
-    ) -> bool:
-        return self._has_rights(
-            geometry=geometry,
-            user_group_right=UserGroupRight.READ,
-            raise_exception=raise_exception,
-        )
-
-    def validate_geometry_edit_permission(self, geometry: "GEOSGeometry") -> None:
-        self.can_edit(geometry=geometry, raise_exception=True)
 
     def validate_user_group_access(self, user_group_ids: List[str]) -> None:
         if not user_group_ids:
