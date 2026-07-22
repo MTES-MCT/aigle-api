@@ -49,11 +49,16 @@ def _run_command(command_name: str, parameters: Dict[str, Any]) -> Dict[str, str
 def _queue_detection_imports(
     batch_tile_sets: List[Dict[str, Any]],
 ) -> List[Dict[str, str]]:
-    """One import_detections per batch, each scoped to its TileSet + batch id."""
+    """One import_detections per batch, each scoped to its TileSet + batch id.
+    --activate-tile-set flips the TileSet to VISIBLE when the import completes."""
     return [
         _run_command(
             "import_detections",
-            {"--tile-set-id": bts["tile_set_id"], "--batch-id": str(bts["batch_id"])},
+            {
+                "--tile-set-id": bts["tile_set_id"],
+                "--batch-id": str(bts["batch_id"]),
+                **({"--activate-tile-set": True} if bts["activate"] else {}),
+            },
         )
         for bts in batch_tile_sets
     ]
@@ -279,7 +284,8 @@ class DataDeploymentService:
         globally-unique name distinct between same-named geozones. Idempotent by name, so
         a re-run (or two same-year batches) reuses the existing TileSet. Batches without a
         tiles url or source year can't be deployed and are reported back as skipped.
-        Returns records of {batch_id, tile_set_id, name} for the detections import."""
+        Returns records of {batch_id, tile_set_id, name, activate} for the detections
+        import — `activate` marking the import that reveals a freshly created TileSet."""
         batch_tile_sets: List[Dict[str, Any]] = []
         skipped_batches: List[Dict[str, Any]] = []
         effective_geo_zones = DataDeploymentService._effective_geo_zones(geo_zone)
@@ -300,11 +306,15 @@ class DataDeploymentService:
             # get_or_create (by unique name) makes re-runs idempotent and narrows the
             # concurrent same-name race; a url collision still raises IntegrityError,
             # caught in run_deployment.
-            tile_set, _ = TileSet.objects.get_or_create(
+            tile_set, created = TileSet.objects.get_or_create(
                 name=name,
                 defaults={
                     "url": url,
-                    "tile_set_status": TileSetStatus.VISIBLE,
+                    # Born hidden so users never see a half-imported millesime; the
+                    # batch's import_detections flips it to VISIBLE when it completes.
+                    # `defaults` only applies on creation, so a REUSED TileSet keeps its
+                    # status — it may already have users on it.
+                    "tile_set_status": TileSetStatus.DEACTIVATED,
                     "date": date(int(year), 1, 1),
                     "tile_set_scheme": TileSetScheme.xyz,
                     "tile_set_type": DEPLOYMENT_TILE_SET_TYPE,
@@ -314,8 +324,23 @@ class DataDeploymentService:
             )
             tile_set.geo_zones.add(*effective_geo_zones)
             batch_tile_sets.append(
-                {"batch_id": batch["id"], "tile_set_id": tile_set.id, "name": name}
+                {
+                    "batch_id": batch["id"],
+                    "tile_set_id": tile_set.id,
+                    "name": name,
+                    "created": created,
+                }
             )
+
+        # Only a TileSet this deploy created gets activated, and only by the LAST import
+        # writing into it — two same-year batches share one TileSet, and the earlier
+        # import must not reveal one that is still filling.
+        created_tile_set_ids = {
+            bts["tile_set_id"] for bts in batch_tile_sets if bts.pop("created")
+        }
+        for bts in reversed(batch_tile_sets):
+            bts["activate"] = bts["tile_set_id"] in created_tile_set_ids
+            created_tile_set_ids.discard(bts["tile_set_id"])
 
         return batch_tile_sets, skipped_batches
 

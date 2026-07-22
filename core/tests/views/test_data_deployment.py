@@ -14,7 +14,7 @@ from django.utils import timezone
 
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.object_type_category import ObjectTypeCategory
-from core.models.tile_set import TileSet, TileSetScheme, TileSetType
+from core.models.tile_set import TileSet, TileSetScheme, TileSetStatus, TileSetType
 from core.models.user_group import UserGroup, UserGroupType
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import create_detection, create_tile_set
@@ -339,8 +339,10 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertEqual(data["userGroupName"], "Cabanisation Hérault (34)")
         self.assertEqual(len(data["queuedCommands"]), 5)
 
-        # TileSet: one per batch, BACKGROUND, xyz, dated to src_image_year, zoom 15-19
+        # TileSet: one per batch, BACKGROUND, xyz, dated to src_image_year, zoom 15-19,
+        # born DEACTIVATED so users don't see it until its import finishes
         tile_set = TileSet.objects.get(name="Hérault (34) 2024")
+        self.assertEqual(tile_set.tile_set_status, TileSetStatus.DEACTIVATED)
         self.assertEqual(tile_set.tile_set_type, TileSetType.BACKGROUND)
         self.assertEqual(tile_set.tile_set_scheme, TileSetScheme.xyz)
         self.assertEqual(tile_set.date, date(2024, 1, 1))
@@ -383,11 +385,45 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertEqual(params["import_parcels"], {"--department-code": "34"})
         self.assertEqual(
             params["import_detections"],
-            {"--tile-set-id": tile_set.id, "--batch-id": str(batch_id)},
+            {
+                "--tile-set-id": tile_set.id,
+                "--batch-id": str(batch_id),
+                # the tile set was created by this deploy, so its import reveals it
+                "--activate-tile-set": True,
+            },
         )
         self.assertEqual(
             params["import_sitadel"],
             {"--department-code": "34", "--persist-data": True},
+        )
+
+    def test_run_reusing_an_existing_tileset_leaves_its_status_alone(self):
+        """A re-deploy lands on the existing TileSet, which may have live users on it:
+        its status must not change, so its import never gets --activate-tile-set."""
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        batch_id = _insert_batch(
+            run_id, "batch-herault", tiles_url="s3://aigle-tiles/x/2024_herault"
+        )
+        existing = create_tile_set(
+            name="Hérault (34) 2024", tile_set_status=TileSetStatus.HIDDEN
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(self._url(self.department.id))
+
+        self.assertEqual(response.status_code, 200)
+        existing.refresh_from_db()
+        self.assertEqual(existing.tile_set_status, TileSetStatus.HIDDEN)
+
+        params = dict(
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        )
+        self.assertEqual(
+            params["import_detections"],
+            {"--tile-set-id": existing.id, "--batch-id": str(batch_id)},
         )
 
     def test_run_commune_uses_parent_department_and_collectivity_group(self):
@@ -730,7 +766,11 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
             "import_custom_zones": {"--department-code"},
             "create_tile": {"--geozone-uuid"},
             "import_parcels": {"--department-code"},
-            "import_detections": {"--tile-set-id", "--batch-id"},
+            "import_detections": {
+                "--tile-set-id",
+                "--batch-id",
+                "--activate-tile-set",
+            },
             "import_sitadel": {"--department-code", "--persist-data"},
         }
         for command, flags in expected_flags.items():
@@ -811,7 +851,11 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
                 ),
                 (
                     "import_detections",
-                    {"--tile-set-id": tile_set.id, "--batch-id": str(batch_id)},
+                    {
+                        "--tile-set-id": tile_set.id,
+                        "--batch-id": str(batch_id),
+                        "--activate-tile-set": True,
+                    },
                 ),
                 (
                     "import_sitadel",
