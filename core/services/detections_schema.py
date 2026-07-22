@@ -39,6 +39,8 @@ class DetectionRowSerializer(serializers.Serializer):
         choices=DetectionPrescriptionStatus.choices,
         required=False,
         allow_null=True,
+        # without a default the key is absent from validated_data when the row omits it
+        default=None,
     )
     detection_source = serializers.ChoiceField(
         choices=DetectionSource.choices,
