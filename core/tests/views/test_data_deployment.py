@@ -12,7 +12,7 @@ from unittest.mock import patch
 from django.db import connection
 from django.utils import timezone
 
-from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.object_type_category import ObjectTypeCategory
 from core.models.tile_set import TileSet, TileSetScheme, TileSetType
 from core.models.user_group import UserGroup, UserGroupType
@@ -20,6 +20,7 @@ from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import create_detection, create_tile_set
 from core.tests.fixtures.geo_data import (
     create_beziers_commune,
+    create_gard_department,
     create_herault_department,
     create_montpellier_commune,
     create_montpellier_mediterranee_epci,
@@ -458,6 +459,68 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         )
         self.assertEqual(group.user_group_type, UserGroupType.COLLECTIVITY)
         self.assertEqual(set(group.geo_zones.values_list("id", flat=True)), commune_ids)
+
+    def test_run_epci_links_custom_zones_of_its_collectivities_to_its_group(self):
+        # zones à enjeux imported by an earlier deploy are attached to their DEPARTMENT,
+        # while an EPCI group is scoped to its communes — the link must walk the
+        # commune/department hierarchy, or the group ends up with no zone at all and its
+        # users see an empty map.
+        self._create_cabanisation_category()
+        beziers = create_beziers_commune(department=self.department)
+        epci = create_montpellier_mediterranee_epci(
+            department=self.department, communes=[self.commune, beziers]
+        )
+
+        def _zone(name, color, geo_zone, status=GeoCustomZoneStatus.ACTIVE):
+            zone = GeoCustomZone.objects.create(
+                name=name, color=color, geo_custom_zone_status=status
+            )
+            zone.geo_zones.add(geo_zone)
+            return zone
+
+        department_zone = _zone("ZAE Hérault", "#123456", self.department)
+        commune_zone = _zone("ZAE Béziers", "#234567", beziers)
+        inactive_zone = _zone(
+            "ZAE Hérault archivée",
+            "#654321",
+            self.department,
+            status=GeoCustomZoneStatus.INACTIVE,
+        )
+        other_department_zone = _zone("ZAE Gard", "#abcdef", create_gard_department())
+
+        run_id = _insert_run(epci.id, src_image_year=2024)
+        _insert_batch(
+            run_id, "batch-epci", tiles_url="s3://aigle-tiles/aerial/2024_epci"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid"):
+            response = self.client.post(self._url(epci.id))
+
+        self.assertEqual(response.status_code, 200)
+        group = UserGroup.objects.get(
+            name="Cabanisation Montpellier Méditerranée Métropole (243400017)"
+        )
+        # the department's zone AND a single commune's zone, but not the inactive one
+        # nor another department's
+        self.assertEqual(
+            set(group.geo_custom_zones.values_list("id", flat=True)),
+            {department_zone.id, commune_zone.id},
+        )
+        self.assertNotIn(
+            inactive_zone.id, group.geo_custom_zones.values_list("id", flat=True)
+        )
+        self.assertNotIn(
+            other_department_zone.id,
+            group.geo_custom_zones.values_list("id", flat=True),
+        )
+        # the department's DDTM group covers the whole department: its own zone + the
+        # zones of any of its communes
+        ddtm = UserGroup.objects.get(name="Cabanisation Hérault (34)")
+        self.assertEqual(
+            set(ddtm.geo_custom_zones.values_list("id", flat=True)),
+            {department_zone.id, commune_zone.id},
+        )
 
     def test_run_reuses_existing_department_ddtm_group(self):
         # a second deploy under the same department must reuse the one DDTM group

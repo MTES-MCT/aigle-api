@@ -2,8 +2,10 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 
 from core.models.geo_commune import GeoCommune
+from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.geo_department import GeoDepartment
 from core.models.geo_epci import GeoEpci
 from core.models.geo_zone import GeoZone, GeoZoneType
@@ -331,7 +333,35 @@ class DataDeploymentService:
         )
         user_group.geo_zones.add(*geo_zones)
         user_group.object_type_categories.add(cabanisation_category)
+        DataDeploymentService._link_custom_zones(user_group, geo_zones)
         return user_group
+
+    @staticmethod
+    def _link_custom_zones(user_group: UserGroup, geo_zones: List[GeoZone]) -> None:
+        """Give the group every ACTIVE zone à enjeux attached to its collectivities.
+        The whole app is gated on this M2M (GeoCustomZonePermission), so a group without
+        it sees an empty map. import_custom_zones does the mirror pass (zone -> existing
+        groups) for zones created after the group.
+
+        Both sides label their collectivities at any level of the hierarchy — a group is
+        scoped to communes (an EPCI expands to them) while an imported zone lists only
+        its department — so the group's zones are widened to the whole
+        commune/epci/department/region chain before intersecting the two M2Ms."""
+        zone_ids = {geo_zone.id for geo_zone in geo_zones}
+        related_ids = GeoCommune.objects.filter(
+            Q(id__in=zone_ids) | Q(department_id__in=zone_ids)
+        ).values_list("id", "epci_id", "department_id", "department__region_id")
+        scope_ids = zone_ids.union(*map(set, related_ids))
+        scope_ids.discard(None)  # communes without an epci
+
+        user_group.geo_custom_zones.add(
+            *GeoCustomZone.objects.filter(
+                geo_zones__id__in=scope_ids,
+                geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+            )
+            .distinct()
+            .values_list("id", flat=True)
+        )
 
     @staticmethod
     def _create_user_group(
