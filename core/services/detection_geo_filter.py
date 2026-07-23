@@ -11,6 +11,7 @@ from core.repository.detection import (
     RepoFilterCustomZone,
     RepoFilterInterfaceDrawn,
 )
+from core.utils.string import to_array
 
 
 class DetectionGeoFilterService:
@@ -32,25 +33,11 @@ class DetectionGeoFilterService:
         )
 
     def _get_object_types_uuids(self, filter_params: dict) -> List[str]:
-        object_types_uuids = (
-            filter_params.get("objectTypesUuids").split(",")
-            if filter_params.get("objectTypesUuids")
-            else []
+        return UserPermission(
+            self.user, scoped_user_group=self.scoped_user_group
+        ).resolve_object_type_uuids(
+            requested_uuids=to_array(filter_params.get("objectTypesUuids"))
         )
-
-        if not object_types_uuids:
-            user_permission = UserPermission(
-                self.user, scoped_user_group=self.scoped_user_group
-            )
-            object_types_with_status = (
-                user_permission.get_user_object_types_with_status()
-            )
-            object_types_uuids = [
-                object_type_with_status[0].uuid
-                for object_type_with_status in object_types_with_status
-            ]
-
-        return object_types_uuids
 
     def _apply_geographic_filtering(
         self, queryset: QuerySet, filter_params: dict

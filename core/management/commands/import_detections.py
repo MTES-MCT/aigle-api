@@ -31,7 +31,7 @@ from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.parcel import Parcel
 from core.models.tile import TILE_DEFAULT_ZOOM, Tile
-from core.models.tile_set import TileSet
+from core.models.tile_set import TileSet, TileSetStatus
 from core.models.user import User
 from core.constants.detection import PERCENTAGE_SAME_DETECTION_THRESHOLD
 from core.services.detection import DetectionService
@@ -113,13 +113,13 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         parser.add_argument("--clean-step", type=bool, default=False)
         parser.add_argument("--batch-id", type=str, required=True)
         parser.add_argument(
-            "--force",
+            "--activate-tile-set",
             action="store_true",
             default=False,
             help=(
-                "Re-import even if detections already exist for this batch_id. "
-                "Without it the command refuses to run on an already-imported batch, "
-                "so an accidental re-deploy can't duplicate detections."
+                "Flip the tile set to VISIBLE once the import completes. The deploy "
+                "creates its tile sets DEACTIVATED so users never see a half-imported "
+                "millesime, and passes this only for the tile sets it created."
             ),
         )
 
@@ -152,19 +152,17 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             "%Y-%m-%dT%H:%M:%SZ"
         )
 
-        # import_detections is NOT idempotent: re-running re-inserts every inference as a
-        # brand-new DetectionObject (the link step excludes the target tile set, and
-        # merge_double_detections can't collapse cross-object duplicates). The deploy flow
-        # never passes --force, so a second (accidental) deploy of an already-imported
-        # batch is blocked here; pass --force to deliberately re-import.
-        if (
-            not options["force"]
-            and Detection.objects.filter(batch_id=str(self.batch_id)).exists()
-        ):
-            raise CommandError(
-                f"Detections already imported for batch_id={self.batch_id}. "
-                "Re-running would duplicate them — pass --force to re-import anyway."
-            )
+        # Row-level idempotency: re-deploying a batch (or a Celery re-delivery of a long
+        # import) replays every source row, so skip the ones already imported FOR THIS
+        # BATCH. UniqueConstraint(batch_id, import_id) is the DB backstop; this set must
+        # match it exactly — scoping it on `deleted` would let a soft-deleted row through
+        # and its IntegrityError would abort the whole 10k-row flush, not just that row.
+        self.imported_import_ids = set(
+            Detection.objects.filter(
+                batch_id=str(self.batch_id), import_id__isnull=False
+            ).values_list("import_id", flat=True)
+        )
+        self.skipped_already_imported = 0
 
         inference_filter = InferenceFilter(batch_id=self.batch_id)
 
@@ -192,6 +190,11 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             self.insert_detections()
 
         self.insert_detections(force=True)
+        if self.skipped_already_imported:
+            log_event(
+                f"Skipped {self.skipped_already_imported} row(s) already imported "
+                f"for batch {self.batch_id}"
+            )
         TileSet.objects.filter(id=self.tile_set.id).update(
             last_import_ended_at=datetime.now()
         )
@@ -211,6 +214,14 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         if self.total_inserted_detections:
             log_event("Refreshing deployed-data cache after detections import")
             DeployedDataService.refresh_cache()
+
+        if options["activate_tile_set"]:
+            # .save(), not .update(): post_save invalidates the 24h tileset-filter cache.
+            # Without it the layer would appear on the map while its detections stay
+            # filtered out — worse than staying hidden.
+            self.tile_set.tile_set_status = TileSetStatus.VISIBLE
+            self.tile_set.save(update_fields=["tile_set_status", "updated_at"])
+            log_event(f"TileSet now VISIBLE: {self.tile_set.name}")
 
         log_event(f"Detections import finished for batch: {self.batch_id}")
 
@@ -241,6 +252,12 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             return
 
         serialized_detection = serializer.validated_data
+
+        # Before any geometry/parcel work — the expensive part of this function.
+        if serialized_detection["id"] in self.imported_import_ids:
+            self.skipped_already_imported += 1
+            return
+        self.imported_import_ids.add(serialized_detection["id"])
 
         if self.clean_step:
             linked_detections_to_insert = [

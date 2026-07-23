@@ -21,7 +21,7 @@ from core.models.parcel import Parcel
 from core.models.tile import Tile, TILE_DEFAULT_ZOOM
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 from core.services.prescription import PrescriptionService
-from core.permissions.user import UserPermission
+from core.permissions.detection import DetectionPermission
 
 
 class DetectionService:
@@ -81,7 +81,11 @@ class DetectionService:
             .first()
         )
 
+    # Atomic because the rights check below can only run once the DetectionObject is
+    # resolved — which, for a new one, means it is already saved (with its custom-zone
+    # M2M rows). Without this, a denied creation returns 403 and still leaves it behind.
     @staticmethod
+    @transaction.atomic()
     def create_detection(
         geometry: GEOSGeometry,
         user,
@@ -91,10 +95,6 @@ class DetectionService:
         detection_data_data: Optional[Dict[str, Any]] = None,
         scoped_user_group=None,
     ) -> Detection:
-        UserPermission(
-            user=user, scoped_user_group=scoped_user_group
-        ).validate_geometry_edit_permission(geometry=geometry)
-
         tile_set = TileSet.objects.filter(uuid=tile_set_uuid).first()
         if not tile_set:
             raise ValueError(f"Tile set with uuid {tile_set_uuid} not found")
@@ -141,6 +141,14 @@ class DetectionService:
                 detection_object_data=detection_object_data,
                 tile_set=tile_set,
             )
+
+        # Creation is scoped by the object's commune like every other write — for a new
+        # object the one resolved from the centroid above, otherwise the one of the
+        # object the caller named or the drawn geometry got linked to ("force visible on
+        # another background"), which may sit outside the drawer's perimeter.
+        DetectionPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).validate_detection_object_edit_permission(detection_object=detection_object)
 
         detection_data = DetectionService._create_detection_data(
             detection_data_data=detection_data_data,
@@ -263,9 +271,9 @@ class DetectionService:
         user,
         scoped_user_group=None,
     ) -> Detection:
-        UserPermission(
+        DetectionPermission(
             user=user, scoped_user_group=scoped_user_group
-        ).validate_geometry_edit_permission(geometry=detection.geometry)
+        ).validate_detections_edit_permission(detections=[detection])
 
         object_type = ObjectType.objects.filter(uuid=object_type_uuid).first()
         if not object_type:

@@ -72,3 +72,16 @@ class Detection(
                 condition=models.Q(batch_id__isnull=False),
             ),
         ]
+        constraints = [
+            # One detection per source row of a batch, so re-deploying a batch can never
+            # duplicate its detections. Scoped by batch_id, NOT global: import_id holds
+            # ids from two different namespaces (detections.inference.id for real ML
+            # batches, another environment's core_detection.id for batches copied by
+            # aigle-utils/sql_scripts/import_from_preprod.sql), which do collide across
+            # batches. Also backs the import_id lookup import_detections does per batch.
+            models.UniqueConstraint(
+                fields=["batch_id", "import_id"],
+                condition=models.Q(import_id__isnull=False),
+                name="detection_batch_import_id_unique",
+            ),
+        ]

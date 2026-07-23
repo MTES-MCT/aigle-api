@@ -11,6 +11,7 @@ from django.db.models import Value
 
 from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.tile_set import TileSet, TileSetScheme, TileSetStatus, TileSetType
+from core.permissions.scope import resolve_scoped_user_group
 from core.services.tile_set import TileSetService
 from rest_framework import status
 
@@ -123,6 +124,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
             y=y,
             user=request.user,
             tile_set_types=[TileSetType.PARTIAL, TileSetType.BACKGROUND],
+            scoped_user_group=resolve_scoped_user_group(request),
         )
 
         if tile_set:

@@ -1,10 +1,9 @@
 from typing import List, Dict, Any, Optional
-from django.contrib.gis.geos import MultiPolygon
 from django.db import transaction
 
 from core.models.detection import Detection
 from core.models.object_type import ObjectType
-from core.permissions.user import UserPermission
+from core.permissions.detection import DetectionPermission
 from core.utils.cache import invalidate_count_caches
 from django.core.exceptions import BadRequest
 
@@ -53,10 +52,9 @@ class DetectionBulkUpdateService:
         return detections
 
     def _validate_edit_permissions(self, detections: List[Detection]) -> None:
-        geometries = [detection.geometry for detection in detections]
-        UserPermission(
+        DetectionPermission(
             user=self.user, scoped_user_group=self.scoped_user_group
-        ).can_edit(geometry=MultiPolygon(geometries), raise_exception=True)
+        ).validate_detections_edit_permission(detections=detections)
 
     def _validate_and_get_object_type(
         self, object_type_uuid: Optional[str]

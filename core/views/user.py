@@ -14,8 +14,10 @@ from common.views.base import BaseViewSetMixin
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user import UserRole
 from core.models.user_action_log import UserActionLog, UserActionLogAction
-from core.models.user_group import UserGroup, UserGroupRight
+from core.models.user_group import UserGroup, UserGroupRight, UserUserGroup
+from core.permissions.scope import resolve_scoped_user_group
 from core.serializers.user import UserInputSerializer, UserSerializer
+from core.serializers.user_group import UserUserGroupSerializer
 from core.services.user import UserService
 from core.utils.bulk_csv import (
     LIST_SEP,
@@ -118,7 +120,29 @@ class UserViewSet(
 
         user = UserService.get_user_profile_with_logging(user=user)
         serializer = UserSerializer(user, context={"request": request})
-        return Response(serializer.data)
+        data = serializer.data
+
+        scoped_user_group = resolve_scoped_user_group(request)
+        if scoped_user_group:
+            # Impersonation means "as if they only belonged to this group". The
+            # frontend seeds its map zones and commune filters from here, so leaving
+            # the SUPER_ADMIN's own groups in would show collectivities the
+            # impersonated group has no access to.
+            data["user_user_groups"] = [
+                UserUserGroupSerializer(
+                    UserUserGroup(
+                        user=user,
+                        user_group=scoped_user_group,
+                        user_group_rights=[
+                            UserGroupRight.WRITE,
+                            UserGroupRight.ANNOTATE,
+                            UserGroupRight.READ,
+                        ],
+                    )
+                ).data
+            ]
+
+        return Response(data)
 
     def get_serializer_class(self):
         if self.action in MODIFY_ACTIONS:

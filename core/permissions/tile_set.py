@@ -139,13 +139,22 @@ class TileSetPermission(
         for geo_zone in geo_zones_accessibles:
             geo_zones_accessibles_map[geo_zone["geo_zone_type"]].append(geo_zone["id"])
 
+        collectivity_filter = CollectivityRepoFilter(
+            commune_ids=geo_zones_accessibles_map.get(GeoZoneType.COMMUNE),
+            department_ids=geo_zones_accessibles_map.get(GeoZoneType.DEPARTMENT),
+            region_ids=geo_zones_accessibles_map.get(GeoZoneType.REGION),
+        )
+
+        # An empty collectivity filter makes the repository skip filtering entirely,
+        # which would hand a zone-less group EVERY tile set (i.e. every year). A user
+        # or an impersonated group with no accessible zone must see none.
+        if collectivity_filter.is_empty() and not self._is_unrestricted():
+            self.repository.initial_queryset = self.repository.initial_queryset.none()
+            return self.repository.initial_queryset
+
         self.repository.initial_queryset = self.repository.filter_(
             queryset=self.repository.initial_queryset,
-            filter_collectivities=CollectivityRepoFilter(
-                commune_ids=geo_zones_accessibles_map.get(GeoZoneType.COMMUNE),
-                department_ids=geo_zones_accessibles_map.get(GeoZoneType.DEPARTMENT),
-                region_ids=geo_zones_accessibles_map.get(GeoZoneType.REGION),
-            ),
+            filter_collectivities=collectivity_filter,
         )
 
         self.repository.initial_queryset = self.repository.filter_(
