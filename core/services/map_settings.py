@@ -19,6 +19,7 @@ from core.serializers.map_settings import (
 )
 from core.serializers.object_type import ObjectTypeSerializer
 from core.serializers.tile_set import TileSetMinimalSerializer
+from core.services.user import UserService
 
 
 class MapSettingsService:
@@ -58,11 +59,31 @@ class MapSettingsService:
                     ).data
                     for geo_custom_zone_category_data in geo_custom_zone_categories.values()
                 ],
-                "user_last_position": self.user.last_position,
+                "user_last_position": self._get_user_last_position(),
             }
         )
 
         return setting.initial_data
+
+    def _get_user_last_position(self):
+        """Where the frontend opens the map.
+
+        Normal flow: the user's own stored last position. Impersonation is the one
+        exception — see `_get_impersonated_last_position`."""
+        if self.scoped_user_group:
+            return self._get_impersonated_last_position()
+
+        return self.user.last_position
+
+    def _get_impersonated_last_position(self):
+        """A SUPER_ADMIN impersonating a group carries their OWN last position, which
+        sits outside the impersonated group — so the map would open in a random corner.
+        Open on the group's centroid instead; fall back to the stored position only if
+        the group has no geometry."""
+        return (
+            UserService.get_user_group_centroid([self.scoped_user_group])
+            or self.user.last_position
+        )
 
     def _get_tile_sets_data(self) -> tuple[List[Dict], Optional[Any]]:
         if self._is_unrestricted():

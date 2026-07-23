@@ -264,6 +264,33 @@ class UserPermission(
 
         return sorted(object_types_with_status, key=lambda x: x[0].name)
 
+    def resolve_object_type_uuids(
+        self, requested_uuids: Optional[List[str]] = None
+    ) -> List[str]:
+        """Object type uuids the caller is allowed to query.
+
+        Passing none means "all the granted ones", not "no filter".
+
+        When impersonating, requested uuids are additionally intersected with the
+        group's grants so a stale URL cannot show a SUPER_ADMIN object types the
+        group does not own. Outside impersonation the requested list is honoured
+        as-is: many real groups have no object_type_categories configured, and
+        narrowing there would blank their map — a separate, pre-existing gap.
+        """
+        granted_uuids = [
+            object_type.uuid
+            for object_type, _ in self.get_user_object_types_with_status()
+        ]
+
+        if not requested_uuids:
+            return granted_uuids
+
+        if not self.scoped_user_group:
+            return requested_uuids
+
+        requested = {str(uuid) for uuid in requested_uuids}
+        return [uuid for uuid in granted_uuids if str(uuid) in requested]
+
     def get_user_group_rights(
         self,
         points: List[Point],

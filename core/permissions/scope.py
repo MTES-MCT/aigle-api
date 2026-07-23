@@ -13,6 +13,7 @@ which calls `resolve_scoped_user_group(request)` under the hood.
 
 from typing import Optional
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from core.models.user import UserRole
@@ -21,6 +22,11 @@ from core.models.user_group import UserGroup
 
 HEADER_NAME = "HTTP_X_USER_GROUP_UUID"
 _REQUEST_CACHE_ATTR = "_scoped_user_group_cache"
+
+# Returned when the header points at a group that no longer exists (deleted while
+# a client still had it stored). The frontend keys its recovery on this code, so
+# it must not change without updating aigle-frontend/src/utils/api.ts.
+UNKNOWN_SCOPED_USER_GROUP_CODE = "UNKNOWN_SCOPED_USER_GROUP"
 
 
 def resolve_scoped_user_group(request) -> Optional[UserGroup]:
@@ -52,10 +58,22 @@ def resolve_scoped_user_group(request) -> Optional[UserGroup]:
             "Seuls les utilisateurs SUPER_ADMIN peuvent utiliser le filtrage par groupe"
         )
 
-    user_group = UserGroup.objects.filter(uuid=user_group_uuid, deleted=False).first()
+    try:
+        user_group = UserGroup.objects.filter(
+            uuid=user_group_uuid, deleted=False
+        ).first()
+    except DjangoValidationError:
+        # A malformed uuid makes the UUIDField lookup raise, which would surface as a
+        # 500 on EVERY request. The client persists this value, so it must be a clean
+        # 400 it can recognise and recover from.
+        user_group = None
+
     if not user_group:
         raise ValidationError(
-            {"detail": f"Groupe utilisateur introuvable: {user_group_uuid}"}
+            {
+                "detail": f"Groupe utilisateur introuvable: {user_group_uuid}",
+                "code": UNKNOWN_SCOPED_USER_GROUP_CODE,
+            }
         )
 
     setattr(request, _REQUEST_CACHE_ATTR, user_group)

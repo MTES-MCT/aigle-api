@@ -228,9 +228,9 @@ class DetectionListFilter(FilterSet):
     def filter_queryset(self, queryset):
         require_custom_zones(self.data)
 
-        collectivity_filter = UserPermission.from_request(
-            self.request
-        ).get_collectivity_filter(
+        user_permission = UserPermission.from_request(self.request)
+
+        collectivity_filter = user_permission.get_collectivity_filter(
             communes_uuids=to_array(self.data.get("communesUuids")),
             departments_uuids=to_array(self.data.get("departmentsUuids")),
             regions_uuids=to_array(self.data.get("regionsUuids")),
@@ -256,7 +256,9 @@ class DetectionListFilter(FilterSet):
                 lookup=RepoFilterLookup.GTE, number=float(self.data.get("score", "0"))
             ),
             filter_parcel_uuid_in=to_array(self.data.get("parcelsUuids")),
-            filter_object_type_uuid_in=to_array(self.data.get("objectTypesUuids")),
+            filter_object_type_uuid_in=user_permission.resolve_object_type_uuids(
+                requested_uuids=to_array(self.data.get("objectTypesUuids"))
+            ),
             filter_custom_zone=RepoFilterCustomZone(
                 interface_drawn=RepoFilterInterfaceDrawn[
                     self.data.get(

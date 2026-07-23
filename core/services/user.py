@@ -90,7 +90,7 @@ class UserService:
                 )
 
                 if not user.last_position:
-                    user_group_centroid = UserService._get_user_group_centroid(
+                    user_group_centroid = UserService.get_user_group_centroid(
                         user_groups=list(
                             UserGroup.objects.filter(
                                 uuid__in=[
@@ -224,7 +224,7 @@ class UserService:
         transaction.on_commit(lambda: invalidate_caches_for_user(user_id))
 
     @staticmethod
-    def _get_user_group_centroid(user_groups: List[UserGroup]) -> Optional[Point]:
+    def get_user_group_centroid(user_groups: List[UserGroup]) -> Optional[Point]:
         if not user_groups:
             return None
 
