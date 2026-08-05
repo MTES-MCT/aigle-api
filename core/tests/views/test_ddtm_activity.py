@@ -18,6 +18,7 @@ from core.tests.fixtures.detection_data import (
     create_detection_object,
 )
 from core.tests.fixtures.geo_data import (
+    create_beziers_commune,
     create_gard_department,
     create_herault_department,
     create_montpellier_commune,
@@ -270,6 +271,27 @@ class DdtmActivityViewTests(BaseAPITestCase):
             [group["name"] for group in data["userGroups"]], [self.group_a.name]
         )
         self.assertEqual(data["userGroupsCount"], 1)
+        # The group's communes back the commune selector. group_a covers Montpellier.
+        self.assertEqual(
+            [commune["name"] for commune in data["userGroups"][0]["communes"]],
+            ["Montpellier"],
+        )
+
+    def test_summary_communes_for_a_collectivity_spanning_several_communes(self):
+        """A collectivity whose group covers several communes: the summary lists them
+        all so the client can offer one commune option per commune, all resolving to
+        this same group."""
+        beziers = create_beziers_commune(department=self.herault)
+        multi = create_typed_group("Métropole", [self.montpellier, beziers])
+        member = create_user(email="multi@test.com")
+        add_user_to_group(member, multi)
+        self.authenticate_user(member)
+
+        option = self.client.get(SUMMARY_URL).json()["userGroups"][0]
+        self.assertEqual(
+            sorted(commune["name"] for commune in option["communes"]),
+            ["Béziers", "Montpellier"],
+        )
 
     def test_own_group_activity_allowed_for_non_ddtm_member(self):
         self.authenticate_user(self.alice)

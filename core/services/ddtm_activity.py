@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from django.db import connection
-from django.db.models import Count, Min
+from django.db.models import Count, Min, Prefetch
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
@@ -48,6 +48,7 @@ from core.models.detection import Detection
 from core.models.detection_data import DetectionData
 from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
+from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user import User
 from core.models.user_group import UserGroup, UserGroupType, UserUserGroup
 
@@ -101,13 +102,38 @@ class DdtmActivityService:
         """What this caller may see, and the stat tiles for it. This is what tells the
         frontend which dashboard to render: `department_name` is set for a DDTM caller
         (department-wide view) and None for anyone else, who only gets the groups they
-        may read. Connections only (cheap)."""
+        may read. Connections only (cheap).
+
+        For the own-group dashboard, each group also carries the communes it covers, so
+        the client can offer a commune selector (a collectivity spanning several communes
+        appears once per commune). The communes come from the server, never from the
+        caller's local memberships — a scoped SUPER_ADMIN reads a group they don't
+        belong to. DDTM groups don't need them (their selector is over groups)."""
         department = DdtmActivityService._get_department(user, scoped_user_group)
-        groups = list(
-            DdtmActivityService._get_scoped_groups(department)
-            if department is not None
-            else DdtmActivityService._get_own_groups(user, scoped_user_group)
-        )
+        if department is not None:
+            groups = list(DdtmActivityService._get_scoped_groups(department))
+            communes_by_group = {}
+        else:
+            groups = list(
+                DdtmActivityService._get_own_groups(
+                    user, scoped_user_group
+                ).prefetch_related(
+                    Prefetch(
+                        "geo_zones",
+                        queryset=GeoZone.objects.filter(
+                            geo_zone_type=GeoZoneType.COMMUNE
+                        ).order_by("name"),
+                        to_attr="commune_zones",
+                    )
+                )
+            )
+            communes_by_group = {
+                group.id: [
+                    {"uuid": zone.uuid, "name": zone.name}
+                    for zone in group.commune_zones
+                ]
+                for group in groups
+            }
 
         since = DdtmActivityService._window_start()
         members_by_group, users_info = DdtmActivityService._get_memberships(groups)
@@ -129,7 +155,12 @@ class DdtmActivityService:
             "user_groups_count": len(groups),
             "active_user_groups_count": active_groups_count,
             "user_groups": [
-                {"uuid": group.uuid, "name": group.name} for group in groups
+                {
+                    "uuid": group.uuid,
+                    "name": group.name,
+                    "communes": communes_by_group.get(group.id, []),
+                }
+                for group in groups
             ],
         }
 

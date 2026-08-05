@@ -20,9 +20,17 @@ def parse_granularity(request) -> str:
     return value
 
 
+class DdtmActivityCommuneOptionSerializer(serializers.Serializer):
+    uuid = serializers.UUIDField()
+    name = serializers.CharField()
+
+
 class DdtmActivityUserGroupOptionSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     name = serializers.CharField()
+    # Communes this group covers (own-group dashboard's commune selector). Empty for a
+    # DDTM caller, whose selector is over groups.
+    communes = DdtmActivityCommuneOptionSerializer(many=True)
 
 
 class DdtmActivitySummarySerializer(serializers.Serializer):
