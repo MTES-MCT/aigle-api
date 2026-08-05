@@ -106,14 +106,27 @@ class SuperAdminRolePermission(BasePermission):
 
 class DdtmGroupPermission(BasePermission):
     """Members of a DDTM-type user group only — regardless of role (a SUPER_ADMIN
-    without a DDTM group is denied too)."""
+    without a DDTM group is denied too).
+
+    A SUPER_ADMIN impersonating a user group (X-User-Group-Uuid) acts *as* that group,
+    as everywhere else in the app: the impersonated group's type decides, so
+    impersonating a collectivity closes the DDTM-only endpoints even for a super-admin
+    who also sits in a DDTM group. Without that, the dashboard the client renders (built
+    from the scope-aware summary) and the endpoints it may call would disagree."""
 
     message = "Vous devez être membre d'un groupe DDTM pour accéder à cette ressource"
 
     def has_permission(self, request, view):
+        from core.permissions.scope import resolve_scoped_user_group
+
         user = request.user
         if not user or user.is_anonymous or user.user_role == UserRole.DEACTIVATED:
             return False
+
+        scoped_user_group = resolve_scoped_user_group(request)
+        if scoped_user_group is not None:
+            return scoped_user_group.user_group_type == UserGroupType.DDTM
+
         return user.user_user_groups.filter(
             user_group__user_group_type=UserGroupType.DDTM
         ).exists()

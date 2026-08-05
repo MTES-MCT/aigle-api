@@ -129,7 +129,7 @@ class DdtmActivityViewTests(BaseAPITestCase):
 
         # group_a members. Statuses (30-day window):
         #   alice: 7 actions, 0 connections           -> PILOT
-        #   frank: 3 actions, 0 connections           -> INACTIVE (< 7 and no connection)
+        #   frank: 3 actions, 0 connections           -> ACTIVE (>= 1 action, < 4)
         #   bob:   1 action,  1 connection            -> ACTIVE
         #   carol: nothing                            -> INACTIVE
         # Excluded from every stat: dave (staff), eve (member of a DDTM group).
@@ -249,20 +249,52 @@ class DdtmActivityViewTests(BaseAPITestCase):
     def test_users_unauthenticated(self):
         self.assertEqual(self.client.get(users_url(self.group_a.uuid)).status_code, 401)
 
-    def test_forbidden_for_non_ddtm_member(self):
+    def test_department_wide_reads_forbidden_for_non_ddtm_member(self):
+        """A collectivity member sees their own group's charts (below) but nothing
+        about the department, and never the per-user detail of any group."""
         self.authenticate_user(self.alice)
-        self.assertEqual(self.client.get(SUMMARY_URL).status_code, 403)
         self.assertEqual(self.client.get(GROUPS_URL).status_code, 403)
         self.assertEqual(self.client.get(GROUPS_ACTIVITY_URL).status_code, 403)
-        self.assertEqual(self.client.get(group_url(self.group_a.uuid)).status_code, 403)
         self.assertEqual(self.client.get(users_url(self.group_a.uuid)).status_code, 403)
+
+    def test_summary_for_non_ddtm_member_lists_own_groups_only(self):
+        """The summary is what tells the client which dashboard to render: no
+        department name -> own-group dashboard, listing only alice's group."""
+        self.authenticate_user(self.alice)
+        response = self.client.get(SUMMARY_URL)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertIsNone(data["departmentName"])
+        self.assertEqual(
+            [group["name"] for group in data["userGroups"]], [self.group_a.name]
+        )
+        self.assertEqual(data["userGroupsCount"], 1)
+
+    def test_own_group_activity_allowed_for_non_ddtm_member(self):
+        self.authenticate_user(self.alice)
+        response = self.client.get(group_url(self.group_a.uuid))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["name"], self.group_a.name)
+
+    def test_other_group_activity_is_not_found_for_non_ddtm_member(self):
+        """alice belongs to group_a only: every other group is out of her scope,
+        including one of the same department (group_b) — 404, not 403, so the API
+        never confirms a group she cannot read exists."""
+        self.authenticate_user(self.alice)
+        for uuid in (self.group_b.uuid, self.group_gard.uuid, self.ddtm_group.uuid):
+            self.assertEqual(self.client.get(group_url(uuid)).status_code, 404)
 
     def test_forbidden_for_super_admin_without_ddtm_group(self):
         self.authenticate_user(create_super_admin())
-        self.assertEqual(self.client.get(SUMMARY_URL).status_code, 403)
         self.assertEqual(self.client.get(GROUPS_URL).status_code, 403)
         self.assertEqual(self.client.get(GROUPS_ACTIVITY_URL).status_code, 403)
         self.assertEqual(self.client.get(users_url(self.group_a.uuid)).status_code, 403)
+        # Belongs to no group at all: an empty own-group dashboard, no group to read.
+        summary = self.client.get(SUMMARY_URL).json()
+        self.assertIsNone(summary["departmentName"])
+        self.assertEqual(summary["userGroups"], [])
+        self.assertEqual(self.client.get(group_url(self.group_a.uuid)).status_code, 404)
 
     # ----------------------------------------------------------------- summary
 
@@ -378,8 +410,10 @@ class DdtmActivityViewTests(BaseAPITestCase):
         # no_data_until_period = last month entirely before deployment.
         self.assertIsNotNone(data["noDataUntilPeriod"])
         self.assertLess(data["noDataUntilPeriod"], deployment_month)
+        # deployment_period = the period the deployment falls in (chart marker).
+        self.assertEqual(data["deploymentPeriod"], deployment_month)
 
-        # Periods before deployment are empty (rendered as striped columns).
+        # Periods before deployment are empty (no activity to show).
         for period in periods:
             if period["period"] < deployment_month:
                 self.assertEqual(
@@ -433,6 +467,13 @@ class DdtmActivityViewTests(BaseAPITestCase):
         self.assertEqual(len(periods), 8)
         for period in periods:
             self.assertRegex(period["period"], r"^\d{4}-Q[1-4]$")
+        # The deployment marker is expressed in the requested granularity, not in months.
+        self.assertRegex(data["deploymentPeriod"], r"^\d{4}-Q[1-4]$")
+        deployment = timezone.localtime(self.group_a_deployment)
+        self.assertEqual(
+            data["deploymentPeriod"],
+            f"{deployment.year:04d}-Q{(deployment.month - 1) // 3 + 1}",
+        )
         # Thresholds are fixed (not scaled by period length): alice's 7 ops this quarter
         # make her a pilot in the current quarter.
         self.assertEqual(periods[-1]["pilotCount"], 1)
@@ -504,6 +545,33 @@ class DdtmActivityViewTests(BaseAPITestCase):
         self.assertEqual(periods[0]["totalCount"], 0)
         self.assertEqual(periods[0]["inactiveCount"], 0)
 
+        # A group counts from its DEPLOYMENT, not from its members' creation: 2 months
+        # ago group_a was deployed (frank logged in 10 weeks ago) and active (alice's
+        # action + bob's connection), while group_b — nobody ever logged in — is not
+        # counted yet. Same boundary as the per-group view's "non déployé" line.
+        two_months_ago = periods[-3]
+        self.assertEqual(two_months_ago["totalCount"], 1)
+        self.assertEqual(two_months_ago["activeCount"], 1)
+
+    def test_groups_activity_group_detail(self):
+        """The per-group tiers backing the chart's counts: same classification, named."""
+        self.authenticate_user(self.ddtm_user)
+        data = self.client.get(GROUPS_ACTIVITY_URL).json()
+
+        tiers_by_name = {
+            group["name"]: group["tierByPeriod"] for group in data["groups"]
+        }
+        self.assertEqual(set(tiers_by_name), {self.group_a.name, self.group_b.name})
+
+        current_key = data["activityByPeriod"][-1]["period"]
+        self.assertEqual(tiers_by_name[self.group_a.name][current_key], "PILOT")
+        self.assertEqual(tiers_by_name[self.group_b.name][current_key], "INACTIVE")
+
+        # Periods before the groups existed carry no tier at all (not "inactive").
+        self.assertNotIn(
+            data["activityByPeriod"][0]["period"], tiers_by_name[self.group_a.name]
+        )
+
     def test_groups_activity_quarter_period_count(self):
         self.authenticate_user(self.ddtm_user)
         data = self.client.get(GROUPS_ACTIVITY_URL + "?granularity=SEMESTER").json()
@@ -533,6 +601,212 @@ class DdtmActivityViewTests(BaseAPITestCase):
         ):
             self.assertEqual(self.client.get(group_url(uuid)).status_code, 404)
             self.assertEqual(self.client.get(users_url(uuid)).status_code, 404)
+
+    # ------------------------------------- department resolution (single M2M join)
+
+    def test_collectivity_carrying_a_department_zone_is_not_a_ddtm_caller(self):
+        """A COLLECTIVITY group may carry a department zone (the admin form allows it).
+        Its members must still get the own-group dashboard: `user_groups` is
+        multi-valued, so resolving the department with two chained filters would let
+        "a DDTM group covers Hérault" and "a group I belong to covers Hérault" be
+        satisfied by two DIFFERENT groups and hand them the whole department."""
+        mallory = create_user(email="mallory@test.com")
+        add_user_to_group(mallory, self.group_dept_only)
+        self.authenticate_user(mallory)
+
+        summary = self.client.get(SUMMARY_URL).json()
+        self.assertIsNone(summary["departmentName"])
+        self.assertEqual(
+            [group["name"] for group in summary["userGroups"]],
+            [self.group_dept_only.name],
+        )
+
+        # No department scope: the other collectivities of Hérault stay unreadable.
+        self.assertEqual(self.client.get(group_url(self.group_a.uuid)).status_code, 404)
+        self.assertEqual(self.client.get(GROUPS_URL).status_code, 403)
+        self.assertEqual(self.client.get(GROUPS_ACTIVITY_URL).status_code, 403)
+
+    def test_ddtm_member_also_in_a_foreign_department_group_keeps_own_department(self):
+        """A DDTM Hérault agent who also belongs to a collectivity carrying the Gard
+        department zone must stay on Hérault — with two chained filters, Gard wins
+        (alphabetical first) and their own department is silently replaced."""
+        gard_collectivity = create_typed_group("Syndicat Gard", [self.gard])
+        add_user_to_group(self.ddtm_user, gard_collectivity)
+        self.authenticate_user(self.ddtm_user)
+
+        self.assertEqual(
+            self.client.get(SUMMARY_URL).json()["departmentName"], "Hérault"
+        )
+        # And no read access to the other department's groups or member emails.
+        self.assertEqual(
+            self.client.get(users_url(self.group_gard.uuid)).status_code, 404
+        )
+
+    # ------------------------------------------- super-admin group impersonation
+
+    def test_scoped_super_admin_acts_as_the_impersonated_collectivity(self):
+        """A SUPER_ADMIN sends X-User-Group-Uuid on every non-admin route, so the
+        dashboard must follow that scope like the rest of the app: impersonating a
+        collectivity gives that collectivity's own-group dashboard, and only it."""
+        self.authenticate_user(create_super_admin())
+
+        summary = self.client.get(
+            SUMMARY_URL, HTTP_X_USER_GROUP_UUID=str(self.group_a.uuid)
+        ).json()
+        self.assertIsNone(summary["departmentName"])
+        self.assertEqual(
+            [group["name"] for group in summary["userGroups"]], [self.group_a.name]
+        )
+
+        self.assertEqual(
+            self.client.get(
+                group_url(self.group_a.uuid),
+                HTTP_X_USER_GROUP_UUID=str(self.group_a.uuid),
+            ).status_code,
+            200,
+        )
+        # Not the impersonated group -> out of scope, even for a super-admin.
+        self.assertEqual(
+            self.client.get(
+                group_url(self.group_b.uuid),
+                HTTP_X_USER_GROUP_UUID=str(self.group_a.uuid),
+            ).status_code,
+            404,
+        )
+        # Department-wide reads and the per-user detail stay closed while acting as a
+        # collectivity.
+        for url in (GROUPS_URL, GROUPS_ACTIVITY_URL, users_url(self.group_a.uuid)):
+            self.assertEqual(
+                self.client.get(
+                    url, HTTP_X_USER_GROUP_UUID=str(self.group_a.uuid)
+                ).status_code,
+                403,
+            )
+
+    def test_scoped_super_admin_impersonating_a_ddtm_group_gets_the_department(self):
+        self.authenticate_user(create_super_admin())
+        headers = {"HTTP_X_USER_GROUP_UUID": str(self.ddtm_group.uuid)}
+
+        summary = self.client.get(SUMMARY_URL, **headers).json()
+        self.assertEqual(summary["departmentName"], "Hérault")
+        self.assertEqual(summary["userGroupsCount"], 2)
+
+        self.assertEqual(self.client.get(GROUPS_URL, **headers).status_code, 200)
+        self.assertEqual(
+            self.client.get(users_url(self.group_a.uuid), **headers).status_code, 200
+        )
+
+    def test_scope_overrides_the_super_admins_own_ddtm_membership(self):
+        """A super-admin who is also a DDTM member but impersonates a collectivity acts
+        as that collectivity — otherwise the dashboard the client renders (built from
+        the summary) and the endpoints it may call would disagree."""
+        super_admin = create_super_admin()
+        add_user_to_group(super_admin, self.ddtm_group)
+        self.authenticate_user(super_admin)
+
+        # Unscoped, they are a DDTM member: department dashboard.
+        self.assertEqual(
+            self.client.get(SUMMARY_URL).json()["departmentName"], "Hérault"
+        )
+
+        headers = {"HTTP_X_USER_GROUP_UUID": str(self.group_a.uuid)}
+        self.assertIsNone(
+            self.client.get(SUMMARY_URL, **headers).json()["departmentName"]
+        )
+        self.assertEqual(self.client.get(GROUPS_URL, **headers).status_code, 403)
+
+    def test_impersonating_a_collectivity_with_a_department_zone_stays_collectivity(
+        self,
+    ):
+        """Same trap as the unscoped path: the impersonated group's TYPE decides, not
+        the zones it happens to carry."""
+        self.authenticate_user(create_super_admin())
+        headers = {"HTTP_X_USER_GROUP_UUID": str(self.group_dept_only.uuid)}
+
+        summary = self.client.get(SUMMARY_URL, **headers).json()
+        self.assertIsNone(summary["departmentName"])
+        self.assertEqual(
+            [group["name"] for group in summary["userGroups"]],
+            [self.group_dept_only.name],
+        )
+        self.assertEqual(self.client.get(GROUPS_URL, **headers).status_code, 403)
+
+
+class DdtmActivityInternalUsersExcludedTests(BaseAPITestCase):
+    """Internal activity must never reach the stats, on ANY read path.
+
+    "Internal" = a staff account (is_staff, the aigle team) or a member of a DDTM group
+    (the state service watching the collectivities, not one of them). The fixture is a
+    collectivity group whose ONLY members are internal and heavily active: every figure
+    about it must come out empty. All read paths funnel their user ids through
+    DdtmActivityService._get_memberships, so this is the test that fails if a new one
+    ever forgets to."""
+
+    def setUp(self):
+        super().setUp()
+        herault = create_herault_department()
+        montpellier = create_montpellier_commune(department=herault)
+
+        self.ddtm_group = create_typed_group(
+            "DDTM Hérault", [herault], UserGroupType.DDTM
+        )
+        self.ddtm_user = create_user(email="ddtm@test.com")
+        add_user_to_group(self.ddtm_user, self.ddtm_group)
+
+        self.group = create_typed_group("Mairie interne", [montpellier])
+        self.staff = create_user(email="staff@aigle.beta.gouv.fr", is_staff=True)
+        self.ddtm_member = create_user(email="agent-ddtm@test.com")
+        add_user_to_group(self.ddtm_member, self.ddtm_group)
+
+        now_mid = mid_month(0)
+        for user in (self.staff, self.ddtm_member):
+            add_user_to_group(user, self.group)
+            set_last_login(user, timezone.now() - timedelta(weeks=20))
+            # Enough actions to reach the top tier, if they were ever counted.
+            for i in range(10):
+                single_action(
+                    user,
+                    DetectionControlStatus.CONTROLLED_FIELD,
+                    now_mid + timedelta(minutes=i),
+                )
+            log_connection(user, now_mid)
+            create_analytic_log(user, AnalyticLogType.REPORT_DOWNLOAD, now_mid)
+
+    def test_no_internal_activity_on_any_read_path(self):
+        self.authenticate_user(self.ddtm_user)
+
+        # Summary: the group exists, but nobody connected -> not active.
+        summary = self.client.get(SUMMARY_URL).json()
+        self.assertEqual(summary["userGroupsCount"], 1)
+        self.assertEqual(summary["activeUserGroupsCount"], 0)
+
+        # Groups table: no members, no activity, and no deployment date (the internal
+        # first logins must not date the group either).
+        row = self.client.get(GROUPS_URL).json()[0]
+        self.assertEqual(row["usersCount"], 0)
+        self.assertEqual(row["activeUsersCount"], 0)
+        self.assertEqual(row["pilotUsersCount"], 0)
+        self.assertIsNone(row["deploymentDate"])
+        self.assertIsNone(row["deployedSinceWeeks"])
+
+        # Per-user detail: no rows at all (no internal email is ever exposed).
+        self.assertEqual(self.client.get(users_url(self.group.uuid)).json(), [])
+
+        # Group charts: every period empty, on every series.
+        activity = self.client.get(group_url(self.group.uuid)).json()
+        self.assertIsNone(activity["deploymentDate"])
+        for period in activity["activityByPeriod"]:
+            self.assertEqual(period["totalCount"], 0)
+        for period in activity["controlStatusChangesByPeriod"]:
+            self.assertEqual(period["counts"], [])
+        for key in ("reportDownloadsByPeriod", "connectionsByPeriod"):
+            self.assertEqual(sum(period["count"] for period in activity[key]), 0)
+
+        # Department chart: a group with no countable member is never classified.
+        groups_activity = self.client.get(GROUPS_ACTIVITY_URL).json()
+        for period in groups_activity["activityByPeriod"]:
+            self.assertEqual(period["totalCount"], 0)
+        self.assertEqual(groups_activity["groups"][0]["tierByPeriod"], {})
 
 
 class DdtmActivityOrderingTests(BaseAPITestCase):

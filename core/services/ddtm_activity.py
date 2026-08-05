@@ -1,5 +1,8 @@
-"""Activity statistics served to DDTM members about the collectivity groups of their
-department (see the statistics.ddtm_activity views).
+"""Activity statistics about collectivity groups (see the statistics.ddtm_activity
+views). Two audiences, same numbers:
+- a DDTM member sees every collectivity group of their department;
+- anyone else sees only the groups they belong to (get_user_group_activity alone —
+  every department-wide read path is DDTM-only).
 
 Definitions:
 - "connection": one AnalyticLog USER_ACCESS row — written on every authenticated app
@@ -94,14 +97,19 @@ class DdtmActivityService:
     # ---------------------------------------------------------------- read paths
 
     @staticmethod
-    def get_summary(user) -> Optional[dict]:
-        """Stat tiles + section-2 select options. Connections only (cheap)."""
-        department = DdtmActivityService._get_department(user)
-        if department is None:
-            return None
+    def get_summary(user, scoped_user_group=None) -> dict:
+        """What this caller may see, and the stat tiles for it. This is what tells the
+        frontend which dashboard to render: `department_name` is set for a DDTM caller
+        (department-wide view) and None for anyone else, who only gets the groups they
+        may read. Connections only (cheap)."""
+        department = DdtmActivityService._get_department(user, scoped_user_group)
+        groups = list(
+            DdtmActivityService._get_scoped_groups(department)
+            if department is not None
+            else DdtmActivityService._get_own_groups(user, scoped_user_group)
+        )
 
         since = DdtmActivityService._window_start()
-        groups = list(DdtmActivityService._get_scoped_groups(department))
         members_by_group, users_info = DdtmActivityService._get_memberships(groups)
         connections = DdtmActivityService._connections_count_by_user(
             list(users_info.keys()), since
@@ -117,7 +125,7 @@ class DdtmActivityService:
         )
 
         return {
-            "department_name": department.name,
+            "department_name": department.name if department is not None else None,
             "user_groups_count": len(groups),
             "active_user_groups_count": active_groups_count,
             "user_groups": [
@@ -126,10 +134,10 @@ class DdtmActivityService:
         }
 
     @staticmethod
-    def get_user_group_rows(user) -> Optional[List[dict]]:
+    def get_user_group_rows(user, scoped_user_group=None) -> Optional[List[dict]]:
         """Per-group table rows (counts only — the per-user detail is a separate call
         so the groups table doesn't ship every member on every load)."""
-        department = DdtmActivityService._get_department(user)
+        department = DdtmActivityService._get_department(user, scoped_user_group)
         if department is None:
             return None
 
@@ -178,10 +186,14 @@ class DdtmActivityService:
         return rows
 
     @staticmethod
-    def get_user_group_users(user, user_group_uuid) -> Optional[List[dict]]:
+    def get_user_group_users(
+        user, user_group_uuid, scoped_user_group=None
+    ) -> Optional[List[dict]]:
         """One group's per-user rows (30-day window, 4 tiers), ordered by operational
         actions desc, then connections desc, then email. None if out of the DDTM scope."""
-        group = DdtmActivityService._get_scoped_group(user, user_group_uuid)
+        group = DdtmActivityService._get_scoped_group(
+            user, user_group_uuid, scoped_user_group
+        )
         if group is None:
             return None
 
@@ -202,7 +214,9 @@ class DdtmActivityService:
         return members
 
     @staticmethod
-    def get_user_group_activity(user, user_group_uuid, granularity) -> Optional[dict]:
+    def get_user_group_activity(
+        user, user_group_uuid, granularity, scoped_user_group=None
+    ) -> Optional[dict]:
         """One group's charts at the chosen granularity. Periods before the group's
         deployment are returned empty (all zero) and flagged via no_data_until_period so
         the UI can grey them out.
@@ -210,7 +224,9 @@ class DdtmActivityService:
         - control_status_changes_by_period: transitions split by the new status.
         - report_downloads_by_period / connections_by_period: AnalyticLog counts.
         All series cover the same non-staff, non-DDTM members."""
-        group = DdtmActivityService._get_scoped_group(user, user_group_uuid)
+        group = DdtmActivityService._get_scoped_group(
+            user, user_group_uuid, scoped_user_group
+        )
         if group is None:
             return None
 
@@ -242,7 +258,7 @@ class DdtmActivityService:
             if deployment_period is None or period["key"] < deployment_period
         ]
 
-        activity = DdtmActivityService._activity_tiers_by_period(
+        activity, _ = DdtmActivityService._activity_tiers_by_period(
             [[user_id] for user_id in member_ids],
             periods,
             ops_by_user_month,
@@ -257,6 +273,7 @@ class DdtmActivityService:
             "deployment_date": (
                 timezone.localtime(deployment).date() if deployment else None
             ),
+            "deployment_period": deployment_period,
             "no_data_until_period": pre_deploy_keys[-1] if pre_deploy_keys else None,
             "activity_by_period": activity,
             "control_status_changes_by_period": (
@@ -277,11 +294,13 @@ class DdtmActivityService:
         }
 
     @staticmethod
-    def get_groups_activity(user, granularity) -> Optional[dict]:
+    def get_groups_activity(
+        user, granularity, scoped_user_group=None
+    ) -> Optional[dict]:
         """Department-wide chart: each collectivity group classified into one tier per
         period (its members' activity aggregated), + the total group count. None if no
         department is linked to the user's DDTM group."""
-        department = DdtmActivityService._get_department(user)
+        department = DdtmActivityService._get_department(user, scoped_user_group)
         if department is None:
             return None
 
@@ -297,26 +316,37 @@ class DdtmActivityService:
             list(users_info.keys()), since
         )
 
-        # A group exists (has data) from the earliest creation of one of its members;
-        # before that it is not counted, not shown as inactive.
+        first_login_by_user = DdtmActivityService._first_login_by_user(
+            list(users_info.keys())
+        )
         created_month_by_user = DdtmActivityService._created_month_by_user(
             list(users_info.keys())
         )
         existence_months = [
-            DdtmActivityService._earliest_existence_month(
-                members_by_group.get(group.id, []), created_month_by_user
+            DdtmActivityService._group_existence_month(
+                members_by_group.get(group.id, []),
+                first_login_by_user,
+                created_month_by_user,
             )
             for group in groups
         ]
 
-        activity = DdtmActivityService._activity_tiers_by_period(
+        activity, tiers_by_group = DdtmActivityService._activity_tiers_by_period(
             [members_by_group.get(group.id, []) for group in groups],
             periods,
             ops_by_user_month,
             conns_by_user_month,
             existence_months=existence_months,
         )
-        return {"granularity": granularity, "activity_by_period": activity}
+        return {
+            "granularity": granularity,
+            "activity_by_period": activity,
+            # Which group sits in which tier, per period — the chart's counts, detailed.
+            "groups": [
+                {"uuid": group.uuid, "name": group.name, "tier_by_period": tiers}
+                for group, tiers in zip(groups, tiers_by_group)
+            ],
+        }
 
     # ------------------------------------------------------------------- scoping
 
@@ -337,9 +367,30 @@ class DdtmActivityService:
         return ACTIVITY_TIER_INACTIVE
 
     @staticmethod
-    def _get_department(user) -> Optional[GeoDepartment]:
-        """The department linked (via geo_zones) to the user's DDTM group. DDTM groups
-        are expected to carry exactly one department; ordered for determinism."""
+    def _get_department(user, scoped_user_group=None) -> Optional[GeoDepartment]:
+        """The department whose collectivity groups the caller may see, or None when
+        they get the own-group dashboard instead.
+
+        A SUPER_ADMIN impersonating a user group (X-User-Group-Uuid) acts *as* that
+        group, exactly as on every other page: the department comes from the scoped
+        group, so impersonating a collectivity gives the collectivity dashboard even
+        though the super-admin may also sit in a DDTM group. Otherwise it comes from
+        the user's own DDTM groups (expected to carry exactly one department; ordered
+        for determinism).
+
+        Both conditions of the unscoped lookup MUST stay in a single filter() call:
+        `user_groups` is multi-valued, so chaining them would join it twice and let a
+        DDTM group and a group the caller belongs to be two DIFFERENT groups — which
+        promotes a collectivity member whose group carries a department zone to the
+        department-wide dashboard."""
+        if scoped_user_group is not None:
+            if scoped_user_group.user_group_type != UserGroupType.DDTM:
+                return None
+            return (
+                GeoDepartment.objects.filter(user_groups=scoped_user_group)
+                .order_by("name")
+                .first()
+            )
         return (
             GeoDepartment.objects.filter(
                 user_groups__user_group_type=UserGroupType.DDTM,
@@ -364,12 +415,37 @@ class DdtmActivityService:
         )
 
     @staticmethod
-    def _get_scoped_group(user, user_group_uuid) -> Optional[UserGroup]:
-        department = DdtmActivityService._get_department(user)
-        if department is None:
-            return None
+    def _get_own_groups(user, scoped_user_group=None):
+        """The collectivity groups of the own-group dashboard: the impersonated group
+        for a scoped SUPER_ADMIN, the caller's own groups otherwise. A collectivity
+        member sees their own group and nothing else."""
+        groups = (
+            UserGroup.objects.filter(pk=scoped_user_group.pk)
+            if scoped_user_group is not None
+            else UserGroup.objects.filter(user_user_groups__user=user)
+        )
         return (
-            DdtmActivityService._get_scoped_groups(department)
+            groups.exclude(user_group_type=UserGroupType.DDTM)
+            .distinct()
+            .order_by("name")
+        )
+
+    @staticmethod
+    def _get_scoped_group(
+        user, user_group_uuid, scoped_user_group=None
+    ) -> Optional[UserGroup]:
+        """The group whose activity the caller may read: for a DDTM caller, any
+        collectivity group of their department; for anyone else, one of their own
+        groups (or the impersonated one). None (-> 404) for every other uuid."""
+        department = DdtmActivityService._get_department(user, scoped_user_group)
+        if department is not None:
+            return (
+                DdtmActivityService._get_scoped_groups(department)
+                .filter(uuid=user_group_uuid)
+                .first()
+            )
+        return (
+            DdtmActivityService._get_own_groups(user, scoped_user_group)
             .filter(uuid=user_group_uuid)
             .first()
         )
@@ -475,13 +551,16 @@ class DdtmActivityService:
         conns_by_user_month: Dict[Tuple[int, str], int],
         empty_period_keys=frozenset(),
         existence_months: Optional[List[Optional[str]]] = None,
-    ) -> List[dict]:
+    ) -> Tuple[List[dict], List[Dict[str, str]]]:
         """For each period, classify every entity (a list of member ids) into one tier
         from its members' aggregated ops/connections, and count entities per tier.
         `empty_period_keys` are returned all-zero (pre-deployment). `existence_months`
         (parallel to entities): an entity is skipped for periods ending before its
-        existence month — it has no data yet, rather than counting as inactive."""
+        existence month — it has no data yet, rather than counting as inactive.
+        Returns (per-period counts, per-entity {period key: tier} — skipped periods
+        absent)."""
         result = []
+        tiers_by_entity: List[Dict[str, str]] = [{} for _ in entities]
         for period in periods:
             if period["key"] in empty_period_keys:
                 result.append(
@@ -513,7 +592,9 @@ class DdtmActivityService:
                     for user_id in member_ids
                     for month in period["month_keys"]
                 )
-                tiers[DdtmActivityService._classify_tier(ops, conns)] += 1
+                tier = DdtmActivityService._classify_tier(ops, conns)
+                tiers[tier] += 1
+                tiers_by_entity[index][period["key"]] = tier
                 total += 1
             result.append(
                 {
@@ -525,7 +606,7 @@ class DdtmActivityService:
                     "total_count": total,
                 }
             )
-        return result
+        return result, tiers_by_entity
 
     @staticmethod
     def _control_status_changes_by_period(transitions, periods) -> List[dict]:
@@ -630,6 +711,25 @@ class DdtmActivityService:
                 "id", "created_at"
             )
         }
+
+    @staticmethod
+    def _group_existence_month(
+        member_ids, first_login_by_user, created_month_by_user
+    ) -> Optional[str]:
+        """The month from which a group has data in the department-wide chart: its
+        deployment month — the same boundary the per-group view draws its "non déployé"
+        line at, so both views tell the same story about the same period. A group where
+        nobody ever logged in has no deployment: it falls back to its earliest member
+        creation, so a group that never got started still shows up as inactive rather
+        than disappearing."""
+        deployment = DdtmActivityService._deployment_datetime(
+            member_ids, first_login_by_user
+        )
+        if deployment is not None:
+            return timezone.localtime(deployment).strftime("%Y-%m")
+        return DdtmActivityService._earliest_existence_month(
+            member_ids, created_month_by_user
+        )
 
     @staticmethod
     def _earliest_existence_month(member_ids, created_month_by_user) -> Optional[str]:
