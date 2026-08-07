@@ -59,6 +59,7 @@ class CommandMetadataTests(SimpleTestCase):
         # store_true actions have no argparse `type`; they must still be advertised as
         # bool so the form renders a checkbox instead of a free-text input.
         self.assertEqual(self.params["--force"]["type"], "bool")
+        self.assertEqual(self.params["--override"]["type"], "bool")
         self.assertEqual(self.params["--ignore-categories"]["type"], "bool")
 
     def test_repeatable_int_param_is_int_and_multiple(self):
@@ -117,9 +118,11 @@ class ParseParametersTests(SimpleTestCase):
 
     def test_bool_values_pass_through(self):
         parsed = parse_parameters(
-            self.COMMAND, {"--force": True, "--ignore-categories": False}
+            self.COMMAND,
+            {"--force": True, "--override": True, "--ignore-categories": False},
         )
         self.assertIs(parsed["--force"], True)
+        self.assertIs(parsed["--override"], True)
         self.assertIs(parsed["--ignore-categories"], False)
 
     def test_unknown_command_raises_bad_request(self):

@@ -328,6 +328,49 @@ class GeoCustomZoneService:
         transaction.on_commit(invalidate_count_caches)
 
     @staticmethod
+    def update_custom_zones_data(
+        zones_uuids: Optional[List[str]] = None,
+        zone_ids: Optional[List[int]] = None,
+        batch_ids: Optional[List[str]] = None,
+        tile_set_uuids: Optional[List[str]] = None,
+        log_event: Callable[[str], None] = _noop_log,
+    ) -> None:
+        """The refresh the `update_custom_zones` command performs: link the detections
+        each zone now covers AND drop the links it does not cover anymore.
+
+        `import_custom_zones` calls this for the zones an --override import replaced:
+        their geometry changed, so links the old geometry covered may now be stale, which
+        the plain create path (add-only) would leave behind.
+
+        The two filters AND together and each defaults to "no restriction" — i.e. every
+        zone in the country, which is what a bare `update_custom_zones` means. They differ
+        on the empty list: `zones_uuids=[]` stays "no restriction" (the command's original
+        behaviour, reachable from the run-command form as an empty field), while
+        `zone_ids=[]` means "no zone" so the override path can never widen by accident.
+        """
+        queryset = GeoCustomZone.objects
+        if zones_uuids:
+            queryset = queryset.filter(uuid__in=zones_uuids)
+        if zone_ids is not None:
+            queryset = queryset.filter(id__in=zone_ids)
+
+        custom_zone_ids = list(
+            queryset.filter(geometry__isnull=False).values_list("id", flat=True)
+        )
+
+        log_event(
+            f"Starting updating detection data for {len(custom_zone_ids)} zone(s)"
+        )
+
+        GeoCustomZoneService.associate_detections_to_custom_zones(
+            custom_zone_ids=custom_zone_ids,
+            batch_ids=batch_ids,
+            tile_set_uuids=tile_set_uuids,
+            remove_outdated=True,
+            log_event=log_event,
+        )
+
+    @staticmethod
     def get_filtered_queryset(
         user: "User",
         search_query: Optional[str] = None,

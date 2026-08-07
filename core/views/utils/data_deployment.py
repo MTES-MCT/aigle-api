@@ -80,6 +80,14 @@ def _parse_id_list(value):
     return [parsed for parsed in map(_parse_int, value) if parsed is not None]
 
 
+def _parse_bool(value):
+    """Body flags arrive as real JSON booleans from the admin UI; be lenient about the
+    string forms a hand-rolled call can send. Anything else is False."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"true", "1", "yes"}
+
+
 def _parse_date_or_none(value):
     """parse_date raises ValueError on a well-formed but calendar-invalid date
     (e.g. "2024-02-31"), not just None on a regex miss — treat both as no filter."""
@@ -113,17 +121,27 @@ def _serialize_batch(batch, deploy_status):
     }
 
 
-def _deployed_zae_layer_names(zaes):
-    """The zae layers already imported as a GeoCustomZone. Matched on import_layer_name
-    (stable) rather than name (admin-editable)."""
+def _deployed_zae_layers(zaes):
+    """The (department code, layer name) pairs already imported as a GeoCustomZone.
+
+    Matched on import_layer_name (stable) rather than name (admin-editable), and paired
+    with the department the zone is attached to: layer names repeat across departments
+    ("ZFEE"), so an unscoped name match reports a layer deployed in one department as
+    deployed in every other one. Soft-deleted zones don't count either — the import
+    ignores them, so there would be nothing there to redeploy over.
+
+    This status is what the admin UI offers the override option from, so a false
+    positive costs an operator a confusing (destructive-sounding) extra click.
+    """
     return set(
         GeoCustomZone.objects.filter(
-            import_layer_name__in={zae["layer_name"] for zae in zaes}
-        ).values_list("import_layer_name", flat=True)
+            deleted=False,
+            import_layer_name__in={zae["layer_name"] for zae in zaes},
+        ).values_list("geo_zones__geodepartment__insee_code", "import_layer_name")
     )
 
 
-def _serialize_zae(zae, deployed_zae_names):
+def _serialize_zae(zae, deployed_zae_layers):
     return {
         "id": zae["id"],
         "created_at": zae["created_at"],
@@ -134,7 +152,9 @@ def _serialize_zae(zae, deployed_zae_names):
         ),
         "year": zae["layer_year"],
         "deploy_status": (
-            "DEPLOYED" if zae["layer_name"] in deployed_zae_names else "NOT_DEPLOYED"
+            "DEPLOYED"
+            if (zae["department_code"], zae["layer_name"]) in deployed_zae_layers
+            else "NOT_DEPLOYED"
         ),
     }
 
@@ -168,7 +188,7 @@ def endpoint(request):
     ):
         zae_by_dept.setdefault(zae["department_code"], []).append(zae)
 
-    deployed_zae_names = _deployed_zae_layer_names(
+    deployed_zae_layers = _deployed_zae_layers(
         [zae for zaes in zae_by_dept.values() for zae in zaes]
     )
 
@@ -185,7 +205,7 @@ def endpoint(request):
                     for batch in batches_by_geozone.get(geozone_id, [])
                 ],
                 "zae_layers": [
-                    _serialize_zae(zae, deployed_zae_names)
+                    _serialize_zae(zae, deployed_zae_layers)
                     for zae in zae_by_dept.get(dept_codes.get(geozone_id), [])
                 ],
             }
@@ -237,7 +257,7 @@ def zae_endpoint(request):
     )
 
     zaes = DetectionsSchemaService.get_zae_layers(department_codes, q=q)
-    deployed_zae_names = _deployed_zae_layer_names(zaes)
+    deployed_zae_layers = _deployed_zae_layers(zaes)
     zae_by_dept = {}
     for zae in zaes:
         zae_by_dept.setdefault(zae["department_code"], []).append(zae)
@@ -256,7 +276,7 @@ def zae_endpoint(request):
             "department_name": (departments.get(code) or {}).get("name"),
             "geozone_id": (departments.get(code) or {}).get("id"),
             "zae_layers": [
-                _serialize_zae(zae, deployed_zae_names)
+                _serialize_zae(zae, deployed_zae_layers)
                 for zae in zae_by_dept.get(code, [])
             ],
         }
@@ -271,12 +291,17 @@ def run_endpoint(request, geozone_id):
     """Deploy a geozone's detections-schema data: create its per-batch TileSets and
     Cabanisation UserGroup inline, then queue the import commands. Optional body
     `batchIds` / `zaeLayerIds` restrict the deploy to the selected batches / zae layers
-    (absent = all); only the specified, in-scope items are deployed."""
+    (absent = all); only the specified, in-scope items are deployed. Optional body
+    `overrideCustomZones` replaces the custom zones the selected zae layers already have
+    instead of failing the import on them."""
     try:
         result = DataDeploymentService.run_deployment(
             geozone_id=geozone_id,
             batch_ids=_parse_id_list(request.data.get("batch_ids")),
             zae_layer_ids=_parse_id_list(request.data.get("zae_layer_ids")),
+            override_custom_zones=_parse_bool(
+                request.data.get("override_custom_zones")
+            ),
         )
     except (ValueError, BadRequest) as error:
         # ValueError = our validation (geozone/category/conflict); BadRequest = a command
@@ -303,10 +328,16 @@ def run_batch_endpoint(request, geozone_id, batch_id):
 @permission_classes([SuperAdminRolePermission])
 def run_zae_endpoint(request, geozone_id, zae_id):
     """Deploy a single zae layer (zone à enjeux) for an already-deployed geozone:
-    import that source row as a GeoCustomZone."""
+    import that source row as a GeoCustomZone. Optional body `overrideCustomZones`
+    replaces the custom zone it conflicts with — required to redeploy a layer that is
+    already deployed, which the import would otherwise skip."""
     try:
         result = DataDeploymentService.run_zae_deployment(
-            geozone_id=geozone_id, zae_id=zae_id
+            geozone_id=geozone_id,
+            zae_id=zae_id,
+            override_custom_zones=_parse_bool(
+                request.data.get("override_custom_zones")
+            ),
         )
     except (ValueError, BadRequest) as error:
         return Response({"detail": str(error)}, status=400)

@@ -267,20 +267,72 @@ class DataDeploymentViewTests(BaseAPITestCase):
         _insert_zae("34", "zrf", "Missing zone")
 
         # a GeoCustomZone imported from the zae layer (matched on import_layer_name,
-        # not the admin-editable name) -> DEPLOYED
-        GeoCustomZone.objects.create(
+        # not the admin-editable name) and attached to the layer's department -> DEPLOYED
+        zone = GeoCustomZone.objects.create(
             name="Renamed by an admin",
             import_layer_name="Deployed zone",
             geometry=self.create_polygon(
                 [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
             ),
         )
+        zone.geo_zones.add(self.department)
 
         self.authenticate_user(create_super_admin())
         zae_layers = self.client.get(ENDPOINT).json()["results"][0]["zaeLayers"]
         status_by_name = {z["name"]: z["deployStatus"] for z in zae_layers}
         self.assertEqual(status_by_name["Deployed zone"], "DEPLOYED")
         self.assertEqual(status_by_name["Missing zone"], "NOT_DEPLOYED")
+
+    def test_soft_deleted_zone_does_not_report_its_layer_as_deployed(self):
+        # The import ignores soft-deleted zones, so the status must too — it is what the
+        # UI offers "redeploy with override" from, and there is nothing left to override.
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "batch")
+        _insert_zae("34", "zfee", "Deleted zone")
+        _insert_zae("34", "zrf", "Live zone")
+
+        polygon = self.create_polygon(
+            [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
+        )
+        for layer_name, deleted in (("Deleted zone", True), ("Live zone", False)):
+            zone = GeoCustomZone.objects.create(
+                name=layer_name,
+                import_layer_name=layer_name,
+                deleted=deleted,
+                geometry=polygon,
+            )
+            zone.geo_zones.add(self.department)
+
+        self.authenticate_user(create_super_admin())
+        zae_layers = self.client.get(ENDPOINT).json()["results"][0]["zaeLayers"]
+        status_by_name = {z["name"]: z["deployStatus"] for z in zae_layers}
+        self.assertEqual(status_by_name["Deleted zone"], "NOT_DEPLOYED")
+        # control: an identical but live zone DOES report deployed, so the assertion
+        # above is the deleted=False filter and not a mis-built fixture
+        self.assertEqual(status_by_name["Live zone"], "DEPLOYED")
+
+    def test_zone_deployed_in_another_department_does_not_count(self):
+        # Layer names repeat across departments ("ZFEE"): an unscoped name match would
+        # report Hérault's layer as deployed because Gard's is. The UI reads this status
+        # to pre-tick (and require) the destructive override option.
+        gard = create_gard_department(region=self.region)
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "batch")
+        _insert_zae("34", "zfee", "ZFEE")
+
+        zone = GeoCustomZone.objects.create(
+            name="ZFEE",
+            import_layer_name="ZFEE",
+            geometry=self.create_polygon(
+                [(4.3, 43.8), (4.4, 43.8), (4.4, 43.9), (4.3, 43.9), (4.3, 43.8)]
+            ),
+        )
+        zone.geo_zones.add(gard)
+
+        self.authenticate_user(create_super_admin())
+        zae_layers = self.client.get(ENDPOINT).json()["results"][0]["zaeLayers"]
+        status_by_name = {z["name"]: z["deployStatus"] for z in zae_layers}
+        self.assertEqual(status_by_name["ZFEE"], "NOT_DEPLOYED")
 
     def test_malformed_filters_do_not_crash(self):
         run_id = _insert_run(self.department.id)
@@ -467,13 +519,14 @@ class DataDeploymentZaeViewTests(BaseAPITestCase):
     def test_deployment_status(self):
         _insert_zae("34", "zfee", "Deployed zone")
         _insert_zae("34", "zrf", "Missing zone")
-        GeoCustomZone.objects.create(
+        zone = GeoCustomZone.objects.create(
             name="Renamed by an admin",
             import_layer_name="Deployed zone",
             geometry=self.create_polygon(
                 [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
             ),
         )
+        zone.geo_zones.add(self.department)
 
         self.authenticate_user(create_super_admin())
         layers = self.client.get(ZAE_ENDPOINT).json()["results"][0]["zaeLayers"]
@@ -922,6 +975,71 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         # only the selected id is imported, via --ids (not the whole department)
         self.assertEqual(params["import_custom_zones"], {"--ids": [keep]})
 
+    def test_run_with_override_passes_the_flag_to_import_custom_zones(self):
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        keep = _insert_zae("34", "zfee", "Keep zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id),
+                {"zaeLayerIds": [keep], "overrideCustomZones": True},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        params = dict(
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        )
+        self.assertEqual(
+            params["import_custom_zones"], {"--ids": [keep], "--override": True}
+        )
+
+    def test_run_without_override_omits_the_flag(self):
+        # the flag must be absent, not False: it is what tells the command to replace
+        # existing zones, and the admin UI only opts in explicitly
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        _insert_zae("34", "zfee", "A zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id),
+                {"overrideCustomZones": False},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        params = dict(
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        )
+        self.assertEqual(params["import_custom_zones"], {"--department-code": "34"})
+
+    def test_run_with_override_and_empty_zae_selection_still_skips_the_import(self):
+        # overriding must not resurrect a command the empty selection skipped
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        _insert_zae("34", "zfee", "A zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id),
+                {"zaeLayerIds": [], "overrideCustomZones": True},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        names = [c.kwargs["command_name"] for c in run_command.call_args_list]
+        self.assertNotIn("import_custom_zones", names)
+
     def test_run_with_empty_zae_selection_skips_import_custom_zones(self):
         self._create_cabanisation_category()
         run_id = _insert_run(self.department.id, src_image_year=2024)
@@ -960,7 +1078,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         NOT reject unknown/typo'd non-required flags, so assert membership against the
         introspected argparse spec directly (the source of truth the run-command UI uses)."""
         expected_flags = {
-            "import_custom_zones": {"--department-code"},
+            "import_custom_zones": {"--department-code", "--ids", "--override"},
             "create_tile": {"--geozone-uuid"},
             "import_parcels": {"--department-code"},
             "import_detections": {
@@ -1145,6 +1263,39 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
             for c in run_command.call_args_list
         ]
         self.assertEqual(calls, [("import_custom_zones", {"--ids": zae_id})])
+
+    def test_zae_run_with_override_passes_the_flag(self):
+        # the only way to redeploy an already-deployed layer: replace the custom zone
+        # it produced instead of failing (or silently skipping) on it
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id, zae_id),
+                {"overrideCustomZones": True},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            run_command.call_args.kwargs["parameters"],
+            {"--ids": zae_id, "--override": True},
+        )
+
+    def test_zae_run_without_override_omits_the_flag(self):
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id, zae_id),
+                {"overrideCustomZones": False},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_command.call_args.kwargs["parameters"], {"--ids": zae_id})
 
     def test_zae_run_via_commune_resolves_parent_department(self):
         # the zae belongs to the parent department; deploying through the commune works

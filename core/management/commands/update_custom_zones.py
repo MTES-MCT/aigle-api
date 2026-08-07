@@ -1,7 +1,6 @@
 from django.core.management.base import BaseCommand
 from core.management.base import CommandRunTrackerMixin
 
-from core.models.geo_custom_zone import GeoCustomZone
 from core.services.geo_custom_zone import GeoCustomZoneService
 from core.utils.logs_helpers import log_command_event
 
@@ -22,28 +21,11 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         parser.add_argument("--tile-set-uuids", action="append", required=False)
 
     def handle(self, *args, **options):
-        zones_uuids = options["zones_uuids"]
-        batch_uuids = options["batch_uuids"]
-        tile_set_uuids = options["tile_set_uuids"]
-
-        custom_zones_queryset = GeoCustomZone.objects
-        if zones_uuids:
-            custom_zones_queryset = custom_zones_queryset.filter(uuid__in=zones_uuids)
-
-        custom_zone_ids = list(
-            custom_zones_queryset.filter(geometry__isnull=False).values_list(
-                "id", flat=True
-            )
-        )
-
-        log_event(
-            f"Starting updating detection data for {len(custom_zone_ids)} zone(s)"
-        )
-
-        GeoCustomZoneService.associate_detections_to_custom_zones(
-            custom_zone_ids=custom_zone_ids,
-            batch_ids=batch_uuids,
-            tile_set_uuids=tile_set_uuids,
-            remove_outdated=True,
+        # The refresh itself lives in the service so `import_custom_zones --override`
+        # runs this exact code for the zones it replaced.
+        GeoCustomZoneService.update_custom_zones_data(
+            zones_uuids=options["zones_uuids"],
+            batch_ids=options["batch_uuids"],
+            tile_set_uuids=options["tile_set_uuids"],
             log_event=log_event,
         )
