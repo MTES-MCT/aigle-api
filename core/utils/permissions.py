@@ -130,3 +130,54 @@ class DdtmGroupPermission(BasePermission):
         return user.user_user_groups.filter(
             user_group__user_group_type=UserGroupType.DDTM
         ).exists()
+
+
+class SupervisingGroupPermission(BasePermission):
+    """Members of a group that SUPERVISES a territory: a DDTM group (its department) or
+    a collectivity group scoped to an EPCI (its member communes). Both get the same
+    territory-wide overview; a commune-scoped collectivity supervises nothing and is
+    denied.
+
+    Same impersonation rule as DdtmGroupPermission: a SUPER_ADMIN passing
+    X-User-Group-Uuid acts *as* that group, so the endpoints the client may call and the
+    dashboard it renders (built from the scope-aware summary) always agree.
+
+    The per-USER detail of a group stays DdtmGroupPermission — this widens the
+    territory-wide aggregates, not the members' identities."""
+
+    message = (
+        "Vous devez être membre d'un groupe DDTM ou d'un groupe EPCI "
+        "pour accéder à cette ressource"
+    )
+
+    @staticmethod
+    def _supervises(user_group) -> bool:
+        from core.models.geo_zone import GeoZoneType
+
+        if user_group.user_group_type == UserGroupType.DDTM:
+            return True
+        return user_group.geo_zones.filter(geo_zone_type=GeoZoneType.EPCI).exists()
+
+    def has_permission(self, request, view):
+        from core.models.geo_zone import GeoZoneType
+        from core.permissions.scope import resolve_scoped_user_group
+
+        user = request.user
+        if not user or user.is_anonymous or user.user_role == UserRole.DEACTIVATED:
+            return False
+
+        scoped_user_group = resolve_scoped_user_group(request)
+        if scoped_user_group is not None:
+            return self._supervises(scoped_user_group)
+
+        # Each lookup starts from `user.user_user_groups`, so every row is already a
+        # membership OF THIS USER and the group carrying the DDTM type / the EPCI zone
+        # is necessarily one of their own — no chained-filter trap here.
+        return (
+            user.user_user_groups.filter(
+                user_group__user_group_type=UserGroupType.DDTM
+            ).exists()
+            or user.user_user_groups.filter(
+                user_group__geo_zones__geo_zone_type=GeoZoneType.EPCI
+            ).exists()
+        )

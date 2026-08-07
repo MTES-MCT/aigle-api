@@ -3,7 +3,8 @@ from common.views.base import BaseViewSetMixin
 from django.db.models import Q
 
 from core.models.geo_department import GeoDepartment
-from core.permissions.user import UserPermission
+from core.models.geo_zone import GeoZoneType
+from core.views.utils.collectivity_scope import scope_by_collectivity
 from core.serializers.geo_department import (
     GeoDepartmentDetailSerializer,
     GeoDepartmentSerializer,
@@ -35,18 +36,7 @@ class GeoDepartmentFilter(FilterSet):
         return self._scope_by_collectivity(queryset).filter(uuid__in=value)
 
     def _scope_by_collectivity(self, queryset):
-        collectivity_filter = UserPermission.from_request(
-            self.request
-        ).get_collectivity_filter()
-
-        if collectivity_filter:
-            queryset = queryset.filter(
-                Q(communes__id__in=collectivity_filter.commune_ids or [])
-                | Q(id__in=collectivity_filter.department_ids or [])
-                | Q(region__id__in=collectivity_filter.region_ids or [])
-            )
-
-        return queryset
+        return scope_by_collectivity(queryset, self.request, GeoZoneType.DEPARTMENT)
 
     def filter_codes(self, queryset, name, value):
         codes = [code.strip() for code in value.split(",") if code.strip()]

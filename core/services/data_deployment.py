@@ -269,11 +269,14 @@ class DataDeploymentService:
 
     @staticmethod
     def _effective_geo_zones(geo_zone: GeoZone) -> List[GeoZone]:
-        """Geo zones to actually scope TileSets / UserGroups to. EPCI isn't a concept in
-        the app, so an EPCI expands to its communes; a department / commune maps to itself.
-        Assumes the EPCI's communes are already imported (import_geocommune)."""
-        if geo_zone.geo_zone_type == GeoZoneType.EPCI:
-            return list(GeoCommune.objects.filter(epci_id=geo_zone.id))
+        """Geo zones to actually scope TileSets / UserGroups to.
+
+        Every level — including EPCI — maps to itself: the permission layer reaches a
+        detection's collectivity through DetectionObject.commune and its FKs, so an
+        EPCI-scoped group resolves its communes without them being enumerated here.
+        (An EPCI used to be dissolved into its communes because the app had no EPCI
+        level; scoping to the EPCI itself now keeps a later commune-to-EPCI change
+        reflected automatically instead of frozen at deployment time.)"""
         return [geo_zone]
 
     @staticmethod
@@ -374,7 +377,7 @@ class DataDeploymentService:
         commune/epci/department/region chain before intersecting the two M2Ms."""
         zone_ids = {geo_zone.id for geo_zone in geo_zones}
         related_ids = GeoCommune.objects.filter(
-            Q(id__in=zone_ids) | Q(department_id__in=zone_ids)
+            Q(id__in=zone_ids) | Q(epci_id__in=zone_ids) | Q(department_id__in=zone_ids)
         ).values_list("id", "epci_id", "department_id", "department__region_id")
         scope_ids = zone_ids.union(*map(set, related_ids))
         scope_ids.discard(None)  # communes without an epci

@@ -461,9 +461,11 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertEqual(params["import_custom_zones"], {"--department-code": "34"})
         self.assertEqual(params["import_parcels"], {"--department-code": "34"})
 
-    def test_run_epci_scopes_tileset_and_group_to_its_communes(self):
-        # EPCI isn't a concept in the app: deploying one must scope the TileSet and the
-        # collectivity group to the EPCI's communes, not to the (invisible) EPCI zone.
+    def test_run_epci_scopes_tileset_and_group_to_the_epci_itself(self):
+        # EPCI is a real collectivity level: deploying one scopes the TileSet and the
+        # collectivity group to the EPCI zone. The permission layer reaches its communes
+        # through DetectionObject.commune.epci, so membership stays live instead of being
+        # frozen into a commune list at deployment time.
         self._create_cabanisation_category()
         beziers = create_beziers_commune(department=self.department)
         epci = create_montpellier_mediterranee_epci(
@@ -479,22 +481,19 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
             response = self.client.post(self._url(epci.id))
 
         self.assertEqual(response.status_code, 200)
-        commune_ids = {self.commune.id, beziers.id}
 
-        # TileSet scoped to the communes, not the EPCI
         tile_set = TileSet.objects.get(
             name="Montpellier Méditerranée Métropole (243400017) 2024"
         )
         self.assertEqual(
-            set(tile_set.geo_zones.values_list("id", flat=True)), commune_ids
+            set(tile_set.geo_zones.values_list("id", flat=True)), {epci.id}
         )
 
-        # Collectivity group scoped to the communes, not the EPCI
         group = UserGroup.objects.get(
             name="Cabanisation Montpellier Méditerranée Métropole (243400017)"
         )
         self.assertEqual(group.user_group_type, UserGroupType.COLLECTIVITY)
-        self.assertEqual(set(group.geo_zones.values_list("id", flat=True)), commune_ids)
+        self.assertEqual(set(group.geo_zones.values_list("id", flat=True)), {epci.id})
 
     def test_run_epci_links_custom_zones_of_its_collectivities_to_its_group(self):
         # zones à enjeux imported by an earlier deploy are attached to their DEPARTMENT,

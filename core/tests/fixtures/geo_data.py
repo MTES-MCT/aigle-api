@@ -1,3 +1,4 @@
+from django.contrib.gis.db.models.aggregates import Union
 from django.contrib.gis.geos import Polygon
 from core.models import GeoRegion, GeoDepartment, GeoCommune, Parcel
 from core.models.geo_epci import GeoEpci
@@ -313,8 +314,46 @@ def create_nanterre_commune(department=None):
     return commune
 
 
+def _bbox_polygon(min_lon, min_lat, max_lon, max_lat):
+    return Polygon(
+        [
+            (min_lon, min_lat),
+            (max_lon, min_lat),
+            (max_lon, max_lat),
+            (min_lon, max_lat),
+            (min_lon, min_lat),
+        ],
+        srid=4326,
+    )
+
+
+def _attach_communes(epci, communes):
+    """Link the communes and set the EPCI geometry to their union — the same rule
+    `import_geoepcis` applies. Geometry and FK membership must describe the same
+    territory: a user group scoped to an EPCI derives its accessible geometry from the
+    EPCI polygon, so a polygon narrower than its members hides part of them."""
+    communes = list(communes or [])
+    if not communes:
+        return
+
+    for commune in communes:
+        commune.epci = epci
+        commune.save()
+
+    epci.geometry = GeoCommune.objects.filter(
+        id__in=[commune.id for commune in communes]
+    ).aggregate(result=Union("geometry"))["result"]
+    epci.save()
+
+
 def create_montpellier_mediterranee_epci(department=None, communes=None):
-    """An EPCI grouping the given communes (each gets its epci FK set)."""
+    """An EPCI grouping the given communes (each gets its epci FK set).
+
+    The geometry covers Montpellier and Béziers. It matters: a NULL-geometry zone is
+    treated as absent by every geometry-driven path (accessible-geometry union, group
+    centroid, tile-set coverage guard), so an EPCI permission test written against a
+    geometry-less fixture would pass vacuously.
+    """
     if department is None:
         department = create_herault_department()
     epci, _ = GeoEpci.objects.get_or_create(
@@ -322,11 +361,26 @@ def create_montpellier_mediterranee_epci(department=None, communes=None):
         defaults={
             "name": "Montpellier Méditerranée Métropole",
             "department": department,
+            "geometry": _bbox_polygon(3.15, 43.28, 3.95, 43.68),
         },
     )
-    for commune in communes or []:
-        commune.epci = epci
-        commune.save()
+    _attach_communes(epci, communes)
+    return epci
+
+
+def create_nimes_ales_epci(department=None, communes=None):
+    """A second EPCI, in the Gard — lets a test express "my EPCI vs another EPCI"."""
+    if department is None:
+        department = create_gard_department()
+    epci, _ = GeoEpci.objects.get_or_create(
+        siren_code="243000643",
+        defaults={
+            "name": "Nîmes Métropole",
+            "department": department,
+            "geometry": _bbox_polygon(4.02, 43.78, 4.42, 44.17),
+        },
+    )
+    _attach_communes(epci, communes)
     return epci
 
 

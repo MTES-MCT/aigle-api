@@ -1,11 +1,12 @@
 from typing import List, Optional
 from django.db.models import QuerySet
 
+from core.constants.collectivity import (
+    COLLECTIVITY_LEVELS,
+    ZONE_RELATION_LOOKUP,
+    model_for_level,
+)
 from core.constants.order_by import TILE_SETS_ORDER_BYS
-from core.models.geo_commune import GeoCommune
-from core.models.geo_department import GeoDepartment
-from core.models.geo_region import GeoRegion
-from core.models.geo_zone import GeoZoneType
 from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 from core.repository.base import (
     BaseRepository,
@@ -268,98 +269,34 @@ class TileSetRepository(
         queryset: QuerySet[TileSet],
         filter_collectivities: Optional[CollectivityRepoFilter] = None,
     ) -> QuerySet[TileSet]:
-        if filter_collectivities is not None and not filter_collectivities.is_empty():
-            q = Q()
-            queryset = queryset.annotate(geo_zones_count=Count("geo_zones"))
-            q |= Q(geo_zones_count=0)
+        if filter_collectivities is None or filter_collectivities.is_empty():
+            return queryset
 
-            if filter_collectivities.commune_ids:
-                q |= (
-                    (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.COMMUNE)
-                        & Q(geo_zones__id__in=filter_collectivities.commune_ids)
-                    )
-                    | (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.DEPARTMENT)
-                        & Q(
-                            geo_zones__id__in=Subquery(
-                                GeoCommune.objects.filter(
-                                    id__in=filter_collectivities.commune_ids
-                                ).values("department__id")
-                            )
-                        )
-                    )
-                    | (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.REGION)
-                        & Q(
-                            geo_zones__id__in=Subquery(
-                                GeoCommune.objects.filter(
-                                    id__in=filter_collectivities.commune_ids
-                                ).values("department__region__id")
-                            )
-                        )
+        queryset = queryset.annotate(geo_zones_count=Count("geo_zones"))
+        # A tile set scoped to no collectivity at all is global.
+        q = Q(geo_zones_count=0)
+
+        # A tile set is visible when any of its zones is hierarchically related to any
+        # accessible collectivity — in EITHER direction. A commune user sees the tile
+        # set of their department; a department user sees the tile set of one of its
+        # communes. GeoZone ids are unique across levels (multi-table inheritance shares
+        # the parent pk), so matching on ids alone already implies the level.
+        for level, ids in filter_collectivities.levels():
+            q |= Q(geo_zones__id__in=ids)
+
+            for zone_level in COLLECTIVITY_LEVELS:
+                if zone_level == level:
+                    continue
+                lookup = ZONE_RELATION_LOOKUP[(zone_level, level)]
+                q |= Q(
+                    geo_zones__id__in=Subquery(
+                        model_for_level(zone_level)
+                        .objects.filter(**{f"{lookup}__in": ids})
+                        .values("id")
                     )
                 )
 
-            if filter_collectivities.department_ids:
-                q |= (
-                    (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.COMMUNE)
-                        & Q(
-                            geo_zones__id__in=Subquery(
-                                GeoDepartment.objects.filter(
-                                    id__in=filter_collectivities.department_ids
-                                ).values("communes__id")
-                            )
-                        )
-                    )
-                    | (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.DEPARTMENT)
-                        & Q(geo_zones__id__in=filter_collectivities.department_ids)
-                    )
-                    | (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.REGION)
-                        & Q(
-                            geo_zones__id__in=Subquery(
-                                GeoDepartment.objects.filter(
-                                    id__in=filter_collectivities.department_ids
-                                ).values("region__id")
-                            )
-                        )
-                    )
-                )
-
-            if filter_collectivities.region_ids:
-                q |= (
-                    (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.COMMUNE)
-                        & Q(
-                            geo_zones__id__in=Subquery(
-                                GeoRegion.objects.filter(
-                                    id__in=filter_collectivities.region_ids
-                                ).values("departments__communes__id")
-                            )
-                        )
-                    )
-                    | (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.DEPARTMENT)
-                        & Q(
-                            geo_zones__id__in=Subquery(
-                                GeoRegion.objects.filter(
-                                    id__in=filter_collectivities.region_ids
-                                ).values("departments__id")
-                            )
-                        )
-                    )
-                    | (
-                        Q(geo_zones__geo_zone_type=GeoZoneType.REGION)
-                        & Q(geo_zones__id__in=filter_collectivities.region_ids)
-                    )
-                )
-
-            queryset = queryset.filter(q)
-
-        return queryset
+        return queryset.filter(q)
 
     @staticmethod
     def _filter_detection_object_id_in(

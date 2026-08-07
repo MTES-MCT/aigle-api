@@ -54,6 +54,7 @@ class ParcelFilter(FilterSet):
     customZonesUuids = UuidInFilter(method="pass_")
 
     communesUuids = UuidInFilter(method="pass_")
+    epcisUuids = UuidInFilter(method="pass_")
     departmentsUuids = UuidInFilter(method="pass_")
     regionsUuids = UuidInFilter(method="pass_")
 

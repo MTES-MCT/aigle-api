@@ -81,15 +81,45 @@ class DateRepoFilter:
 @dataclass
 class CollectivityRepoFilter:
     commune_ids: Optional[List[int]] = None
+    epci_ids: Optional[List[int]] = None
     department_ids: Optional[List[int]] = None
     region_ids: Optional[List[int]] = None
 
     def is_empty(self) -> bool:
-        return (
-            self.commune_ids is None
-            and self.department_ids is None
-            and self.region_ids is None
-        )
+        return all(ids is None for _, ids in self._all_levels())
+
+    def _all_levels(self):
+        from core.constants.collectivity import COLLECTIVITY_LEVELS
+
+        return [
+            (level, getattr(self, f"{level.lower()}_ids"))
+            for level in COLLECTIVITY_LEVELS
+        ]
+
+    def levels(self):
+        """(GeoZoneType, ids) for the levels this filter actually restricts on."""
+        return [(level, ids) for level, ids in self._all_levels() if ids]
+
+
+def collectivity_q(
+    filter_collectivities: CollectivityRepoFilter, commune_prefix: str = ""
+) -> Q:
+    """Rows whose commune — reached through `commune_prefix` — belongs to any of the
+    filtered collectivities, walking foreign keys only (never geometry).
+
+    Fails closed: a filter naming no collectivity at all matches nothing, so a caller
+    that forgot to guard `is_empty()` hides rows instead of exposing them.
+    """
+    from core.constants.collectivity import COMMUNE_LOOKUP_BY_LEVEL
+
+    levels = filter_collectivities.levels()
+    if not levels:
+        return Q(pk__in=[])
+
+    q = Q()
+    for level, ids in levels:
+        q |= Q(**{f"{commune_prefix}{COMMUNE_LOOKUP_BY_LEVEL[level]}__in": ids})
+    return q
 
 
 class TimestampedBaseRepositoryMixin(

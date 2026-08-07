@@ -10,6 +10,7 @@ from django.db import connection, transaction
 
 from core.constants.geo import LAYER_TYPE_CATEGORY_NAME_MAP, SRID
 from core.models.geo_commune import GeoCommune
+from core.models.geo_epci import GeoEpci
 from core.models.geo_custom_zone import (
     GeoCustomZone,
     GeoCustomZoneStatus,
@@ -438,17 +439,23 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     ) -> None:
         """Give every user group operating in a zone's department access to the new
         custom zones (UserGroup.geo_custom_zones M2M) — matching the groups already
-        scoped, through their geo_zones M2M, to the department itself (DDTM) or any of
-        its communes (collectivities). Idempotent: .add() never duplicates a row."""
+        scoped, through their geo_zones M2M, to the department itself (DDTM) or to any
+        of its EPCIs or communes (collectivities). Idempotent: .add() never duplicates
+        a row."""
         for department_id, zone_ids in zone_ids_by_department_id.items():
             commune_ids = list(
                 GeoCommune.objects.filter(department_id=department_id).values_list(
                     "id", flat=True
                 )
             )
+            epci_ids = list(
+                GeoEpci.objects.filter(department_id=department_id).values_list(
+                    "id", flat=True
+                )
+            )
             user_groups = list(
                 UserGroup.objects.filter(
-                    geo_zones__id__in=[department_id, *commune_ids]
+                    geo_zones__id__in=[department_id, *epci_ids, *commune_ids]
                 ).distinct()
             )
             for user_group in user_groups:

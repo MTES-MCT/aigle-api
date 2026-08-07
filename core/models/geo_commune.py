@@ -12,6 +12,9 @@ class GeoCommune(GeoZone):
     department = models.ForeignKey(
         GeoDepartment, related_name="communes", on_delete=models.CASCADE
     )
+    # SET_NULL, not CASCADE: EPCI membership is a label on the commune, not its
+    # existence. Cascading would delete the communes — and their parcels and detection
+    # objects — when an EPCI is removed or re-imported.
     epci = models.ForeignKey(
-        GeoEpci, related_name="communes", on_delete=models.CASCADE, null=True
+        GeoEpci, related_name="communes", on_delete=models.SET_NULL, null=True
     )

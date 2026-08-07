@@ -1,6 +1,7 @@
 import logging
 from collections import defaultdict
 from typing import List, Optional, Tuple
+from core.constants.collectivity import COLLECTIVITY_LEVELS
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.object_type_category import ObjectTypeCategoryObjectTypeStatus
@@ -62,31 +63,31 @@ class UserPermission(
     def get_collectivity_filter(
         self,
         communes_uuids: Optional[List[str]] = None,
+        epcis_uuids: Optional[List[str]] = None,
         departments_uuids: Optional[List[str]] = None,
         regions_uuids: Optional[List[str]] = None,
     ) -> Optional[CollectivityRepoFilter]:
-        if self.is_unrestricted() and (
-            communes_uuids is None
-            and departments_uuids is None
-            and regions_uuids is None
-        ):
+        requested_uuids = {
+            GeoZoneType.COMMUNE: communes_uuids,
+            GeoZoneType.EPCI: epcis_uuids,
+            GeoZoneType.DEPARTMENT: departments_uuids,
+            GeoZoneType.REGION: regions_uuids,
+        }
+        has_requested_uuids = any(
+            uuids is not None for uuids in requested_uuids.values()
+        )
+
+        if self.is_unrestricted() and not has_requested_uuids:
             return None
 
         geo_zones_accessibles_qs = GeoZone.objects
 
         # TODO: rework this to make user user has access to uuids
-        if (
-            communes_uuids is not None
-            or departments_uuids is not None
-            or regions_uuids is not None
-        ):
-            geozone_uuids = (
-                (communes_uuids or [])
-                + (departments_uuids or [])
-                + (regions_uuids or [])
-            )
+        if has_requested_uuids:
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
-                uuid__in=geozone_uuids
+                uuid__in=[
+                    uuid for uuids in requested_uuids.values() for uuid in (uuids or [])
+                ]
             )
         elif self.scoped_user_group:
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
@@ -97,21 +98,18 @@ class UserPermission(
                 user_groups__user_user_groups__user=self.user
             )
 
-        geo_zones_accessibles = geo_zones_accessibles_qs.all()
-        collectivity_repo_filter_dict = defaultdict(list)
+        ids_by_level = defaultdict(list)
 
-        for geo_zone in geo_zones_accessibles:
-            collectivity_repo_filter_dict[geo_zone.geo_zone_type].append(geo_zone.id)
+        for geo_zone in geo_zones_accessibles_qs.all():
+            ids_by_level[geo_zone.geo_zone_type].append(geo_zone.id)
 
         # Sort the id lists so the tileset-filter cache hash (which stringifies this
         # filter) is stable regardless of DB row order, keeping the hit rate up.
-        commune_ids = collectivity_repo_filter_dict.get(GeoZoneType.COMMUNE)
-        department_ids = collectivity_repo_filter_dict.get(GeoZoneType.DEPARTMENT)
-        region_ids = collectivity_repo_filter_dict.get(GeoZoneType.REGION)
         collectivity_filter = CollectivityRepoFilter(
-            commune_ids=sorted(commune_ids) if commune_ids else commune_ids,
-            department_ids=sorted(department_ids) if department_ids else department_ids,
-            region_ids=sorted(region_ids) if region_ids else region_ids,
+            **{
+                f"{level.lower()}_ids": sorted(ids_by_level[level]) or None
+                for level in COLLECTIVITY_LEVELS
+            }
         )
 
         if not self.is_unrestricted() and collectivity_filter.is_empty():

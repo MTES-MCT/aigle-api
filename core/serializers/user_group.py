@@ -10,6 +10,7 @@ from rest_framework import serializers
 
 from core.serializers.utils.query import get_objects
 from core.serializers.utils.with_collectivities import (
+    FIELD_NAME_BY_LEVEL,
     WithCollectivitiesInputSerializerMixin,
     WithCollectivitiesSerializerMixin,
     extract_collectivities,
@@ -66,13 +67,8 @@ class UserGroupInputSerializer(
         if not collectivities:
             raise serializers.ValidationError(
                 {
-                    "communes_uuids": [
-                        "Une collectivité au moins doit être spécifiée."
-                    ],
-                    "departments_uuids": [
-                        "Une collectivité au moins doit être spécifiée."
-                    ],
-                    "regions_uuids": ["Une collectivité au moins doit être spécifiée."],
+                    f"{field}_uuids": ["Une collectivité au moins doit être spécifiée."]
+                    for field in FIELD_NAME_BY_LEVEL.values()
                 }
             )
         return collectivities

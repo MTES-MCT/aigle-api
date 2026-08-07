@@ -29,6 +29,7 @@ class ParcelFilterService:
             user=self.user, scoped_user_group=self.scoped_user_group
         ).get_collectivity_filter(
             communes_uuids=to_array(filter_params.get("communesUuids")),
+            epcis_uuids=to_array(filter_params.get("epcisUuids")),
             departments_uuids=to_array(filter_params.get("departmentsUuids")),
             regions_uuids=to_array(filter_params.get("regionsUuids")),
         )

@@ -13,6 +13,7 @@ from rest_framework import serializers
 
 from core.serializers.geo_sub_custom_zone import GeoSubCustomZoneMinimalSerializer
 from core.serializers.utils.with_collectivities import (
+    FIELD_NAME_BY_LEVEL,
     WithCollectivitiesInputSerializerMixin,
     WithCollectivitiesSerializerMixin,
     extract_collectivities,
@@ -108,9 +109,16 @@ class GeoCustomZoneInputSerializer(
     def update(self, instance: GeoCustomZone, validated_data):
         user = self.context["request"].user
 
+        # PATCH semantics: `geo_zones.set()` replaces EVERY level at once, so a payload
+        # that mentions no collectivity at all must leave them untouched rather than
+        # strip them. Without this, any partial edit — a rename, or an older client that
+        # does not know about `epcisUuids` yet — silently drops the zone's scoping.
+        collectivities_provided = any(
+            f"{field}_uuids" in validated_data for field in FIELD_NAME_BY_LEVEL.values()
+        )
         collectivities = extract_collectivities(validated_data)
 
-        if user.user_role == UserRole.SUPER_ADMIN:
+        if user.user_role == UserRole.SUPER_ADMIN and collectivities_provided:
             instance.geo_zones.set(collectivities)
 
         if user.user_role != UserRole.SUPER_ADMIN:
