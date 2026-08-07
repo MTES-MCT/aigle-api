@@ -23,9 +23,16 @@ urls = [
     ]
 ]
 
-# data_deployment exposes POST run endpoints (whole geozone, single batch, single
-# zae layer) alongside its GET list.
+# data_deployment exposes two more GET lists (flat batches, zae grouped by department)
+# and POST run endpoints (whole geozone, single batch, single zae layer) alongside its
+# GET list.
 for run_url, view, name in [
+    (
+        data_deployment.BATCHES_URL,
+        data_deployment.batches_endpoint,
+        "data-deployment-batches",
+    ),
+    (data_deployment.ZAE_URL, data_deployment.zae_endpoint, "data-deployment-zae"),
     (data_deployment.RUN_URL, data_deployment.run_endpoint, "data-deployment-run"),
     (
         data_deployment.BATCH_RUN_URL,

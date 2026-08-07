@@ -15,6 +15,8 @@ from core.services.detections_schema import DetectionsSchemaService
 from core.utils.permissions import SuperAdminRolePermission
 
 URL = "data-deployment/"
+BATCHES_URL = "data-deployment/batches/"
+ZAE_URL = "data-deployment/zae/"
 RUN_URL = "data-deployment/<int:geozone_id>/run/"
 BATCH_RUN_URL = "data-deployment/<int:geozone_id>/batch/<int:batch_id>/run/"
 ZAE_RUN_URL = "data-deployment/<int:geozone_id>/zae/<int:zae_id>/run/"
@@ -87,14 +89,65 @@ def _parse_date_or_none(value):
         return None
 
 
+def _pagination(request):
+    return (
+        min(max(_parse_int(request.GET.get("limit")) or 20, 1), 200),
+        max(_parse_int(request.GET.get("offset")) or 0, 0),
+    )
+
+
+def _paginated(count, results):
+    # Renderer camelizes snake_case keys -> camelCase JSON.
+    return Response(
+        {"count": count, "next": None, "previous": None, "results": results}
+    )
+
+
+def _serialize_batch(batch, deploy_status):
+    return {
+        "id": batch["id"],
+        "name": batch["batch_name"],
+        "created_at": batch["created_at"],
+        "tiles_url": batch_tiles_url_to_xyz(batch["batch_tiles_url"]),
+        "deploy_status": deploy_status,
+    }
+
+
+def _deployed_zae_layer_names(zaes):
+    """The zae layers already imported as a GeoCustomZone. Matched on import_layer_name
+    (stable) rather than name (admin-editable)."""
+    return set(
+        GeoCustomZone.objects.filter(
+            import_layer_name__in={zae["layer_name"] for zae in zaes}
+        ).values_list("import_layer_name", flat=True)
+    )
+
+
+def _serialize_zae(zae, deployed_zae_names):
+    return {
+        "id": zae["id"],
+        "created_at": zae["created_at"],
+        "name": zae["layer_name"],
+        "type": zae["layer_type"],
+        "type_name": LAYER_TYPE_CATEGORY_NAME_MAP.get(
+            zae["layer_type"], zae["layer_type"]
+        ),
+        "year": zae["layer_year"],
+        "deploy_status": (
+            "DEPLOYED" if zae["layer_name"] in deployed_zae_names else "NOT_DEPLOYED"
+        ),
+    }
+
+
 @api_view(["GET"])
 @permission_classes([SuperAdminRolePermission])
 def endpoint(request):
+    limit, offset = _pagination(request)
     count, geozones = DetectionsSchemaService.get_run_geozones(
         q=request.GET.get("q") or None,
         batch_created_at_min=_parse_date_or_none(request.GET.get("batchCreatedAtMin")),
-        limit=min(max(_parse_int(request.GET.get("limit")) or 20, 1), 200),
-        offset=max(_parse_int(request.GET.get("offset")) or 0, 0),
+        limit=limit,
+        offset=offset,
     )
 
     geozone_ids = [g["geozone_id"] for g in geozones]
@@ -115,13 +168,8 @@ def endpoint(request):
     ):
         zae_by_dept.setdefault(zae["department_code"], []).append(zae)
 
-    # A zae layer is deployed once a GeoCustomZone imported from it exists. Matched on
-    # import_layer_name (stable) rather than name (admin-editable).
-    zae_names = {zae["layer_name"] for zaes in zae_by_dept.values() for zae in zaes}
-    deployed_zae_names = set(
-        GeoCustomZone.objects.filter(import_layer_name__in=zae_names).values_list(
-            "import_layer_name", flat=True
-        )
+    deployed_zae_names = _deployed_zae_layer_names(
+        [zae for zaes in zae_by_dept.values() for zae in zaes]
     )
 
     results = []
@@ -133,40 +181,88 @@ def endpoint(request):
                 "geozone_name": names.get(geozone_id),
                 "created_at": geozone["created_at"],
                 "batches": [
-                    {
-                        "id": batch["id"],
-                        "name": batch["batch_name"],
-                        "created_at": batch["created_at"],
-                        "tiles_url": batch_tiles_url_to_xyz(batch["batch_tiles_url"]),
-                        "deploy_status": deployment_by_batch[batch["id"]],
-                    }
+                    _serialize_batch(batch, deployment_by_batch[batch["id"]])
                     for batch in batches_by_geozone.get(geozone_id, [])
                 ],
                 "zae_layers": [
-                    {
-                        "id": zae["id"],
-                        "created_at": zae["created_at"],
-                        "name": zae["layer_name"],
-                        "type": zae["layer_type"],
-                        "type_name": LAYER_TYPE_CATEGORY_NAME_MAP.get(
-                            zae["layer_type"], zae["layer_type"]
-                        ),
-                        "year": zae["layer_year"],
-                        "deploy_status": (
-                            "DEPLOYED"
-                            if zae["layer_name"] in deployed_zae_names
-                            else "NOT_DEPLOYED"
-                        ),
-                    }
+                    _serialize_zae(zae, deployed_zae_names)
                     for zae in zae_by_dept.get(dept_codes.get(geozone_id), [])
                 ],
             }
         )
 
-    # Renderer camelizes snake_case keys -> camelCase JSON.
-    return Response(
-        {"count": count, "next": None, "previous": None, "results": results}
+    return _paginated(count, results)
+
+
+@api_view(["GET"])
+@permission_classes([SuperAdminRolePermission])
+def batches_endpoint(request):
+    """Flat listing of every batch, searchable on batch name. Each row carries the
+    geozone of its run so it can be deployed straight from the list (a batch whose run
+    has no geozone has geozone_id null and isn't deployable)."""
+    limit, offset = _pagination(request)
+    count, batches = DetectionsSchemaService.get_batches(
+        q=request.GET.get("q") or None, limit=limit, offset=offset
     )
+
+    deployment_by_batch = _deployment_status_by_batch([b["id"] for b in batches])
+    names = dict(
+        GeoZone.objects.filter(
+            id__in={b["geozone_id"] for b in batches if b["geozone_id"]}
+        ).values_list("id", "name")
+    )
+
+    results = [
+        {
+            **_serialize_batch(batch, deployment_by_batch[batch["id"]]),
+            "uuid": str(batch["id"]),
+            "geozone_id": batch["geozone_id"],
+            "geozone_name": names.get(batch["geozone_id"]),
+        }
+        for batch in batches
+    ]
+    return _paginated(count, results)
+
+
+@api_view(["GET"])
+@permission_classes([SuperAdminRolePermission])
+def zae_endpoint(request):
+    """Zae layers grouped by department, searchable on layer name. The department's
+    GeoZone id (null when the department isn't in the app yet) is what the per-layer
+    deploy endpoint is addressed with."""
+    limit, offset = _pagination(request)
+    q = request.GET.get("q") or None
+    count, department_codes = DetectionsSchemaService.get_zae_department_codes(
+        q=q, limit=limit, offset=offset
+    )
+
+    zaes = DetectionsSchemaService.get_zae_layers(department_codes, q=q)
+    deployed_zae_names = _deployed_zae_layer_names(zaes)
+    zae_by_dept = {}
+    for zae in zaes:
+        zae_by_dept.setdefault(zae["department_code"], []).append(zae)
+
+    departments = {
+        row["insee_code"]: row
+        for row in GeoDepartment.objects.filter(insee_code__in=department_codes).values(
+            "insee_code", "id", "name"
+        )
+    }
+
+    results = [
+        {
+            "uuid": code,
+            "department_code": code,
+            "department_name": (departments.get(code) or {}).get("name"),
+            "geozone_id": (departments.get(code) or {}).get("id"),
+            "zae_layers": [
+                _serialize_zae(zae, deployed_zae_names)
+                for zae in zae_by_dept.get(code, [])
+            ],
+        }
+        for code in department_codes
+    ]
+    return _paginated(count, results)
 
 
 @api_view(["POST"])

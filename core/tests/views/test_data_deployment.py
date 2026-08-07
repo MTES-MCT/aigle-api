@@ -1,9 +1,10 @@
-"""Tests for the data-deployment listing endpoint (utils/data-deployment/).
+"""Tests for the data-deployment endpoints (utils/data-deployment/).
 
-The endpoint reads the external `detections` schema (run / batch / zae_layer)
+Three listings — runs (one row per geozone/collectivity, not per run), batches
+(flat, one row per batch) and zae (grouped by department) — plus the POST run
+endpoints. They read the external `detections` schema (run / batch / zae_layer)
 which doesn't exist in the test database, so each test provisions those tables
-(DDL is rolled back with the surrounding test transaction). The listing is one
-row per geozone (collectivity), not one per run.
+(DDL is rolled back with the surrounding test transaction).
 """
 
 from datetime import date
@@ -30,6 +31,8 @@ from core.tests.fixtures.users import create_regular_user, create_super_admin
 from core.utils.run_command import COMMANDS_AND_PARAMETERS_MAP, parse_parameters
 
 ENDPOINT = "/api/utils/data-deployment/"
+BATCHES_ENDPOINT = "/api/utils/data-deployment/batches/"
+ZAE_ENDPOINT = "/api/utils/data-deployment/zae/"
 RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/run/"
 BATCH_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/batch/{batch_id}/run/"
 ZAE_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/zae/{zae_id}/run/"
@@ -291,6 +294,201 @@ class DataDeploymentViewTests(BaseAPITestCase):
             )
             self.assertEqual(response.status_code, 200, bad_date)
             self.assertEqual(response.json()["count"], 1)  # bad date ignored
+
+
+class DataDeploymentBatchesViewTests(BaseAPITestCase):
+    """GET data-deployment/batches/ — flat listing of every batch, one row per batch
+    (not per geozone), each carrying the geozone of its run."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        self.commune = create_montpellier_commune(department=self.department)
+        _provision_schema()
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self.client.get(BATCHES_ENDPOINT).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self.client.get(BATCHES_ENDPOINT).status_code, 403)
+
+    def test_lists_every_batch_flat_with_its_geozone(self):
+        run_dept = _insert_run(self.department.id)
+        _insert_batch(
+            run_dept,
+            "batch-herault",
+            tiles_url="s3://aigle-tiles/aerial/languedoc/2024_herault",
+        )
+        run_commune = _insert_run(self.commune.id)
+        _insert_batch(run_commune, "batch-montpellier")
+
+        self.authenticate_user(create_super_admin())
+        response = self.client.get(BATCHES_ENDPOINT)
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(data["count"], 2)  # one row per batch, not per geozone
+        by_name = {b["name"]: b for b in data["results"]}
+        herault = by_name["batch-herault"]
+        self.assertEqual(herault["uuid"], str(herault["id"]))
+        self.assertEqual(herault["geozoneId"], self.department.id)
+        self.assertEqual(herault["geozoneName"], "Hérault")
+        self.assertEqual(
+            herault["tilesUrl"],
+            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.webp",
+        )
+        self.assertEqual(herault["deployStatus"], "NOT_DEPLOYED")
+        self.assertEqual(by_name["batch-montpellier"]["geozoneName"], "Montpellier")
+
+    def test_q_filters_on_batch_name_only(self):
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "pools-2024")
+        # "caravans" appears only in the tiles url — the batch listing searches names
+        _insert_batch(
+            run_id, "other-2024", tiles_url="s3://aigle-tiles/aerial/caravans-2024"
+        )
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT, {"q": "pools"}).json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["name"], "pools-2024")
+
+        self.assertEqual(
+            self.client.get(BATCHES_ENDPOINT, {"q": "caravans"}).json()["count"], 0
+        )
+
+    def test_batch_without_geozone_is_listed_but_not_deployable(self):
+        _insert_batch(_insert_run(None), "orphan-batch")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT).json()
+        self.assertEqual(data["count"], 1)
+        self.assertIsNone(data["results"][0]["geozoneId"])
+        self.assertIsNone(data["results"][0]["geozoneName"])
+
+    def test_deployment_statuses(self):
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "not-deployed")
+        running = _insert_batch(run_id, "running")
+        deployed = _insert_batch(run_id, "deployed")
+        create_detection(
+            batch_id=str(running),
+            tile_set=create_tile_set(name="ts-running", last_import_ended_at=None),
+        )
+        create_detection(
+            batch_id=str(deployed),
+            tile_set=create_tile_set(
+                name="ts-deployed", last_import_ended_at=timezone.now()
+            ),
+        )
+
+        self.authenticate_user(create_super_admin())
+        status_by_name = {
+            b["name"]: b["deployStatus"]
+            for b in self.client.get(BATCHES_ENDPOINT).json()["results"]
+        }
+        self.assertEqual(status_by_name["not-deployed"], "NOT_DEPLOYED")
+        self.assertEqual(status_by_name["running"], "DEPLOYMENT_RUNNING")
+        self.assertEqual(status_by_name["deployed"], "DEPLOYED")
+
+    def test_pagination(self):
+        run_id = _insert_run(self.department.id)
+        for index in range(3):
+            _insert_batch(run_id, f"batch-{index}")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT, {"limit": 2, "offset": 2}).json()
+        self.assertEqual(data["count"], 3)  # count is the unpaginated total
+        self.assertEqual(len(data["results"]), 1)
+
+
+class DataDeploymentZaeViewTests(BaseAPITestCase):
+    """GET data-deployment/zae/ — zae layers grouped by department, paginated over
+    the departments."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        _provision_schema()
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self.client.get(ZAE_ENDPOINT).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self.client.get(ZAE_ENDPOINT).status_code, 403)
+
+    def test_groups_layers_by_department(self):
+        _insert_zae("34", "zfee", "ZFEE Hérault")
+        _insert_zae("34", "zrf", "ZRF Hérault")
+        _insert_zae("30", "zi", "ZI Gard")
+
+        self.authenticate_user(create_super_admin())
+        response = self.client.get(ZAE_ENDPOINT)
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(data["count"], 2)  # one row per department
+        by_code = {group["departmentCode"]: group for group in data["results"]}
+
+        herault = by_code["34"]
+        self.assertEqual(herault["uuid"], "34")
+        self.assertEqual(herault["departmentName"], "Hérault")
+        self.assertEqual(herault["geozoneId"], self.department.id)
+        self.assertEqual(
+            {z["name"] for z in herault["zaeLayers"]}, {"ZFEE Hérault", "ZRF Hérault"}
+        )
+        self.assertEqual(
+            herault["zaeLayers"][0]["typeName"], "Zones à fort enjeu environnemental"
+        )
+
+        # the Gard department isn't in the app -> no geozone to deploy its layers onto
+        self.assertIsNone(by_code["30"]["departmentName"])
+        self.assertIsNone(by_code["30"]["geozoneId"])
+
+    def test_q_filters_layers_and_the_departments_shown(self):
+        _insert_zae("34", "zfee", "Cabanisation Hérault")
+        _insert_zae("34", "zrf", "Autre zone")
+        _insert_zae("30", "zi", "Zone Gard")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(ZAE_ENDPOINT, {"q": "cabanisation"}).json()
+        self.assertEqual(data["count"], 1)
+        group = data["results"][0]
+        self.assertEqual(group["departmentCode"], "34")
+        # only the matching layers are kept inside the group
+        self.assertEqual(
+            [z["name"] for z in group["zaeLayers"]], ["Cabanisation Hérault"]
+        )
+
+    def test_deployment_status(self):
+        _insert_zae("34", "zfee", "Deployed zone")
+        _insert_zae("34", "zrf", "Missing zone")
+        GeoCustomZone.objects.create(
+            name="Renamed by an admin",
+            import_layer_name="Deployed zone",
+            geometry=self.create_polygon(
+                [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
+            ),
+        )
+
+        self.authenticate_user(create_super_admin())
+        layers = self.client.get(ZAE_ENDPOINT).json()["results"][0]["zaeLayers"]
+        status_by_name = {z["name"]: z["deployStatus"] for z in layers}
+        self.assertEqual(status_by_name["Deployed zone"], "DEPLOYED")
+        self.assertEqual(status_by_name["Missing zone"], "NOT_DEPLOYED")
+
+    def test_pagination_is_over_departments(self):
+        for code in ("30", "34", "11"):
+            _insert_zae(code, "zfee", f"Zone {code}")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(ZAE_ENDPOINT, {"limit": 2, "offset": 0}).json()
+        self.assertEqual(data["count"], 3)
+        self.assertEqual([g["departmentCode"] for g in data["results"]], ["11", "30"])
 
 
 class DataDeploymentRunViewTests(BaseAPITestCase):
