@@ -553,27 +553,66 @@ class ImportCustomZonesOverrideTests(BaseTestCase):
         self.assertEqual(zone.name, "Nom choisi par l'admin")
         self.assertEqual(zone.import_layer_name, "ZFEE nommée")
 
-    def test_override_never_replaces_a_zone_drawn_in_the_app(self):
-        # A zone with no import_id was drawn by hand: overwriting its geometry would
-        # destroy user work, so the row is created alongside it instead.
-        hand_drawn = GeoCustomZone.objects.create(
-            name="Zone dessinée à la main",
+    def test_override_replaces_a_zone_that_carries_no_source_row(self):
+        # Regression: zones predating this command (SQL import, insert_shp, the admin)
+        # have no import_id, and they are exactly what the duplicate check blocks on.
+        # Skipping them here left --override unable to resolve the conflict its own error
+        # message points at, silently adding a SECOND zone to the pair.
+        preexisting = GeoCustomZone.objects.create(
+            name="ZNAF 77",
             geometry=Polygon(
                 ((3.0, 43.3), (3.2, 43.3), (3.2, 43.5), (3.0, 43.5), (3.0, 43.3)),
                 srid=4326,
             ),
             geo_custom_zone_category=self.categories["zfee"],
         )
-        hand_drawn.geo_zones.add(self.department)
-        source_id = _insert_source_row("zfee", "34", layer_name="ZFEE Hérault")
+        preexisting.geo_zones.add(self.department)
+        self.assertIsNone(preexisting.import_id)
+        source_id = _insert_source_row(
+            "zfee", "34", geometry_wkt=SHRUNK_HERAULT_POLYGON_WKT, layer_name="ZFEE v2"
+        )
 
         call_command("import_custom_zones", "--override")
 
-        self.assertEqual(GeoCustomZone.objects.count(), 2)
-        hand_drawn.refresh_from_db()
-        self.assertEqual(hand_drawn.name, "Zone dessinée à la main")
-        self.assertIsNone(hand_drawn.import_id)
-        self.assertTrue(GeoCustomZone.objects.filter(import_id=source_id).exists())
+        # replaced, not duplicated — the pair still holds exactly one zone
+        self.assertEqual(GeoCustomZone.objects.count(), 1)
+        # re-read rather than refresh_from_db: the manager defers `geometry`, so a
+        # refresh leaves the stale value this instance loaded on create()
+        reloaded = GeoCustomZone.objects.get(pk=preexisting.pk)
+        self.assertEqual(reloaded.import_id, source_id)
+        self.assertEqual(reloaded.import_layer_name, "ZFEE v2")
+        self.assertFalse(reloaded.geometry.covers(INSIDE_POINT))
+        # a name chosen outside the import is still not clobbered
+        self.assertEqual(reloaded.name, "ZNAF 77")
+
+    def test_override_prefers_the_imported_zone_when_both_hold_the_pair(self):
+        # --force runs can leave an import-born zone next to an older one; the import
+        # claims its own rather than an unrelated zone.
+        # the stray is created FIRST so it holds the lower id: picking the import-born
+        # zone then has to be a real preference, not just "the oldest one".
+        stray = GeoCustomZone.objects.create(
+            name="Zone héritée",
+            geometry=Polygon(
+                ((3.0, 43.3), (3.2, 43.3), (3.2, 43.5), (3.0, 43.5), (3.0, 43.3)),
+                srid=4326,
+            ),
+            geo_custom_zone_category=self.categories["zfee"],
+        )
+        stray.geo_zones.add(self.department)
+        first_source_id = _insert_source_row("zfee", "34", layer_name="ZFEE Hérault")
+        # --force is what leaves two zones on one pair in the first place
+        call_command("import_custom_zones", "--force")
+        imported = GeoCustomZone.objects.get(import_id=first_source_id)
+        self.assertGreater(imported.id, stray.id)
+
+        new_source_id = _insert_source_row("zfee", "34", layer_name="ZFEE v2")
+        call_command("import_custom_zones", "--override")
+
+        imported.refresh_from_db()
+        stray.refresh_from_db()
+        self.assertEqual(imported.import_id, new_source_id)
+        self.assertIsNone(stray.import_id)
+        self.assertEqual(stray.name, "Zone héritée")
 
     def test_override_associates_user_groups_added_since_the_first_import(self):
         _, zone = self._import_first_zone()

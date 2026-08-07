@@ -524,6 +524,16 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                     zone.import_layer_name = item["layer_name"]
                     self._warn_on_override_side_effects(zone, department)
                 else:
+                    if override:
+                        # "Created 1, overrode 0" on a pair the operator expected to be
+                        # replaced is the confusing outcome; say what was looked for.
+                        log_event(
+                            f"Row id={item['id']}: nothing to override for "
+                            f"{department.name} / "
+                            f"{category.name if category else 'no category'} "
+                            f"(no zone with import_id={item['id']}, none holding that "
+                            "department/category pair) — creating a new zone"
+                        )
                     zone = GeoCustomZone(
                         name=name,
                         geometry=item["geometry"],
@@ -570,12 +580,16 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         row, else the one already holding its (department, category) pair. None when the
         row conflicts with nothing — it is then simply created.
 
-        Only ever matches a zone that came from an import (import_id set): a zone drawn
-        by hand in the app holds no source row, and an import must not silently overwrite
-        someone's geometry. An uncategorized row (--ignore-categories) has no usable pair
-        key either, so it can only be matched back to its own source row.
+        The pair lookup MUST match the same zones _check_no_duplicate_pairs blocks on,
+        whatever created them. Zones predating this command (SQL import, insert_shp, the
+        admin) carry no import_id, and they are exactly what the duplicate check reports;
+        skipping them here would leave --override unable to resolve the very conflict its
+        error message points at, silently adding a second zone to the pair instead.
+        An import-born zone is still preferred when both exist, and a zone with no source
+        row is called out when replaced. An uncategorized row (--ignore-categories) has no
+        usable pair key, so it can only be matched back to its own source row.
 
-        `--force` runs can leave several zones on one pair, so both lookups take the
+        `--force` runs can leave several zones on one pair, so every lookup takes the
         lowest id — an arbitrary but stable pick, rather than a different one per run."""
         by_import_id = (
             GeoCustomZone.objects.filter(deleted=False, import_id=item["id"])
@@ -589,22 +603,32 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         if category is None:
             return None
 
-        candidates = list(
-            GeoCustomZone.objects.filter(
-                deleted=False,
-                import_id__isnull=False,
-                geo_custom_zone_category_id=category.id,
-                geo_zones__id=item["department"].id,
-            )
-            .order_by("id")
-            .distinct()[:2]
+        on_pair = GeoCustomZone.objects.filter(
+            deleted=False,
+            geo_custom_zone_category_id=category.id,
+            geo_zones__id=item["department"].id,
         )
+        candidates = list(on_pair.order_by("id").distinct()[:2])
+        if not candidates:
+            return None
         if len(candidates) > 1:
             log_event(
-                f"Row id={item['id']}: several imported zones hold "
-                f"{item['department'].name} / {category.name} — overriding the oldest one"
+                f"Row id={item['id']}: several zones hold "
+                f"{item['department'].name} / {category.name} — overriding the oldest "
+                "one this import can claim"
             )
-        return candidates[0] if candidates else None
+        # prefer a zone this command created; only fall back to one of another provenance
+        zone = (
+            on_pair.filter(import_id__isnull=False).order_by("id").first()
+            or candidates[0]
+        )
+        if zone.import_id is None:
+            log_event(
+                f"Custom zone '{zone.name}' holds {item['department'].name} / "
+                f"{category.name} but came from outside this import (no source row): "
+                f"--override replaces its geometry with source row id={item['id']}"
+            )
+        return zone
 
     @staticmethod
     def _warn_on_override_side_effects(
