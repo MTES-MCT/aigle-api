@@ -4,7 +4,10 @@ from django.urls import reverse
 from rest_framework import status
 
 from core.tests.base import BaseAPITestCase
-from core.tests.fixtures.geo_data import create_complete_geo_hierarchy
+from core.tests.fixtures.geo_data import (
+    create_complete_geo_hierarchy,
+    create_montpellier_mediterranee_epci,
+)
 from core.tests.fixtures.users import create_super_admin
 
 
@@ -159,3 +162,31 @@ class GeoCommuneViewSetTests(BaseAPITestCase):
         url = reverse("GeoCommuneViewSet-list")
         response = self.client.get(url, {"uuids": "not-a-uuid"})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_regions_uuids_filter_keeps_only_that_region_communes(self):
+        occitanie = self.geo_data["regions"]["occitanie"]
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"regionsUuids": str(occitanie.uuid)})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {r["code"] for r in response.data}, {"34172", "34032", "30189", "30007"}
+        )
+
+    def test_departments_uuids_filter_keeps_only_that_department_communes(self):
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"departmentsUuids": str(self.herault.uuid)})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34172", "34032"})
+
+    def test_epcis_uuids_filter_keeps_only_that_epci_communes(self):
+        epci = create_montpellier_mediterranee_epci(
+            department=self.herault,
+            communes=[self.montpellier],
+        )
+        url = reverse("GeoCommuneViewSet-list")
+        response = self.client.get(url, {"epcisUuids": str(epci.uuid)})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34172"})

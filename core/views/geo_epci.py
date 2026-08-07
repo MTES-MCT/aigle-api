@@ -23,6 +23,8 @@ class GeoEpciFilter(FilterSet):
     # codes -> entities, and uuids -> entities (to read back their codes).
     codes = CharFilter(method="filter_codes")
     uuids = UuidInFilter(method="filter_uuids")
+    regionsUuids = UuidInFilter(method="filter_regions")
+    departmentsUuids = UuidInFilter(method="filter_departments")
 
     class Meta:
         model = GeoEpci
@@ -30,6 +32,14 @@ class GeoEpciFilter(FilterSet):
 
     def _scope_by_collectivity(self, queryset):
         return scope_by_collectivity(queryset, self.request, GeoZoneType.EPCI)
+
+    def filter_regions(self, queryset, name, value):
+        return self._scope_by_collectivity(queryset).filter(
+            department__region__uuid__in=value
+        )
+
+    def filter_departments(self, queryset, name, value):
+        return self._scope_by_collectivity(queryset).filter(department__uuid__in=value)
 
     def filter_uuids(self, queryset, name, value):
         if not value:

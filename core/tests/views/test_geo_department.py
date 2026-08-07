@@ -88,3 +88,26 @@ class GeoDepartmentViewSetTests(BaseAPITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual({r["code"] for r in response.data}, {"34", "75"})
+
+    def test_regions_uuids_filter_keeps_only_that_region_departments(self):
+        self.authenticate_user(self.super_admin)
+        occitanie = self.geo_data["regions"]["occitanie"]
+        url = reverse("GeoDepartmentViewSet-list")
+        response = self.client.get(url, {"regionsUuids": str(occitanie.uuid)})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34", "30"})
+
+    def test_regions_uuids_filter_accepts_several_regions(self):
+        self.authenticate_user(self.super_admin)
+        regions = self.geo_data["regions"]
+        url = reverse("GeoDepartmentViewSet-list")
+        response = self.client.get(
+            url,
+            {
+                "regionsUuids": f"{regions['occitanie'].uuid},{regions['ile_de_france'].uuid}"
+            },
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({r["code"] for r in response.data}, {"34", "30", "75", "92"})

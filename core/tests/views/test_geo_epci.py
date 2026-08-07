@@ -108,6 +108,26 @@ class GeoEpciViewSetTests(BaseAPITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_departments_uuids_filter_keeps_only_that_department_epcis(self):
+        response = self.client.get(
+            reverse("GeoEpciViewSet-list"), {"departmentsUuids": str(self.herault.uuid)}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual({row["code"] for row in response.data}, {"243400017"})
+
+    def test_regions_uuids_filter_spans_the_whole_region(self):
+        # Hérault and Gard are both in Occitanie: one region hop reaches both EPCIs.
+        occitanie = self.geo_data["regions"]["occitanie"]
+        response = self.client.get(
+            reverse("GeoEpciViewSet-list"), {"regionsUuids": str(occitanie.uuid)}
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {row["code"] for row in response.data}, {"243400017", "243000643"}
+        )
+
 
 class GeoEpciScopeTests(BaseAPITestCase):
     """An EPCI-scoped group must see its own perimeter — and only it — on every geo
