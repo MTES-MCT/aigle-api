@@ -16,6 +16,7 @@ from core.repository.base import (
     NumberRepoFilter,
     TimestampedBaseRepositoryMixin,
     UuidBaseRepositoryMixin,
+    collectivity_q,
 )
 from django.db.models import Q
 from django.contrib.gis.geos import Polygon
@@ -126,24 +127,9 @@ class DetectionRepository(
         filter_collectivities: Optional[CollectivityRepoFilter] = None,
     ) -> QuerySet[Detection]:
         if filter_collectivities is not None and not filter_collectivities.is_empty():
-            q = Q()
-
-            if filter_collectivities.commune_ids:
-                q |= Q(
-                    detection_object__commune__id__in=filter_collectivities.commune_ids
-                )
-
-            if filter_collectivities.department_ids:
-                q |= Q(
-                    detection_object__commune__department__id__in=filter_collectivities.department_ids
-                )
-
-            if filter_collectivities.region_ids:
-                q |= Q(
-                    detection_object__commune__department__region__id__in=filter_collectivities.region_ids
-                )
-
-            queryset = queryset.filter(q)
+            queryset = queryset.filter(
+                collectivity_q(filter_collectivities, "detection_object__commune__")
+            )
 
         return queryset
 

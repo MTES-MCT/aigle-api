@@ -8,6 +8,7 @@ from django.db.models import Count
 from core.models.detection_data import DetectionValidationStatusChangeReason
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
+from core.models.geo_epci import GeoEpci
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_department import GeoDepartment
 from core.models.parcel import Parcel
@@ -66,7 +67,8 @@ DEPLOYED_DATA_CACHE_TTL = int(os.environ.get("DEPLOYED_DATA_CACHE_TTL", 24 * 60 
 # v9: per-commune figures count detection OBJECTS again (per-tile-set stays detections).
 # v10: detail scoped to populated communes; sitadel count is now detection-object driven.
 # v11: dropped the geo-associated tile_sets list (redundant with detections_by_tile_set).
-_CACHE_SCHEMA = "v11"
+# v12: EPCI zones now resolve to their department (EPCI became a real collectivity level).
+_CACHE_SCHEMA = "v12"
 
 
 class DeployedDataService:
@@ -264,19 +266,26 @@ class DeployedDataService:
             return []
         department_ids = [department["id"] for department in departments]
 
-        # Map every geo_zone id (each department and ALL its communes) to its department,
-        # so associations targeting any commune resolve to the department.
+        # Map every geo_zone id (each department, ALL its communes and ALL its EPCIs)
+        # to its department, so an association targeting any of them resolves here.
         commune_to_department = {
             row["id"]: row["department_id"]
             for row in GeoCommune.objects.filter(
                 department_id__in=department_ids
             ).values("id", "department_id")
         }
+        epci_to_department = {
+            row["id"]: row["department_id"]
+            for row in GeoEpci.objects.filter(department_id__in=department_ids).values(
+                "id", "department_id"
+            )
+        }
         zone_to_department = {
             department_id: department_id for department_id in department_ids
         }
         zone_to_department.update(commune_to_department)
-        all_zone_ids = list(department_ids) + list(commune_to_department.keys())
+        zone_to_department.update(epci_to_department)
+        all_zone_ids = list(zone_to_department.keys())
 
         # Distinct users per department, across every group linked to the department or one
         # of its communes (a group's geo_zones may span several departments).
@@ -469,7 +478,12 @@ class DeployedDataService:
         # Associations (user groups + members, custom zones, tile sets) linked via the
         # geo_zones M2M to the department or any of its communes. Single department, so
         # everything collected here belongs to it — no department mapping needed.
-        all_zone_ids = [department_id] + commune_ids
+        epci_ids = list(
+            GeoEpci.objects.filter(department_id=department_id).values_list(
+                "id", flat=True
+            )
+        )
+        all_zone_ids = [department_id] + commune_ids + epci_ids
 
         user_groups = {
             row["uuid"]: {"uuid": row["uuid"], "name": row["name"], "users": []}

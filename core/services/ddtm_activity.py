@@ -31,7 +31,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from django.db import connection
-from django.db.models import Count, Min, Prefetch
+from django.db.models import Count, F, Min
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
@@ -48,6 +48,7 @@ from core.models.detection import Detection
 from core.models.detection_data import DetectionData
 from core.models.geo_commune import GeoCommune
 from core.models.geo_department import GeoDepartment
+from core.models.geo_epci import GeoEpci
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user import User
 from core.models.user_group import UserGroup, UserGroupType, UserUserGroup
@@ -104,36 +105,24 @@ class DdtmActivityService:
         (department-wide view) and None for anyone else, who only gets the groups they
         may read. Connections only (cheap).
 
-        For the own-group dashboard, each group also carries the communes it covers, so
-        the client can offer a commune selector (a collectivity spanning several communes
-        appears once per commune). The communes come from the server, never from the
-        caller's local memberships — a scoped SUPER_ADMIN reads a group they don't
-        belong to. DDTM groups don't need them (their selector is over groups)."""
-        department = DdtmActivityService._get_department(user, scoped_user_group)
-        if department is not None:
-            groups = list(DdtmActivityService._get_scoped_groups(department))
-            communes_by_group = {}
+        Groups also carry the communes they cover, so the client can offer a commune
+        selector (a collectivity spanning several communes appears once per commune).
+        The communes come from the server, never from the caller's local memberships —
+        a scoped SUPER_ADMIN reads a group they don't belong to. A DDTM does not need
+        them (its selector is over groups); an EPCI does, its dashboard being the
+        department-style overview plus a commune selector."""
+        perimeter = DdtmActivityService._get_perimeter(user, scoped_user_group)
+        if perimeter is not None:
+            groups = list(DdtmActivityService._get_scoped_groups(perimeter))
         else:
-            groups = list(
-                DdtmActivityService._get_own_groups(
-                    user, scoped_user_group
-                ).prefetch_related(
-                    Prefetch(
-                        "geo_zones",
-                        queryset=GeoZone.objects.filter(
-                            geo_zone_type=GeoZoneType.COMMUNE
-                        ).order_by("name"),
-                        to_attr="commune_zones",
-                    )
-                )
-            )
-            communes_by_group = {
-                group.id: [
-                    {"uuid": zone.uuid, "name": zone.name}
-                    for zone in group.commune_zones
-                ]
-                for group in groups
-            }
+            groups = list(DdtmActivityService._get_own_groups(user, scoped_user_group))
+
+        needs_communes = (
+            perimeter is None or perimeter.geo_zone_type == GeoZoneType.EPCI
+        )
+        communes_by_group = (
+            DdtmActivityService._communes_by_group(groups) if needs_communes else {}
+        )
 
         since = DdtmActivityService._window_start()
         members_by_group, users_info = DdtmActivityService._get_memberships(groups)
@@ -150,8 +139,14 @@ class DdtmActivityService:
             )
         )
 
+        is_department = (
+            perimeter is not None and perimeter.geo_zone_type == GeoZoneType.DEPARTMENT
+        )
+        is_epci = perimeter is not None and perimeter.geo_zone_type == GeoZoneType.EPCI
+
         return {
-            "department_name": department.name if department is not None else None,
+            "department_name": perimeter.name if is_department else None,
+            "epci_name": perimeter.name if is_epci else None,
             "user_groups_count": len(groups),
             "active_user_groups_count": active_groups_count,
             "user_groups": [
@@ -168,12 +163,12 @@ class DdtmActivityService:
     def get_user_group_rows(user, scoped_user_group=None) -> Optional[List[dict]]:
         """Per-group table rows (counts only — the per-user detail is a separate call
         so the groups table doesn't ship every member on every load)."""
-        department = DdtmActivityService._get_department(user, scoped_user_group)
-        if department is None:
+        perimeter = DdtmActivityService._get_perimeter(user, scoped_user_group)
+        if perimeter is None:
             return None
 
         since = DdtmActivityService._window_start()
-        groups = list(DdtmActivityService._get_scoped_groups(department))
+        groups = list(DdtmActivityService._get_scoped_groups(perimeter))
         members_by_group, users_info = DdtmActivityService._get_memberships(groups)
         users_data = DdtmActivityService._build_users_data(users_info, since)
         first_login_by_user = DdtmActivityService._first_login_by_user(
@@ -331,11 +326,11 @@ class DdtmActivityService:
         """Department-wide chart: each collectivity group classified into one tier per
         period (its members' activity aggregated), + the total group count. None if no
         department is linked to the user's DDTM group."""
-        department = DdtmActivityService._get_department(user, scoped_user_group)
-        if department is None:
+        perimeter = DdtmActivityService._get_perimeter(user, scoped_user_group)
+        if perimeter is None:
             return None
 
-        groups = list(DdtmActivityService._get_scoped_groups(department))
+        groups = list(DdtmActivityService._get_scoped_groups(perimeter))
         members_by_group, users_info = DdtmActivityService._get_memberships(groups)
 
         periods = DdtmActivityService._get_periods(granularity)
@@ -398,31 +393,40 @@ class DdtmActivityService:
         return ACTIVITY_TIER_INACTIVE
 
     @staticmethod
-    def _get_department(user, scoped_user_group=None) -> Optional[GeoDepartment]:
-        """The department whose collectivity groups the caller may see, or None when
-        they get the own-group dashboard instead.
+    def _get_perimeter(user, scoped_user_group=None) -> Optional[GeoZone]:
+        """The territory whose collectivity groups the caller SUPERVISES, or None when
+        they only get the own-group dashboard.
+
+        Two kinds of supervisor, and the dashboard is the same for both:
+        - a DDTM group -> its GeoDepartment;
+        - a collectivity group scoped to a GeoEpci -> that EPCI. An EPCI oversees its
+          member communes exactly as a DDTM oversees its department, so it gets the
+          department-style overview of the groups inside it.
+        A group scoped to communes only supervises nothing and keeps the own-group view.
 
         A SUPER_ADMIN impersonating a user group (X-User-Group-Uuid) acts *as* that
-        group, exactly as on every other page: the department comes from the scoped
-        group, so impersonating a collectivity gives the collectivity dashboard even
-        though the super-admin may also sit in a DDTM group. Otherwise it comes from
-        the user's own DDTM groups (expected to carry exactly one department; ordered
-        for determinism).
+        group, exactly as on every other page, so impersonating a commune collectivity
+        gives the own-group dashboard even though the super-admin may also sit in a DDTM
+        group.
 
-        Both conditions of the unscoped lookup MUST stay in a single filter() call:
-        `user_groups` is multi-valued, so chaining them would join it twice and let a
-        DDTM group and a group the caller belongs to be two DIFFERENT groups — which
-        promotes a collectivity member whose group carries a department zone to the
-        department-wide dashboard."""
+        Both conditions of each unscoped lookup MUST stay in a single filter() call:
+        `user_groups` is multi-valued, so chaining them would join it twice and let the
+        qualifying group and a group the caller belongs to be two DIFFERENT groups —
+        which would promote a plain collectivity member to a supervisor dashboard."""
         if scoped_user_group is not None:
-            if scoped_user_group.user_group_type != UserGroupType.DDTM:
-                return None
+            if scoped_user_group.user_group_type == UserGroupType.DDTM:
+                return (
+                    GeoDepartment.objects.filter(user_groups=scoped_user_group)
+                    .order_by("name")
+                    .first()
+                )
             return (
-                GeoDepartment.objects.filter(user_groups=scoped_user_group)
+                GeoEpci.objects.filter(user_groups=scoped_user_group)
                 .order_by("name")
                 .first()
             )
-        return (
+
+        department = (
             GeoDepartment.objects.filter(
                 user_groups__user_group_type=UserGroupType.DDTM,
                 user_groups__user_user_groups__user=user,
@@ -430,20 +434,85 @@ class DdtmActivityService:
             .order_by("name")
             .first()
         )
+        if department is not None:
+            return department
+
+        return (
+            GeoEpci.objects.filter(
+                user_groups__user_group_type=UserGroupType.COLLECTIVITY,
+                user_groups__user_user_groups__user=user,
+            )
+            .order_by("name")
+            .first()
+        )
 
     @staticmethod
-    def _get_scoped_groups(department: GeoDepartment):
-        """Groups the dashboard covers: linked to at least one commune of the
-        department. DDTM groups are excluded — the stats are about collectivities."""
-        commune_ids = GeoCommune.objects.filter(department=department).values_list(
-            "id", flat=True
-        )
+    def _perimeter_zone_ids(perimeter: GeoZone) -> List[int]:
+        """Zone ids a group may carry to fall inside the perimeter.
+
+        A department covers its communes and its EPCIs (not the department zone itself:
+        the only group carrying it is the DDTM one, which is excluded anyway).
+        An EPCI covers ITSELF — its own collectivity group is part of the dashboard —
+        plus its member communes."""
+        if perimeter.geo_zone_type == GeoZoneType.DEPARTMENT:
+            return [
+                *GeoCommune.objects.filter(department_id=perimeter.id).values_list(
+                    "id", flat=True
+                ),
+                *GeoEpci.objects.filter(department_id=perimeter.id).values_list(
+                    "id", flat=True
+                ),
+            ]
+
+        return [
+            perimeter.id,
+            *GeoCommune.objects.filter(epci_id=perimeter.id).values_list(
+                "id", flat=True
+            ),
+        ]
+
+    @staticmethod
+    def _get_scoped_groups(perimeter: GeoZone):
+        """Groups the dashboard covers: linked to at least one zone of the perimeter.
+        DDTM groups are excluded — the stats are about collectivities."""
         return (
-            UserGroup.objects.filter(geo_zones__id__in=commune_ids)
+            UserGroup.objects.filter(
+                geo_zones__id__in=DdtmActivityService._perimeter_zone_ids(perimeter)
+            )
             .exclude(user_group_type=UserGroupType.DDTM)
             .distinct()
             .order_by("name")
         )
+
+    @staticmethod
+    def _communes_by_group(groups) -> Dict[int, List[dict]]:
+        """{group id: [{uuid, name}]} — the communes each group covers, reached either
+        directly (a commune-scoped group) or through its EPCI (an EPCI-scoped group
+        holds no COMMUNE zone of its own, so its selector would come back empty)."""
+        communes_by_group: Dict[int, List[dict]] = {group.id: [] for group in groups}
+        if not groups:
+            return communes_by_group
+
+        seen = set()
+        for lookup, group_path in (
+            ("user_groups__in", "user_groups__id"),
+            ("epci__user_groups__in", "epci__user_groups__id"),
+        ):
+            for row in (
+                GeoCommune.objects.filter(**{lookup: groups})
+                .annotate(group_id=F(group_path))
+                .order_by("name")
+                .values("group_id", "uuid", "name")
+            ):
+                key = (row["group_id"], row["uuid"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                communes_by_group.setdefault(row["group_id"], []).append(
+                    {"uuid": row["uuid"], "name": row["name"]}
+                )
+
+        return communes_by_group
 
     @staticmethod
     def _get_own_groups(user, scoped_user_group=None):
@@ -468,10 +537,10 @@ class DdtmActivityService:
         """The group whose activity the caller may read: for a DDTM caller, any
         collectivity group of their department; for anyone else, one of their own
         groups (or the impersonated one). None (-> 404) for every other uuid."""
-        department = DdtmActivityService._get_department(user, scoped_user_group)
-        if department is not None:
+        perimeter = DdtmActivityService._get_perimeter(user, scoped_user_group)
+        if perimeter is not None:
             return (
-                DdtmActivityService._get_scoped_groups(department)
+                DdtmActivityService._get_scoped_groups(perimeter)
                 .filter(uuid=user_group_uuid)
                 .first()
             )

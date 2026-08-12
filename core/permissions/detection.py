@@ -3,11 +3,11 @@ from typing import List, Optional
 from django.core.exceptions import PermissionDenied
 from django.db.models import Exists, OuterRef, Q, QuerySet
 
+from core.constants.collectivity import COMMUNE_LOOKUP_BY_LEVEL
 from core.constants.detection import DETECTION_EDIT_PERMISSION_DENIED_MESSAGE
 from core.models.detection import Detection
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
-from core.models.geo_zone import GeoZoneType
 from core.models.user import User
 from core.models.user_group import UserGroup, UserGroupRight
 from core.permissions.base import BasePermission
@@ -45,15 +45,16 @@ class DetectionPermission(
         """Communes reachable from the zones the user holds WRITE on — the same clauses
         as DetectionRepository._filter_collectivities, anchored on GeoCommune."""
         zones = self.user_permission.accessible_geo_zones(UserGroupRight.WRITE)
-        communes = zones.filter(geo_zone_type=GeoZoneType.COMMUNE).values("id")
-        departments = zones.filter(geo_zone_type=GeoZoneType.DEPARTMENT).values("id")
-        regions = zones.filter(geo_zone_type=GeoZoneType.REGION).values("id")
 
         # Fail closed: with no writable zone every subquery is empty, so no commune
         # matches — never all of them.
-        q = Q(id__in=communes)
-        q |= Q(department__id__in=departments)
-        q |= Q(department__region__id__in=regions)
+        q = Q()
+        for level, lookup in COMMUNE_LOOKUP_BY_LEVEL.items():
+            q |= Q(
+                **{
+                    f"{lookup}__in": zones.filter(geo_zone_type=level).values("id"),
+                }
+            )
 
         return GeoCommune.objects.filter(q)
 

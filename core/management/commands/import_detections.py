@@ -510,6 +510,15 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                 geo_zone_ids.add(region_id)
                 department_ids.append(dept_id)
 
+            # Also DESCEND to the member communes: an EPCI-scoped tile set must still
+            # pick up custom zones labelled with one of its communes. Ancestors alone
+            # would silently skip every commune-scoped zone à enjeux.
+            geo_zone_ids.update(
+                GeoCommune.objects.filter(epci_id__in=epci_ids).values_list(
+                    "id", flat=True
+                )
+            )
+
         if department_ids:
             region_ids = GeoDepartment.objects.filter(
                 id__in=department_ids

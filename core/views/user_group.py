@@ -6,7 +6,6 @@ from core.utils.filters import ChoiceInFilter
 from rest_framework.decorators import action
 
 from common.views.base import BaseViewSetMixin
-from core.models.geo_zone import GeoZoneType
 from core.models.object_type_category import ObjectTypeCategory
 from core.models.user import UserRole
 from core.models.user_group import UserGroup, UserGroupType
@@ -15,9 +14,10 @@ from core.serializers.user_group import (
     UserGroupInputSerializer,
 )
 from core.utils.bulk_csv import (
-    COL_COMMUNES,
-    COL_DEPARTMENTS,
-    COL_REGIONS,
+    COLLECTIVITY_CSV_HEADERS,
+    collectivity_csv_cells,
+    collectivity_uuids_payload,
+    parse_collectivity_columns,
     attachment_response,
     bulk_error,
     bulk_import_preview_response,
@@ -41,10 +41,7 @@ USER_GROUP_CSV_HEADERS = [
     "nom du groupe",
     "type",
     "thématiques",
-    COL_REGIONS,
-    COL_DEPARTMENTS,
-    COL_COMMUNES,
-]
+] + COLLECTIVITY_CSV_HEADERS
 USER_GROUP_TYPE_LABELS = {
     UserGroupType.COLLECTIVITY: "Collectivité",
     UserGroupType.DDTM: "DDTM",
@@ -117,9 +114,7 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                         group.user_group_type, group.user_group_type
                     ),
                     "thématiques": join_list(thematics),
-                    COL_REGIONS: join_list(zones_by_type[GeoZoneType.REGION]),
-                    COL_DEPARTMENTS: join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
-                    COL_COMMUNES: join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                    **collectivity_csv_cells(zones_by_type),
                 }
             )
 
@@ -172,9 +167,7 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
             name = row.get("nom du groupe", "")
             type_label = row.get("type", "")
             thematics_raw = parse_list(row.get("thématiques", ""))
-            regions_raw = parse_list(row.get(COL_REGIONS.lower(), ""))
-            departments_raw = parse_list(row.get(COL_DEPARTMENTS.lower(), ""))
-            communes_raw = parse_list(row.get(COL_COMMUNES.lower(), ""))
+            collectivity_codes = parse_collectivity_columns(row)
 
             if not name:
                 errors.append(bulk_error("nom du groupe manquant", line=index))
@@ -222,24 +215,16 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                 )
                 row_has_error = True
 
-            (
-                regions_uuids,
-                departments_uuids,
-                communes_uuids,
-                geo_has_error,
-            ) = resolve_collectivity_uuids(
-                regions_raw, departments_raw, communes_raw, index, errors
+            collectivity_uuids, geo_has_error = resolve_collectivity_uuids(
+                collectivity_codes, index, errors
             )
             if geo_has_error:
                 row_has_error = True
 
-            if (
-                not (regions_uuids or departments_uuids or communes_uuids)
-                and not row_has_error
-            ):
+            if not any(collectivity_uuids.values()) and not row_has_error:
                 errors.append(
                     bulk_error(
-                        "au moins une collectivité (région, département "
+                        "au moins une collectivité (région, département, EPCI "
                         "ou commune) est requise",
                         line=index,
                     )
@@ -254,9 +239,7 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                     "nom du groupe": name,
                     "type": USER_GROUP_TYPE_LABELS[user_group_type],
                     "thématiques": join_list(thematics_raw),
-                    COL_REGIONS: join_list(regions_raw),
-                    COL_DEPARTMENTS: join_list(departments_raw),
-                    COL_COMMUNES: join_list(communes_raw),
+                    **collectivity_csv_cells(collectivity_codes),
                 }
             )
             payloads.append(
@@ -264,9 +247,7 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
                     "name": name,
                     "user_group_type": user_group_type,
                     "object_type_categories_uuids": thematics_uuids,
-                    "regions_uuids": regions_uuids,
-                    "departments_uuids": departments_uuids,
-                    "communes_uuids": communes_uuids,
+                    **collectivity_uuids_payload(collectivity_uuids),
                     "geo_custom_zones_uuids": [],
                 }
             )

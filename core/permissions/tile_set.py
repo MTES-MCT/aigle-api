@@ -3,8 +3,12 @@ import logging
 from collections import defaultdict
 from datetime import date as date_type
 from typing import List, Optional, TypedDict, Tuple
+from core.constants.collectivity import (
+    COLLECTIVITY_LEVELS,
+    COMMUNE_LOOKUP_BY_LEVEL,
+)
 from core.constants.order_by import TILE_SETS_ORDER_BYS
-from core.models.geo_zone import GeoZone, GeoZoneType
+from core.models.geo_zone import GeoZone
 from core.models.tile_set import TileSet, TileSetType, TileSetStatus
 from core.models.user import User, UserRole
 from core.permissions.base import BasePermission
@@ -140,9 +144,10 @@ class TileSetPermission(
             geo_zones_accessibles_map[geo_zone["geo_zone_type"]].append(geo_zone["id"])
 
         collectivity_filter = CollectivityRepoFilter(
-            commune_ids=geo_zones_accessibles_map.get(GeoZoneType.COMMUNE),
-            department_ids=geo_zones_accessibles_map.get(GeoZoneType.DEPARTMENT),
-            region_ids=geo_zones_accessibles_map.get(GeoZoneType.REGION),
+            **{
+                f"{level.lower()}_ids": geo_zones_accessibles_map.get(level)
+                for level in COLLECTIVITY_LEVELS
+            }
         )
 
         # An empty collectivity filter makes the repository skip filtering entirely,
@@ -260,30 +265,26 @@ class TileSetPermission(
 
             where_zones = Q()
             gz = ts_info["geo_zones"]
-            if gz.get(GeoZoneType.COMMUNE):
-                where_zones &= Q(
-                    **{
-                        f"{detection_object_prefix}commune__id__in": gz[
-                            GeoZoneType.COMMUNE
-                        ]
-                    }
-                )
-            if gz.get(GeoZoneType.DEPARTMENT):
-                where_zones &= Q(
-                    **{
-                        f"{detection_object_prefix}commune__department__id__in": gz[
-                            GeoZoneType.DEPARTMENT
-                        ]
-                    }
-                )
-            if gz.get(GeoZoneType.REGION):
-                where_zones &= Q(
-                    **{
-                        f"{detection_object_prefix}commune__department__region__id__in": gz[
-                            GeoZoneType.REGION
-                        ]
-                    }
-                )
+            # AND across levels, as before: a tile set carrying zones at two levels
+            # only covers detections satisfying both.
+            for level, lookup in COMMUNE_LOOKUP_BY_LEVEL.items():
+                if gz.get(level):
+                    where_zones &= Q(
+                        **{
+                            f"{detection_object_prefix}commune__{lookup}__in": gz[
+                                level
+                            ],
+                        }
+                    )
+
+            # A tile set carrying zones we cannot express against a commune (only
+            # custom zones, say) would otherwise leave where_zones empty, which reads
+            # as "no geographic restriction" — every detection nationwide would match
+            # it, and `~Q()` below would then subtract everything from every later
+            # tile set. Match nothing instead.
+            if gz and not where_zones:
+                where_zones = Q(pk__in=[])
+
             wheres_zones.append(where_zones)
             where &= where_zones
 

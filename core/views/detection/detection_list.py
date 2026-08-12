@@ -177,6 +177,7 @@ class DetectionListFilter(FilterSet):
             "interfaceDrawn",
             "customZonesUuids",
             "communesUuids",
+            "epcisUuids",
             "departmentsUuids",
             "regionsUuids",
             "parcelsUuids",
@@ -198,6 +199,7 @@ class DetectionListFilter(FilterSet):
     customZonesUuids = UuidInFilter(method="pass_")
 
     communesUuids = UuidInFilter(method="pass_")
+    epcisUuids = UuidInFilter(method="pass_")
     departmentsUuids = UuidInFilter(method="pass_")
     regionsUuids = UuidInFilter(method="pass_")
 
@@ -232,6 +234,7 @@ class DetectionListFilter(FilterSet):
 
         collectivity_filter = user_permission.get_collectivity_filter(
             communes_uuids=to_array(self.data.get("communesUuids")),
+            epcis_uuids=to_array(self.data.get("epcisUuids")),
             departments_uuids=to_array(self.data.get("departmentsUuids")),
             regions_uuids=to_array(self.data.get("regionsUuids")),
         )

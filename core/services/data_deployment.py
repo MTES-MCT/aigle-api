@@ -78,10 +78,14 @@ class DataDeploymentService:
         geozone_id: int,
         batch_ids: Optional[List[int]] = None,
         zae_layer_ids: Optional[List[int]] = None,
+        override_custom_zones: bool = False,
     ) -> Dict[str, Any]:
         """batch_ids / zae_layer_ids restrict the deploy to the selected batches / zae
         layers (None = all of them). Both are intersected with what actually belongs to
-        the geozone, so an out-of-scope id is ignored, never deployed."""
+        the geozone, so an out-of-scope id is ignored, never deployed.
+
+        override_custom_zones makes the queued import_custom_zones replace the custom
+        zones the selected zae layers conflict with instead of failing on them."""
         geo_zone = GeoZone.objects.filter(id=geozone_id).first()
         if geo_zone is None:
             raise ValueError(f"Geozone {geozone_id} not found")
@@ -142,6 +146,7 @@ class DataDeploymentService:
             department_code=department_code,
             batch_tile_sets=batch_tile_sets,
             zae_layer_ids=zae_layer_ids,
+            override_custom_zones=override_custom_zones,
         )
 
         return {
@@ -213,10 +218,16 @@ class DataDeploymentService:
         }
 
     @staticmethod
-    def run_zae_deployment(geozone_id: int, zae_id: int) -> Dict[str, Any]:
+    def run_zae_deployment(
+        geozone_id: int, zae_id: int, override_custom_zones: bool = False
+    ) -> Dict[str, Any]:
         """Deploy a single zae layer (zone à enjeux) for an already-deployed geozone:
         import just that source row as a GeoCustomZone (import_custom_zones --ids). The
-        command resolves the department itself from the row's department_code."""
+        command resolves the department itself from the row's department_code.
+
+        override_custom_zones replaces the custom zone the layer conflicts with (same
+        source row, or same department/category pair) instead of failing the import's
+        duplicate check — the only way to redeploy an already-deployed layer."""
         geo_zone = GeoZone.objects.filter(id=geozone_id).first()
         if geo_zone is None:
             raise ValueError(f"Geozone {geozone_id} not found")
@@ -234,10 +245,14 @@ class DataDeploymentService:
         if zae is None:
             raise ValueError(f"Zae layer {zae_id} not found for geozone {geozone_id}")
 
+        parameters: Dict[str, Any] = {"--ids": zae_id}
+        if override_custom_zones:
+            parameters["--override"] = True
+
         return {
             "geozone_name": geo_zone.name,
             "zae_layer_name": zae["layer_name"],
-            "queued_commands": [_run_command("import_custom_zones", {"--ids": zae_id})],
+            "queued_commands": [_run_command("import_custom_zones", parameters)],
         }
 
     @staticmethod
@@ -269,11 +284,14 @@ class DataDeploymentService:
 
     @staticmethod
     def _effective_geo_zones(geo_zone: GeoZone) -> List[GeoZone]:
-        """Geo zones to actually scope TileSets / UserGroups to. EPCI isn't a concept in
-        the app, so an EPCI expands to its communes; a department / commune maps to itself.
-        Assumes the EPCI's communes are already imported (import_geocommune)."""
-        if geo_zone.geo_zone_type == GeoZoneType.EPCI:
-            return list(GeoCommune.objects.filter(epci_id=geo_zone.id))
+        """Geo zones to actually scope TileSets / UserGroups to.
+
+        Every level — including EPCI — maps to itself: the permission layer reaches a
+        detection's collectivity through DetectionObject.commune and its FKs, so an
+        EPCI-scoped group resolves its communes without them being enumerated here.
+        (An EPCI used to be dissolved into its communes because the app had no EPCI
+        level; scoping to the EPCI itself now keeps a later commune-to-EPCI change
+        reflected automatically instead of frozen at deployment time.)"""
         return [geo_zone]
 
     @staticmethod
@@ -374,7 +392,7 @@ class DataDeploymentService:
         commune/epci/department/region chain before intersecting the two M2Ms."""
         zone_ids = {geo_zone.id for geo_zone in geo_zones}
         related_ids = GeoCommune.objects.filter(
-            Q(id__in=zone_ids) | Q(department_id__in=zone_ids)
+            Q(id__in=zone_ids) | Q(epci_id__in=zone_ids) | Q(department_id__in=zone_ids)
         ).values_list("id", "epci_id", "department_id", "department__region_id")
         scope_ids = zone_ids.union(*map(set, related_ids))
         scope_ids.discard(None)  # communes without an epci
@@ -430,13 +448,14 @@ class DataDeploymentService:
         department_code: str,
         batch_tile_sets: List[Dict[str, Any]],
         zae_layer_ids: Optional[List[int]] = None,
+        override_custom_zones: bool = False,
     ) -> List[Dict[str, str]]:
         """Enqueue the import commands in dependency order. The sequential_commands
         queue (concurrency 1) runs them one at a time in this exact order."""
         # Resolve the custom-zones args first (pure reads); _run_command dispatches
         # eagerly, so the enqueue order below must stay the dependency order.
         custom_zones_params = DataDeploymentService._resolve_custom_zones_params(
-            department_code, zae_layer_ids
+            department_code, zae_layer_ids, override_custom_zones
         )
         queued: List[Dict[str, str]] = []
         if custom_zones_params is not None:
@@ -459,14 +478,17 @@ class DataDeploymentService:
 
     @staticmethod
     def _resolve_custom_zones_params(
-        department_code: str, zae_layer_ids: Optional[List[int]]
+        department_code: str,
+        zae_layer_ids: Optional[List[int]],
+        override_custom_zones: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Args for import_custom_zones, or None to skip it entirely.
         zae_layer_ids None -> every zae layer of the department (--department-code).
         zae_layer_ids list -> only the ids that actually belong to the department
         (--ids), so an out-of-scope id is never imported; an empty selection skips it."""
+        override = {"--override": True} if override_custom_zones else {}
         if zae_layer_ids is None:
-            return {"--department-code": department_code}
+            return {"--department-code": department_code, **override}
         dept_zae_ids = {
             zae["id"]
             for zae in DetectionsSchemaService.get_zae_layers([department_code])
@@ -474,4 +496,4 @@ class DataDeploymentService:
         selected = [zae_id for zae_id in zae_layer_ids if zae_id in dept_zae_ids]
         if not selected:
             return None
-        return {"--ids": selected}
+        return {"--ids": selected, **override}

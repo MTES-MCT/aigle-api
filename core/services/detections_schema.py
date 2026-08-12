@@ -219,13 +219,72 @@ class DetectionsSchemaService:
             return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
     @staticmethod
-    def get_zae_layers(department_codes: List[str]) -> List[Dict[str, Any]]:
+    def get_batches(
+        q: Optional[str] = None, limit: int = 20, offset: int = 0
+    ) -> tuple[int, List[Dict[str, Any]]]:
+        """Flat, paginated list of every batch (newest first), optionally filtered on
+        batch_name. LEFT JOIN on run: a batch whose run has no geozone is still listed,
+        it just can't be deployed."""
+        where_sql, params = (
+            ("WHERE b.batch_name ILIKE %s", [f"%{q}%"]) if q else ("", [])
+        )
+        cols = ["id", "batch_name", "created_at", "batch_tiles_url", "geozone_id"]
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT count(*) FROM {SCHEMA}.batch b {where_sql}", params)
+            count = cursor.fetchone()[0]
+
+            cursor.execute(
+                f"SELECT b.id, b.batch_name, b.created_at, b.batch_tiles_url, "
+                f"r.geozone_id FROM {SCHEMA}.batch b "
+                f"LEFT JOIN {SCHEMA}.run r ON r.id = b.run_id {where_sql} "
+                "ORDER BY b.created_at DESC NULLS LAST, b.id DESC LIMIT %s OFFSET %s",
+                [*params, limit, offset],
+            )
+            rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
+        return count, rows
+
+    @staticmethod
+    def get_zae_department_codes(
+        q: Optional[str] = None, limit: int = 20, offset: int = 0
+    ) -> tuple[int, List[str]]:
+        """Paginated distinct department codes owning at least one zae layer (matching
+        `q` on layer_name when given) — the grouping key of the zae listing."""
+        conditions = ["department_code IS NOT NULL"]
+        params: List[Any] = []
+        if q:
+            conditions.append("layer_name ILIKE %s")
+            params.append(f"%{q}%")
+        where_sql = "WHERE " + " AND ".join(conditions)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT count(DISTINCT department_code) FROM {SCHEMA}.zae_layer "
+                f"{where_sql}",
+                params,
+            )
+            count = cursor.fetchone()[0]
+
+            cursor.execute(
+                f"SELECT DISTINCT department_code FROM {SCHEMA}.zae_layer {where_sql} "
+                "ORDER BY department_code LIMIT %s OFFSET %s",
+                [*params, limit, offset],
+            )
+            return count, [row[0] for row in cursor.fetchall()]
+
+    @staticmethod
+    def get_zae_layers(
+        department_codes: List[str], q: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         if not department_codes:
             return []
+        conditions = ["department_code = ANY(%s)"]
+        params: List[Any] = [list(department_codes)]
+        if q:
+            conditions.append("layer_name ILIKE %s")
+            params.append(f"%{q}%")
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {', '.join(ZAE_LAYER_COLUMNS)} FROM {SCHEMA}.zae_layer "
-                "WHERE department_code = ANY(%s) ORDER BY layer_name",
-                [list(department_codes)],
+                f"WHERE {' AND '.join(conditions)} ORDER BY layer_name",
+                params,
             )
             return [dict(zip(ZAE_LAYER_COLUMNS, row)) for row in cursor.fetchall()]

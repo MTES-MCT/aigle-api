@@ -1,9 +1,10 @@
-"""Tests for the data-deployment listing endpoint (utils/data-deployment/).
+"""Tests for the data-deployment endpoints (utils/data-deployment/).
 
-The endpoint reads the external `detections` schema (run / batch / zae_layer)
+Three listings — runs (one row per geozone/collectivity, not per run), batches
+(flat, one row per batch) and zae (grouped by department) — plus the POST run
+endpoints. They read the external `detections` schema (run / batch / zae_layer)
 which doesn't exist in the test database, so each test provisions those tables
-(DDL is rolled back with the surrounding test transaction). The listing is one
-row per geozone (collectivity), not one per run.
+(DDL is rolled back with the surrounding test transaction).
 """
 
 from datetime import date
@@ -30,6 +31,8 @@ from core.tests.fixtures.users import create_regular_user, create_super_admin
 from core.utils.run_command import COMMANDS_AND_PARAMETERS_MAP, parse_parameters
 
 ENDPOINT = "/api/utils/data-deployment/"
+BATCHES_ENDPOINT = "/api/utils/data-deployment/batches/"
+ZAE_ENDPOINT = "/api/utils/data-deployment/zae/"
 RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/run/"
 BATCH_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/batch/{batch_id}/run/"
 ZAE_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/zae/{zae_id}/run/"
@@ -264,20 +267,72 @@ class DataDeploymentViewTests(BaseAPITestCase):
         _insert_zae("34", "zrf", "Missing zone")
 
         # a GeoCustomZone imported from the zae layer (matched on import_layer_name,
-        # not the admin-editable name) -> DEPLOYED
-        GeoCustomZone.objects.create(
+        # not the admin-editable name) and attached to the layer's department -> DEPLOYED
+        zone = GeoCustomZone.objects.create(
             name="Renamed by an admin",
             import_layer_name="Deployed zone",
             geometry=self.create_polygon(
                 [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
             ),
         )
+        zone.geo_zones.add(self.department)
 
         self.authenticate_user(create_super_admin())
         zae_layers = self.client.get(ENDPOINT).json()["results"][0]["zaeLayers"]
         status_by_name = {z["name"]: z["deployStatus"] for z in zae_layers}
         self.assertEqual(status_by_name["Deployed zone"], "DEPLOYED")
         self.assertEqual(status_by_name["Missing zone"], "NOT_DEPLOYED")
+
+    def test_soft_deleted_zone_does_not_report_its_layer_as_deployed(self):
+        # The import ignores soft-deleted zones, so the status must too — it is what the
+        # UI offers "redeploy with override" from, and there is nothing left to override.
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "batch")
+        _insert_zae("34", "zfee", "Deleted zone")
+        _insert_zae("34", "zrf", "Live zone")
+
+        polygon = self.create_polygon(
+            [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
+        )
+        for layer_name, deleted in (("Deleted zone", True), ("Live zone", False)):
+            zone = GeoCustomZone.objects.create(
+                name=layer_name,
+                import_layer_name=layer_name,
+                deleted=deleted,
+                geometry=polygon,
+            )
+            zone.geo_zones.add(self.department)
+
+        self.authenticate_user(create_super_admin())
+        zae_layers = self.client.get(ENDPOINT).json()["results"][0]["zaeLayers"]
+        status_by_name = {z["name"]: z["deployStatus"] for z in zae_layers}
+        self.assertEqual(status_by_name["Deleted zone"], "NOT_DEPLOYED")
+        # control: an identical but live zone DOES report deployed, so the assertion
+        # above is the deleted=False filter and not a mis-built fixture
+        self.assertEqual(status_by_name["Live zone"], "DEPLOYED")
+
+    def test_zone_deployed_in_another_department_does_not_count(self):
+        # Layer names repeat across departments ("ZFEE"): an unscoped name match would
+        # report Hérault's layer as deployed because Gard's is. The UI reads this status
+        # to pre-tick (and require) the destructive override option.
+        gard = create_gard_department(region=self.region)
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "batch")
+        _insert_zae("34", "zfee", "ZFEE")
+
+        zone = GeoCustomZone.objects.create(
+            name="ZFEE",
+            import_layer_name="ZFEE",
+            geometry=self.create_polygon(
+                [(4.3, 43.8), (4.4, 43.8), (4.4, 43.9), (4.3, 43.9), (4.3, 43.8)]
+            ),
+        )
+        zone.geo_zones.add(gard)
+
+        self.authenticate_user(create_super_admin())
+        zae_layers = self.client.get(ENDPOINT).json()["results"][0]["zaeLayers"]
+        status_by_name = {z["name"]: z["deployStatus"] for z in zae_layers}
+        self.assertEqual(status_by_name["ZFEE"], "NOT_DEPLOYED")
 
     def test_malformed_filters_do_not_crash(self):
         run_id = _insert_run(self.department.id)
@@ -291,6 +346,202 @@ class DataDeploymentViewTests(BaseAPITestCase):
             )
             self.assertEqual(response.status_code, 200, bad_date)
             self.assertEqual(response.json()["count"], 1)  # bad date ignored
+
+
+class DataDeploymentBatchesViewTests(BaseAPITestCase):
+    """GET data-deployment/batches/ — flat listing of every batch, one row per batch
+    (not per geozone), each carrying the geozone of its run."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        self.commune = create_montpellier_commune(department=self.department)
+        _provision_schema()
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self.client.get(BATCHES_ENDPOINT).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self.client.get(BATCHES_ENDPOINT).status_code, 403)
+
+    def test_lists_every_batch_flat_with_its_geozone(self):
+        run_dept = _insert_run(self.department.id)
+        _insert_batch(
+            run_dept,
+            "batch-herault",
+            tiles_url="s3://aigle-tiles/aerial/languedoc/2024_herault",
+        )
+        run_commune = _insert_run(self.commune.id)
+        _insert_batch(run_commune, "batch-montpellier")
+
+        self.authenticate_user(create_super_admin())
+        response = self.client.get(BATCHES_ENDPOINT)
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(data["count"], 2)  # one row per batch, not per geozone
+        by_name = {b["name"]: b for b in data["results"]}
+        herault = by_name["batch-herault"]
+        self.assertEqual(herault["uuid"], str(herault["id"]))
+        self.assertEqual(herault["geozoneId"], self.department.id)
+        self.assertEqual(herault["geozoneName"], "Hérault")
+        self.assertEqual(
+            herault["tilesUrl"],
+            "https://tiles.aigle.beta.gouv.fr/aerial/languedoc/2024_herault/{z}/{x}/{y}.webp",
+        )
+        self.assertEqual(herault["deployStatus"], "NOT_DEPLOYED")
+        self.assertEqual(by_name["batch-montpellier"]["geozoneName"], "Montpellier")
+
+    def test_q_filters_on_batch_name_only(self):
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "pools-2024")
+        # "caravans" appears only in the tiles url — the batch listing searches names
+        _insert_batch(
+            run_id, "other-2024", tiles_url="s3://aigle-tiles/aerial/caravans-2024"
+        )
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT, {"q": "pools"}).json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["results"][0]["name"], "pools-2024")
+
+        self.assertEqual(
+            self.client.get(BATCHES_ENDPOINT, {"q": "caravans"}).json()["count"], 0
+        )
+
+    def test_batch_without_geozone_is_listed_but_not_deployable(self):
+        _insert_batch(_insert_run(None), "orphan-batch")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT).json()
+        self.assertEqual(data["count"], 1)
+        self.assertIsNone(data["results"][0]["geozoneId"])
+        self.assertIsNone(data["results"][0]["geozoneName"])
+
+    def test_deployment_statuses(self):
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "not-deployed")
+        running = _insert_batch(run_id, "running")
+        deployed = _insert_batch(run_id, "deployed")
+        create_detection(
+            batch_id=str(running),
+            tile_set=create_tile_set(name="ts-running", last_import_ended_at=None),
+        )
+        create_detection(
+            batch_id=str(deployed),
+            tile_set=create_tile_set(
+                name="ts-deployed", last_import_ended_at=timezone.now()
+            ),
+        )
+
+        self.authenticate_user(create_super_admin())
+        status_by_name = {
+            b["name"]: b["deployStatus"]
+            for b in self.client.get(BATCHES_ENDPOINT).json()["results"]
+        }
+        self.assertEqual(status_by_name["not-deployed"], "NOT_DEPLOYED")
+        self.assertEqual(status_by_name["running"], "DEPLOYMENT_RUNNING")
+        self.assertEqual(status_by_name["deployed"], "DEPLOYED")
+
+    def test_pagination(self):
+        run_id = _insert_run(self.department.id)
+        for index in range(3):
+            _insert_batch(run_id, f"batch-{index}")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT, {"limit": 2, "offset": 2}).json()
+        self.assertEqual(data["count"], 3)  # count is the unpaginated total
+        self.assertEqual(len(data["results"]), 1)
+
+
+class DataDeploymentZaeViewTests(BaseAPITestCase):
+    """GET data-deployment/zae/ — zae layers grouped by department, paginated over
+    the departments."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        _provision_schema()
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self.client.get(ZAE_ENDPOINT).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self.client.get(ZAE_ENDPOINT).status_code, 403)
+
+    def test_groups_layers_by_department(self):
+        _insert_zae("34", "zfee", "ZFEE Hérault")
+        _insert_zae("34", "zrf", "ZRF Hérault")
+        _insert_zae("30", "zi", "ZI Gard")
+
+        self.authenticate_user(create_super_admin())
+        response = self.client.get(ZAE_ENDPOINT)
+        self.assertEqual(response.status_code, 200)
+
+        data = response.json()
+        self.assertEqual(data["count"], 2)  # one row per department
+        by_code = {group["departmentCode"]: group for group in data["results"]}
+
+        herault = by_code["34"]
+        self.assertEqual(herault["uuid"], "34")
+        self.assertEqual(herault["departmentName"], "Hérault")
+        self.assertEqual(herault["geozoneId"], self.department.id)
+        self.assertEqual(
+            {z["name"] for z in herault["zaeLayers"]}, {"ZFEE Hérault", "ZRF Hérault"}
+        )
+        self.assertEqual(
+            herault["zaeLayers"][0]["typeName"], "Zones à fort enjeu environnemental"
+        )
+
+        # the Gard department isn't in the app -> no geozone to deploy its layers onto
+        self.assertIsNone(by_code["30"]["departmentName"])
+        self.assertIsNone(by_code["30"]["geozoneId"])
+
+    def test_q_filters_layers_and_the_departments_shown(self):
+        _insert_zae("34", "zfee", "Cabanisation Hérault")
+        _insert_zae("34", "zrf", "Autre zone")
+        _insert_zae("30", "zi", "Zone Gard")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(ZAE_ENDPOINT, {"q": "cabanisation"}).json()
+        self.assertEqual(data["count"], 1)
+        group = data["results"][0]
+        self.assertEqual(group["departmentCode"], "34")
+        # only the matching layers are kept inside the group
+        self.assertEqual(
+            [z["name"] for z in group["zaeLayers"]], ["Cabanisation Hérault"]
+        )
+
+    def test_deployment_status(self):
+        _insert_zae("34", "zfee", "Deployed zone")
+        _insert_zae("34", "zrf", "Missing zone")
+        zone = GeoCustomZone.objects.create(
+            name="Renamed by an admin",
+            import_layer_name="Deployed zone",
+            geometry=self.create_polygon(
+                [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)]
+            ),
+        )
+        zone.geo_zones.add(self.department)
+
+        self.authenticate_user(create_super_admin())
+        layers = self.client.get(ZAE_ENDPOINT).json()["results"][0]["zaeLayers"]
+        status_by_name = {z["name"]: z["deployStatus"] for z in layers}
+        self.assertEqual(status_by_name["Deployed zone"], "DEPLOYED")
+        self.assertEqual(status_by_name["Missing zone"], "NOT_DEPLOYED")
+
+    def test_pagination_is_over_departments(self):
+        for code in ("30", "34", "11"):
+            _insert_zae(code, "zfee", f"Zone {code}")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(ZAE_ENDPOINT, {"limit": 2, "offset": 0}).json()
+        self.assertEqual(data["count"], 3)
+        self.assertEqual([g["departmentCode"] for g in data["results"]], ["11", "30"])
 
 
 class DataDeploymentRunViewTests(BaseAPITestCase):
@@ -461,9 +712,11 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         self.assertEqual(params["import_custom_zones"], {"--department-code": "34"})
         self.assertEqual(params["import_parcels"], {"--department-code": "34"})
 
-    def test_run_epci_scopes_tileset_and_group_to_its_communes(self):
-        # EPCI isn't a concept in the app: deploying one must scope the TileSet and the
-        # collectivity group to the EPCI's communes, not to the (invisible) EPCI zone.
+    def test_run_epci_scopes_tileset_and_group_to_the_epci_itself(self):
+        # EPCI is a real collectivity level: deploying one scopes the TileSet and the
+        # collectivity group to the EPCI zone. The permission layer reaches its communes
+        # through DetectionObject.commune.epci, so membership stays live instead of being
+        # frozen into a commune list at deployment time.
         self._create_cabanisation_category()
         beziers = create_beziers_commune(department=self.department)
         epci = create_montpellier_mediterranee_epci(
@@ -479,22 +732,19 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
             response = self.client.post(self._url(epci.id))
 
         self.assertEqual(response.status_code, 200)
-        commune_ids = {self.commune.id, beziers.id}
 
-        # TileSet scoped to the communes, not the EPCI
         tile_set = TileSet.objects.get(
             name="Montpellier Méditerranée Métropole (243400017) 2024"
         )
         self.assertEqual(
-            set(tile_set.geo_zones.values_list("id", flat=True)), commune_ids
+            set(tile_set.geo_zones.values_list("id", flat=True)), {epci.id}
         )
 
-        # Collectivity group scoped to the communes, not the EPCI
         group = UserGroup.objects.get(
             name="Cabanisation Montpellier Méditerranée Métropole (243400017)"
         )
         self.assertEqual(group.user_group_type, UserGroupType.COLLECTIVITY)
-        self.assertEqual(set(group.geo_zones.values_list("id", flat=True)), commune_ids)
+        self.assertEqual(set(group.geo_zones.values_list("id", flat=True)), {epci.id})
 
     def test_run_epci_links_custom_zones_of_its_collectivities_to_its_group(self):
         # zones à enjeux imported by an earlier deploy are attached to their DEPARTMENT,
@@ -725,6 +975,71 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         # only the selected id is imported, via --ids (not the whole department)
         self.assertEqual(params["import_custom_zones"], {"--ids": [keep]})
 
+    def test_run_with_override_passes_the_flag_to_import_custom_zones(self):
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        keep = _insert_zae("34", "zfee", "Keep zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id),
+                {"zaeLayerIds": [keep], "overrideCustomZones": True},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        params = dict(
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        )
+        self.assertEqual(
+            params["import_custom_zones"], {"--ids": [keep], "--override": True}
+        )
+
+    def test_run_without_override_omits_the_flag(self):
+        # the flag must be absent, not False: it is what tells the command to replace
+        # existing zones, and the admin UI only opts in explicitly
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        _insert_zae("34", "zfee", "A zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id),
+                {"overrideCustomZones": False},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        params = dict(
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        )
+        self.assertEqual(params["import_custom_zones"], {"--department-code": "34"})
+
+    def test_run_with_override_and_empty_zae_selection_still_skips_the_import(self):
+        # overriding must not resurrect a command the empty selection skipped
+        self._create_cabanisation_category()
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        _insert_batch(run_id, "b", tiles_url="s3://aigle-tiles/x/2024_b")
+        _insert_zae("34", "zfee", "A zone")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id),
+                {"zaeLayerIds": [], "overrideCustomZones": True},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        names = [c.kwargs["command_name"] for c in run_command.call_args_list]
+        self.assertNotIn("import_custom_zones", names)
+
     def test_run_with_empty_zae_selection_skips_import_custom_zones(self):
         self._create_cabanisation_category()
         run_id = _insert_run(self.department.id, src_image_year=2024)
@@ -763,7 +1078,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         NOT reject unknown/typo'd non-required flags, so assert membership against the
         introspected argparse spec directly (the source of truth the run-command UI uses)."""
         expected_flags = {
-            "import_custom_zones": {"--department-code"},
+            "import_custom_zones": {"--department-code", "--ids", "--override"},
             "create_tile": {"--geozone-uuid"},
             "import_parcels": {"--department-code"},
             "import_detections": {
@@ -948,6 +1263,39 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
             for c in run_command.call_args_list
         ]
         self.assertEqual(calls, [("import_custom_zones", {"--ids": zae_id})])
+
+    def test_zae_run_with_override_passes_the_flag(self):
+        # the only way to redeploy an already-deployed layer: replace the custom zone
+        # it produced instead of failing (or silently skipping) on it
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id, zae_id),
+                {"overrideCustomZones": True},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            run_command.call_args.kwargs["parameters"],
+            {"--ids": zae_id, "--override": True},
+        )
+
+    def test_zae_run_without_override_omits_the_flag(self):
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(
+                self._url(self.department.id, zae_id),
+                {"overrideCustomZones": False},
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run_command.call_args.kwargs["parameters"], {"--ids": zae_id})
 
     def test_zae_run_via_commune_resolves_parent_department(self):
         # the zae belongs to the parent department; deploying through the commune works

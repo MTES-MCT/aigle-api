@@ -16,9 +16,11 @@ def get_objects(uuids: Optional[List[str]], model: models.Model):
     if len(uuids) != len(objects):
         uuids_not_found = list(set(uuids) - set([object_.uuid for object_ in objects]))
 
+        # str(): DRF's UUIDField yields uuid.UUID instances, and joining those raises
+        # a TypeError that escapes as a 500 instead of this 400.
         raise serializers.ValidationError(
             f"Some objects (type: {model.__name__}) were not found, uuids: {
-                ", ".join(uuids_not_found)}"
+                ", ".join(str(uuid_) for uuid_ in uuids_not_found)}"
         )
 
     return objects

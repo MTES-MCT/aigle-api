@@ -140,7 +140,7 @@ class Command(BaseCommand):
 ## Architecture Overview
 
 ### Core Models Hierarchy
-- **Geographic Models**: `GeoRegion` → `GeoDepartment` → `GeoCommune` → `GeoEpci`
+- **Geographic Models**: `GeoRegion` → `GeoDepartment` → `GeoEpci` → `GeoCommune` (commune.epci is nullable)
 - **Detection Models**: `DetectionObject` → `Detection` → `DetectionData`
 - **Tile System**: `TileSet` → `Tile` (manages satellite imagery tiles)
 - **Custom Zones**: `GeoCustomZone` with categories and subcustom zones

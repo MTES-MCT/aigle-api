@@ -2,11 +2,12 @@ from common.views.base import BaseViewSetMixin
 from django_filters import FilterSet, CharFilter
 
 from core.utils.filters import UuidInFilter
+from core.views.utils.collectivity_scope import scope_by_collectivity
 
 from django.db.models import Q
 
 from core.models.geo_commune import GeoCommune
-from core.permissions.user import UserPermission
+from core.models.geo_zone import GeoZoneType
 from core.serializers.geo_commune import (
     GeoCommuneDetailSerializer,
     GeoCommuneSerializer,
@@ -23,10 +24,24 @@ class GeoCommuneFilter(FilterSet):
     # codes -> entities, and uuids -> entities (to read back their codes).
     codes = CharFilter(method="filter_codes")
     uuids = UuidInFilter(method="filter_uuids")
+    regionsUuids = UuidInFilter(method="filter_regions")
+    departmentsUuids = UuidInFilter(method="filter_departments")
+    epcisUuids = UuidInFilter(method="filter_epcis")
 
     class Meta:
         model = GeoCommune
         fields = ["q"]
+
+    def filter_regions(self, queryset, name, value):
+        return self._scope_by_collectivity(queryset).filter(
+            department__region__uuid__in=value
+        )
+
+    def filter_departments(self, queryset, name, value):
+        return self._scope_by_collectivity(queryset).filter(department__uuid__in=value)
+
+    def filter_epcis(self, queryset, name, value):
+        return self._scope_by_collectivity(queryset).filter(epci__uuid__in=value)
 
     def filter_uuids(self, queryset, name, value):
         if not value:
@@ -34,18 +49,7 @@ class GeoCommuneFilter(FilterSet):
         return self._scope_by_collectivity(queryset).filter(uuid__in=value)
 
     def _scope_by_collectivity(self, queryset):
-        collectivity_filter = UserPermission.from_request(
-            self.request
-        ).get_collectivity_filter()
-
-        if collectivity_filter:
-            queryset = queryset.filter(
-                Q(id__in=collectivity_filter.commune_ids or [])
-                | Q(department__id__in=collectivity_filter.department_ids or [])
-                | Q(department__region__id__in=collectivity_filter.region_ids or [])
-            )
-
-        return queryset
+        return scope_by_collectivity(queryset, self.request, GeoZoneType.COMMUNE)
 
     def filter_codes(self, queryset, name, value):
         codes = [code.strip() for code in value.split(",") if code.strip()]

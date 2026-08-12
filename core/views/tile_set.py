@@ -24,16 +24,15 @@ from core.serializers.tile_set import (
 )
 from rest_framework.decorators import action
 from core.utils.bulk_csv import (
-    COL_COMMUNES,
-    COL_DEPARTMENTS,
-    COL_REGIONS,
+    COLLECTIVITY_CSV_HEADERS,
+    collectivity_csv_cells,
+    collectivity_uuids_payload,
+    parse_collectivity_columns,
     attachment_response,
     bulk_error,
     bulk_import_preview_response,
     bulk_import_run,
-    join_list,
     parse_csv,
-    parse_list,
     partition_zones_by_type,
     resolve_collectivity_uuids,
     write_csv,
@@ -50,10 +49,7 @@ TILE_SET_CSV_HEADERS = [
     "année",
     "nom du fond de carte",
     "url",
-    COL_REGIONS,
-    COL_DEPARTMENTS,
-    COL_COMMUNES,
-]
+] + COLLECTIVITY_CSV_HEADERS
 
 
 class GetLastFromCoordinatesParamsSerializer(serializers.Serializer):
@@ -142,8 +138,6 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
         permission_classes=[SuperAdminRolePermission],
     )
     def export_csv(self, request):
-        from core.models.geo_zone import GeoZoneType
-
         queryset = self.filter_queryset(self.get_queryset())
         queryset = queryset.prefetch_related("geo_zones")
 
@@ -155,9 +149,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "année": str(tile_set.date.year) if tile_set.date else "",
                     "nom du fond de carte": tile_set.name,
                     "url": tile_set.url,
-                    COL_REGIONS: join_list(zones_by_type[GeoZoneType.REGION]),
-                    COL_DEPARTMENTS: join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
-                    COL_COMMUNES: join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                    **collectivity_csv_cells(zones_by_type),
                 }
             )
 
@@ -212,9 +204,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
             year_raw = row.get("année", "")
             name = row.get("nom du fond de carte", "")
             url = row.get("url", "")
-            regions_raw = parse_list(row.get(COL_REGIONS.lower(), ""))
-            departments_raw = parse_list(row.get(COL_DEPARTMENTS.lower(), ""))
-            communes_raw = parse_list(row.get(COL_COMMUNES.lower(), ""))
+            collectivity_codes = parse_collectivity_columns(row)
 
             if not name:
                 errors.append(bulk_error("nom du fond de carte manquant", line=index))
@@ -267,13 +257,8 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                 )
                 continue
 
-            (
-                regions_uuids,
-                departments_uuids,
-                communes_uuids,
-                row_has_error,
-            ) = resolve_collectivity_uuids(
-                regions_raw, departments_raw, communes_raw, index, errors
+            collectivity_uuids, row_has_error = resolve_collectivity_uuids(
+                collectivity_codes, index, errors
             )
 
             if row_has_error:
@@ -284,9 +269,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "année": year_raw,
                     "nom du fond de carte": name,
                     "url": url,
-                    COL_REGIONS: join_list(regions_raw),
-                    COL_DEPARTMENTS: join_list(departments_raw),
-                    COL_COMMUNES: join_list(communes_raw),
+                    **collectivity_csv_cells(collectivity_codes),
                 }
             )
             payloads.append(
@@ -300,9 +283,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "min_zoom": 1,
                     "max_zoom": 22,
                     "monochrome": False,
-                    "regions_uuids": regions_uuids,
-                    "departments_uuids": departments_uuids,
-                    "communes_uuids": communes_uuids,
+                    **collectivity_uuids_payload(collectivity_uuids),
                 }
             )
 

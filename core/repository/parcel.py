@@ -21,6 +21,7 @@ from core.repository.base import (
     NumberRepoFilter,
     TimestampedBaseRepositoryMixin,
     UuidBaseRepositoryMixin,
+    collectivity_q,
 )
 from django.db.models import Q
 
@@ -641,20 +642,7 @@ class ParcelRepository(
         if filter_collectivities is None or filter_collectivities.is_empty():
             return queryset
 
-        q = Q()
-
-        if filter_collectivities.commune_ids:
-            q |= Q(commune__id__in=filter_collectivities.commune_ids)
-
-        if filter_collectivities.department_ids:
-            q |= Q(commune__department__id__in=filter_collectivities.department_ids)
-
-        if filter_collectivities.region_ids:
-            q |= Q(commune__department__region__id__in=filter_collectivities.region_ids)
-
-        queryset = queryset.filter(q)
-
-        return queryset
+        return queryset.filter(collectivity_q(filter_collectivities, "commune__"))
 
     @staticmethod
     def _prefix_q(q_obj: Q, prefix: str) -> Q:

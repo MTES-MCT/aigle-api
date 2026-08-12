@@ -19,16 +19,15 @@ from core.serializers.geo_custom_zone import (
     GeoCustomZoneWithCollectivitiesSerializer,
 )
 from core.utils.bulk_csv import (
-    COL_COMMUNES,
-    COL_DEPARTMENTS,
-    COL_REGIONS,
+    COLLECTIVITY_CSV_HEADERS,
+    collectivity_csv_cells,
+    collectivity_uuids_payload,
+    parse_collectivity_columns,
     attachment_response,
     bulk_error,
     bulk_import_preview_response,
     bulk_import_run,
-    join_list,
     parse_csv,
-    parse_list,
     partition_zones_by_type,
     resolve_collectivity_uuids,
     write_csv,
@@ -42,10 +41,7 @@ CUSTOM_ZONE_CSV_HEADERS = [
     "nom de la zone",
     "nom court de la zone",
     "couleur",
-    COL_REGIONS,
-    COL_DEPARTMENTS,
-    COL_COMMUNES,
-]
+] + COLLECTIVITY_CSV_HEADERS
 
 
 class GeometrySerializer(serializers.Serializer):
@@ -129,8 +125,6 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
         permission_classes=[SuperAdminRolePermission],
     )
     def export_csv(self, request):
-        from core.models.geo_zone import GeoZoneType
-
         queryset = self.filter_queryset(self.get_queryset())
         queryset = queryset.prefetch_related("geo_zones", "geo_custom_zone_category")
 
@@ -145,9 +139,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                     "nom de la zone": zone.name or "",
                     "nom court de la zone": zone.name_short or "",
                     "couleur": zone.color or "",
-                    COL_REGIONS: join_list(zones_by_type[GeoZoneType.REGION]),
-                    COL_DEPARTMENTS: join_list(zones_by_type[GeoZoneType.DEPARTMENT]),
-                    COL_COMMUNES: join_list(zones_by_type[GeoZoneType.COMMUNE]),
+                    **collectivity_csv_cells(zones_by_type),
                 }
             )
 
@@ -207,9 +199,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
             name = row.get("nom de la zone", "")
             name_short = row.get("nom court de la zone", "")
             color = row.get("couleur", "")
-            regions_raw = parse_list(row.get(COL_REGIONS.lower(), ""))
-            departments_raw = parse_list(row.get(COL_DEPARTMENTS.lower(), ""))
-            communes_raw = parse_list(row.get(COL_COMMUNES.lower(), ""))
+            collectivity_codes = parse_collectivity_columns(row)
 
             if not name:
                 errors.append(bulk_error("nom de la zone manquant", line=index))
@@ -269,13 +259,8 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                 )
                 continue
 
-            (
-                regions_uuids,
-                departments_uuids,
-                communes_uuids,
-                row_has_error,
-            ) = resolve_collectivity_uuids(
-                regions_raw, departments_raw, communes_raw, index, errors
+            collectivity_uuids, row_has_error = resolve_collectivity_uuids(
+                collectivity_codes, index, errors
             )
 
             if row_has_error:
@@ -287,9 +272,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                     "nom de la zone": name,
                     "nom court de la zone": name_short,
                     "couleur": color,
-                    COL_REGIONS: join_list(regions_raw),
-                    COL_DEPARTMENTS: join_list(departments_raw),
-                    COL_COMMUNES: join_list(communes_raw),
+                    **collectivity_csv_cells(collectivity_codes),
                 }
             )
 
@@ -298,9 +281,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                 "name_short": name_short or None,
                 "geo_custom_zone_status": GeoCustomZoneStatus.ACTIVE,
                 "geo_custom_zone_type": GeoCustomZoneType.COMMON,
-                "regions_uuids": regions_uuids,
-                "departments_uuids": departments_uuids,
-                "communes_uuids": communes_uuids,
+                **collectivity_uuids_payload(collectivity_uuids),
                 "geo_custom_zones_uuids": [],
             }
 

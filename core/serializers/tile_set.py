@@ -233,10 +233,14 @@ class TileSetBulkCreateInputSerializer(
 
 def check_tileset_has_collectivities(collectivities: List[GeoZone]):
     if not collectivities:
-        message = "Au moins une commune, un département ou une région doit être associé au fond de carte"
+        message = (
+            "Au moins une commune, un EPCI, un département ou une région doit être "
+            "associé au fond de carte"
+        )
         raise serializers.ValidationError(
             {
                 "communes_uuids": message,
+                "epcis_uuids": message,
                 "departments_uuids": message,
                 "regions_uuids": message,
             }

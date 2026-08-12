@@ -6,7 +6,11 @@ from rest_framework.views import APIView
 from core.constants.statistics import DdtmActivityGranularity
 from core.permissions.scope import resolve_scoped_user_group
 from core.services.ddtm_activity import DdtmActivityService
-from core.utils.permissions import DdtmGroupPermission, IsActiveAuthenticated
+from core.utils.permissions import (
+    DdtmGroupPermission,
+    IsActiveAuthenticated,
+    SupervisingGroupPermission,
+)
 
 
 def parse_granularity(request) -> str:
@@ -28,14 +32,18 @@ class DdtmActivityCommuneOptionSerializer(serializers.Serializer):
 class DdtmActivityUserGroupOptionSerializer(serializers.Serializer):
     uuid = serializers.UUIDField()
     name = serializers.CharField()
-    # Communes this group covers (own-group dashboard's commune selector). Empty for a
-    # DDTM caller, whose selector is over groups.
+    # Communes this group covers — backs the commune selector of the own-group and EPCI
+    # dashboards. Empty for a DDTM caller, whose selector is over groups.
     communes = DdtmActivityCommuneOptionSerializer(many=True)
 
 
 class DdtmActivitySummarySerializer(serializers.Serializer):
-    # None for a non-DDTM caller: the client renders the own-group dashboard instead.
+    # Exactly one of these two is set for a caller who SUPERVISES a territory, and both
+    # are null for anyone else — that is what tells the client which dashboard to render:
+    # department -> DDTM view, epci -> the same overview plus a commune selector,
+    # neither -> the own-group view.
     department_name = serializers.CharField(allow_null=True)
+    epci_name = serializers.CharField(allow_null=True)
     user_groups_count = serializers.IntegerField()
     active_user_groups_count = serializers.IntegerField()
     # (uuid, name) list for the section-2 group select.
@@ -140,27 +148,29 @@ class StatisticsDdtmActivitySummaryView(APIView):
 
 
 class StatisticsDdtmActivityUserGroupsView(APIView):
-    """Per-group activity rows (counts) for the groups table. Served as a bare array so
-    the frontend DataTable can consume it directly."""
+    """Per-group activity rows (counts) for the groups table, over the caller's
+    supervised territory (a DDTM's department or an EPCI's communes). Served as a bare
+    array so the frontend DataTable can consume it directly."""
 
-    permission_classes = [DdtmGroupPermission]
+    permission_classes = [SupervisingGroupPermission]
 
     def get(self, request):
         rows = DdtmActivityService.get_user_group_rows(
             request.user, scoped_user_group=resolve_scoped_user_group(request)
         )
         if rows is None:
-            raise NotFound("No department is linked to your DDTM group.")
+            raise NotFound("No territory is linked to your group.")
 
         serializer = DdtmActivityUserGroupSerializer(rows, many=True)
         return Response(serializer.data)
 
 
 class StatisticsDdtmActivityGroupsActivityView(APIView):
-    """Department-wide activity chart: each collectivity group classified into one tier
-    (pilot/active/connected/inactive) per period, at the requested granularity."""
+    """Territory-wide activity chart (a DDTM's department or an EPCI's communes): each
+    collectivity group classified into one tier (pilot/active/connected/inactive) per
+    period, at the requested granularity."""
 
-    permission_classes = [DdtmGroupPermission]
+    permission_classes = [SupervisingGroupPermission]
 
     def get(self, request):
         granularity = parse_granularity(request)
@@ -170,7 +180,7 @@ class StatisticsDdtmActivityGroupsActivityView(APIView):
             scoped_user_group=resolve_scoped_user_group(request),
         )
         if activity is None:
-            raise NotFound("No department is linked to your DDTM group.")
+            raise NotFound("No territory is linked to your group.")
 
         serializer = DdtmActivityGroupsActivitySerializer(activity)
         return Response(serializer.data)

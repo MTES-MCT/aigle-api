@@ -19,10 +19,9 @@ from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.response import Response
 
-from core.models.geo_commune import GeoCommune
-from core.models.geo_department import GeoDepartment
-from core.models.geo_region import GeoRegion
+from core.constants.collectivity import CODE_FIELD_BY_LEVEL, model_for_level
 from core.models.geo_zone import GeoZone, GeoZoneType
+from core.serializers.utils.with_collectivities import FIELD_NAME_BY_LEVEL
 from core.models.user_action_log import UserActionLog, UserActionLogAction
 
 
@@ -32,7 +31,18 @@ BOM = "﻿"
 
 COL_REGIONS = "régions (code INSEE)"
 COL_DEPARTMENTS = "départements (code INSEE)"
+COL_EPCIS = "EPCI (code SIREN)"
 COL_COMMUNES = "communes (code ISO)"
+
+# Coarse -> fine, which is the column order of every collectivity-bearing export.
+# Import reads columns by name, so a file predating a new level still parses.
+COL_BY_LEVEL = {
+    GeoZoneType.REGION: COL_REGIONS,
+    GeoZoneType.DEPARTMENT: COL_DEPARTMENTS,
+    GeoZoneType.EPCI: COL_EPCIS,
+    GeoZoneType.COMMUNE: COL_COMMUNES,
+}
+COLLECTIVITY_CSV_HEADERS = list(COL_BY_LEVEL.values())
 
 BulkError = Dict[str, Any]
 
@@ -118,97 +128,100 @@ def write_csv(
 def partition_zones_by_type(
     zones: Iterable[GeoZone],
 ) -> Dict[str, List[str]]:
-    """Group GeoZones by type, returning lists of codes (insee/iso).
+    """Group GeoZones by level, returning lists of codes (insee/siren/iso).
 
-    Returns a dict keyed by GeoZoneType.{REGION,DEPARTMENT,COMMUNE} containing
-    the matching zone codes (insee_code for regions and departments, iso_code
-    for communes). Used by export endpoints that emit one column per
-    collectivity level.
+    Keyed by GeoZoneType; zones of any other type (custom zones) are dropped.
+    Used by export endpoints that emit one column per collectivity level.
     """
-    ids_by_type: Dict[str, List[int]] = {
-        GeoZoneType.REGION: [],
-        GeoZoneType.DEPARTMENT: [],
-        GeoZoneType.COMMUNE: [],
-    }
+    ids_by_level: Dict[str, List[int]] = {level: [] for level in COL_BY_LEVEL}
+
     for zone in zones:
-        if zone.geo_zone_type in ids_by_type:
-            ids_by_type[zone.geo_zone_type].append(zone.id)
+        if zone.geo_zone_type in ids_by_level:
+            ids_by_level[zone.geo_zone_type].append(zone.id)
 
-    region_codes = dict(
-        GeoRegion.objects.filter(id__in=ids_by_type[GeoZoneType.REGION]).values_list(
-            "id", "insee_code"
+    codes_by_level: Dict[str, List[str]] = {}
+    for level, ids in ids_by_level.items():
+        codes = dict(
+            model_for_level(level)
+            .objects.filter(id__in=ids)
+            .values_list("id", CODE_FIELD_BY_LEVEL[level])
         )
-    )
-    department_codes = dict(
-        GeoDepartment.objects.filter(
-            id__in=ids_by_type[GeoZoneType.DEPARTMENT]
-        ).values_list("id", "insee_code")
-    )
-    commune_codes = dict(
-        GeoCommune.objects.filter(id__in=ids_by_type[GeoZoneType.COMMUNE]).values_list(
-            "id", "iso_code"
-        )
-    )
+        codes_by_level[level] = [codes[zid] for zid in ids if zid in codes]
 
+    return codes_by_level
+
+
+def parse_collectivity_columns(row: Dict[str, str]) -> Dict[str, List[str]]:
+    """Read every collectivity column of an imported row into {level: [codes]}.
+
+    A column absent from the uploaded file yields an empty list, so files written
+    before a level existed still import.
+    """
     return {
-        GeoZoneType.REGION: [
-            region_codes[zid]
-            for zid in ids_by_type[GeoZoneType.REGION]
-            if zid in region_codes
-        ],
-        GeoZoneType.DEPARTMENT: [
-            department_codes[zid]
-            for zid in ids_by_type[GeoZoneType.DEPARTMENT]
-            if zid in department_codes
-        ],
-        GeoZoneType.COMMUNE: [
-            commune_codes[zid]
-            for zid in ids_by_type[GeoZoneType.COMMUNE]
-            if zid in commune_codes
-        ],
+        level: parse_list(row.get(col.lower(), ""))
+        for level, col in COL_BY_LEVEL.items()
     }
+
+
+def collectivity_csv_cells(codes_by_level: Dict[str, List[str]]) -> Dict[str, str]:
+    """{column header: joined codes} — the collectivity half of an export row or of
+    an import preview row."""
+    return {
+        col: join_list(codes_by_level.get(level) or [])
+        for level, col in COL_BY_LEVEL.items()
+    }
+
+
+def collectivity_uuids_payload(
+    uuids_by_level: Dict[str, List[str]],
+) -> Dict[str, List[str]]:
+    """{level: [uuids]} -> the `<level>s_uuids` keys the input serializers expect."""
+    return {
+        f"{FIELD_NAME_BY_LEVEL[level]}_uuids": uuids_by_level.get(level) or []
+        for level in COL_BY_LEVEL
+    }
+
+
+_LEVEL_LABELS = {
+    GeoZoneType.REGION: "région",
+    GeoZoneType.DEPARTMENT: "département",
+    GeoZoneType.EPCI: "EPCI",
+    GeoZoneType.COMMUNE: "commune",
+}
 
 
 def resolve_collectivity_uuids(
-    regions: List[str],
-    departments: List[str],
-    communes: List[str],
+    codes_by_level: Dict[str, List[str]],
     line_index: int,
     errors: List[BulkError],
-) -> Tuple[List[str], List[str], List[str], bool]:
-    """Resolve collectivity codes to GeoZone uuids.
+) -> Tuple[Dict[str, List[str]], bool]:
+    """Resolve collectivity codes to GeoZone uuids, per level.
 
-    Regions and departments are looked up by ``insee_code``, communes by
-    ``iso_code``. Any unmatched code is appended to ``errors`` (mutated in
-    place). Returns (region_uuids, department_uuids, commune_uuids, has_error).
+    Each level is looked up on its own code column (insee/siren/iso). Any unmatched
+    code is appended to ``errors`` (mutated in place). Returns
+    ({level: [uuids]}, has_error).
     """
     has_error = False
-    resolved: Dict[str, List[str]] = {"région": [], "département": [], "commune": []}
+    resolved: Dict[str, List[str]] = {level: [] for level in COL_BY_LEVEL}
 
-    for label, model, raw_values, code_field in (
-        ("région", GeoRegion, regions, "insee_code"),
-        ("département", GeoDepartment, departments, "insee_code"),
-        ("commune", GeoCommune, communes, "iso_code"),
-    ):
+    for level, raw_values in codes_by_level.items():
+        model = model_for_level(level)
+        code_field = CODE_FIELD_BY_LEVEL[level]
+
         for raw in raw_values:
             obj = model.objects.filter(**{code_field: raw.strip()}).first()
             if not obj:
                 errors.append(
                     bulk_error(
-                        f"{label} avec le code '{raw}' introuvable",
+                        f"{_LEVEL_LABELS[level]} avec le code '{raw}' introuvable",
                         line=line_index,
                     )
                 )
                 has_error = True
                 continue
-            resolved[label].append(str(obj.uuid))
+            resolved[level].append(str(obj.uuid))
 
-    return (
-        resolved["région"],
-        resolved["département"],
-        resolved["commune"],
-        has_error,
-    )
+    return resolved, has_error
 
 
 def attachment_response(filename: str) -> HttpResponse:

@@ -32,6 +32,12 @@ from core.tests.fixtures.users import create_user_group
 
 # A small valid polygon inside Hérault (department code "34"), in WGS84.
 HERAULT_POLYGON_WKT = "POLYGON((3.0 43.3, 3.2 43.3, 3.2 43.5, 3.0 43.5, 3.0 43.3))"
+# A strict subset of it, chosen so it does NOT cover INSIDE_POINT — an override with
+# this geometry must drop the detection links the wider polygon had earned.
+SHRUNK_HERAULT_POLYGON_WKT = (
+    "POLYGON((3.0 43.3, 3.05 43.3, 3.05 43.35, 3.0 43.35, 3.0 43.3))"
+)
+INSIDE_POINT = Point(3.1, 43.4, srid=4326)
 
 
 def _create_source_table():
@@ -50,6 +56,15 @@ def _create_source_table():
                 created_at date NULL
             )
             """
+        )
+
+
+def _update_source_geometry(source_id, geometry_wkt, srid=4326):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE detections.zae_layer SET geometry = ST_GeomFromText(%s, %s) "
+            "WHERE id = %s",
+            [geometry_wkt, srid, source_id],
         )
 
 
@@ -140,6 +155,16 @@ class ImportCustomZonesCommandTests(BaseTestCase):
         _insert_source_row("zfee", "34")
         call_command("import_custom_zones", "--force")
         self.assertEqual(GeoCustomZone.objects.count(), 2)
+
+    def test_duplicate_error_mentions_override(self):
+        _seed_categories("zfee")
+        _insert_source_row("zfee", "34")
+        call_command("import_custom_zones")
+        _insert_source_row("zfee", "34")
+
+        with self.assertRaises(CommandError) as ctx:
+            call_command("import_custom_zones")
+        self.assertIn("--override", str(ctx.exception))
 
     def test_reimport_is_idempotent(self):
         _seed_categories("zfee")
@@ -341,3 +366,390 @@ class ImportCustomZonesCommandTests(BaseTestCase):
             detection_object.id,
             list(zone.detection_objects.values_list("id", flat=True)),
         )
+
+
+class ImportCustomZonesOverrideTests(BaseTestCase):
+    """`--override`: replace the custom zone a source row conflicts with instead of
+    aborting on the (department, category) duplicate check, then refresh its detection
+    links exactly as `update_custom_zones` does."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        _create_source_table()
+        # "zi" is seeded up front (its colour must stay unique) so a test can move a
+        # source row to another layer_type without reseeding.
+        self.categories = _seed_categories("zfee", "zi")
+
+    def _import_first_zone(self, layer_name="ZFEE Hérault"):
+        source_id = _insert_source_row("zfee", "34", layer_name=layer_name)
+        call_command("import_custom_zones")
+        return source_id, GeoCustomZone.objects.get(import_id=source_id)
+
+    def _covered_object_ids(self, zone):
+        return list(zone.detection_objects.values_list("id", flat=True))
+
+    def _create_covered_detection(self, geometry=INSIDE_POINT, batch_id="batch-ovr"):
+        detection_object = create_detection_object()
+        create_detection(
+            detection_object=detection_object,
+            tile=create_tile(x=1, y=1, z=18),
+            tile_set=create_tile_set(name="Override TS"),
+            geometry=geometry,
+            batch_id=batch_id,
+        )
+        return detection_object
+
+    def test_override_replaces_the_zone_holding_the_pair(self):
+        # A DIFFERENT source row for the same (department, category): without --override
+        # this is the CommandError the admin interface reports.
+        _, zone = self._import_first_zone()
+        new_source_id = _insert_source_row(
+            "zfee", "34", geometry_wkt=SHRUNK_HERAULT_POLYGON_WKT, layer_name="ZFEE v2"
+        )
+
+        call_command("import_custom_zones", "--override")
+
+        # replaced, not duplicated — and the very same row, so anything pointing at its
+        # uuid (user groups, detection links, saved app state) still resolves
+        self.assertEqual(GeoCustomZone.objects.count(), 1)
+        zone.refresh_from_db()
+        self.assertEqual(zone.import_id, new_source_id)
+        self.assertEqual(zone.import_layer_name, "ZFEE v2")
+        self.assertEqual(zone.name, "ZFEE v2")
+        self.assertEqual(zone.name_normalized, "zfee v2")
+        self.assertEqual(zone.geo_custom_zone_category, self.categories["zfee"])
+        self.assertEqual(
+            list(zone.geo_zones.values_list("id", flat=True)), [self.department.id]
+        )
+
+    def test_override_writes_the_new_geometry(self):
+        _, zone = self._import_first_zone()
+        original_uuid = zone.uuid
+        _insert_source_row(
+            "zfee", "34", geometry_wkt=SHRUNK_HERAULT_POLYGON_WKT, layer_name="ZFEE v2"
+        )
+
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(zone.uuid, original_uuid)
+        # the shrunk polygon no longer covers the point the original one did
+        self.assertFalse(zone.geometry.covers(INSIDE_POINT))
+        self.assertEqual(zone.geometry.srid, 4326)
+
+    def test_override_reimports_the_same_source_row(self):
+        # Without --override an already-imported row is skipped by import_id; with it,
+        # the row is re-read so an edited source geometry actually reaches the zone.
+        source_id, zone = self._import_first_zone()
+        _update_source_geometry(source_id, SHRUNK_HERAULT_POLYGON_WKT)
+
+        call_command("import_custom_zones", "--override")
+
+        self.assertEqual(GeoCustomZone.objects.count(), 1)
+        zone.refresh_from_db()
+        self.assertEqual(zone.import_id, source_id)
+        self.assertFalse(zone.geometry.covers(INSIDE_POINT))
+
+    def test_override_removes_detection_links_the_new_geometry_misses(self):
+        # This is the update_custom_zones refresh: the plain import only ever ADDS links,
+        # so without it the object would stay attached to a zone that no longer covers it.
+        detection_object = self._create_covered_detection()
+        source_id, zone = self._import_first_zone()
+        self.assertEqual(self._covered_object_ids(zone), [detection_object.id])
+
+        _update_source_geometry(source_id, SHRUNK_HERAULT_POLYGON_WKT)
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(self._covered_object_ids(zone), [])
+
+    def test_override_adds_detection_links_the_new_geometry_gains(self):
+        source_id, zone = self._import_first_zone()
+        _update_source_geometry(source_id, SHRUNK_HERAULT_POLYGON_WKT)
+        call_command("import_custom_zones", "--override")
+
+        # a detection covered only by the ORIGINAL polygon, added after the shrink
+        detection_object = self._create_covered_detection()
+        _update_source_geometry(source_id, HERAULT_POLYGON_WKT)
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(self._covered_object_ids(zone), [detection_object.id])
+
+    def test_override_keeps_a_name_edited_in_the_app(self):
+        # `name` is admin-editable; `import_layer_name` records what the import set it to.
+        # Once they differ somebody renamed the zone, and a re-import must not undo it.
+        _, zone = self._import_first_zone()
+        zone.name = "Nom choisi par l'admin"
+        zone.save()
+        _insert_source_row("zfee", "34", layer_name="ZFEE v2")
+
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(zone.name, "Nom choisi par l'admin")
+        # the source tracking still moves to the new row
+        self.assertEqual(zone.import_layer_name, "ZFEE v2")
+
+    def test_override_refreshes_a_generated_name_when_the_category_changed(self):
+        # A source row with no layer_name is named from its category, and stores
+        # import_layer_name = NULL. That NULL must not be read as "renamed in the app":
+        # the zone would keep naming the category it no longer belongs to.
+        source_id = _insert_source_row("zfee", "34", layer_name=None)
+        call_command("import_custom_zones")
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertEqual(
+            zone.name,
+            f"{LAYER_TYPE_CATEGORY_NAME_MAP['zfee']} - {self.department.name}",
+        )
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE detections.zae_layer SET layer_type = 'zi' WHERE id = %s",
+                [source_id],
+            )
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(
+            zone.name, f"{LAYER_TYPE_CATEGORY_NAME_MAP['zi']} - {self.department.name}"
+        )
+        self.assertEqual(zone.geo_custom_zone_category, self.categories["zi"])
+
+    def test_override_picks_up_a_layer_name_the_source_row_gained(self):
+        source_id = _insert_source_row("zfee", "34", layer_name=None)
+        call_command("import_custom_zones")
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE detections.zae_layer SET layer_name = %s WHERE id = %s",
+                ["ZFEE nommée", source_id],
+            )
+        call_command("import_custom_zones", "--override")
+
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertEqual(zone.name, "ZFEE nommée")
+        self.assertEqual(zone.import_layer_name, "ZFEE nommée")
+
+    def test_override_keeps_a_renamed_zone_that_had_no_source_layer_name(self):
+        # The protection still holds for a generated name: renaming it in the app makes
+        # it differ from what the import wrote, so the import leaves it alone.
+        source_id = _insert_source_row("zfee", "34", layer_name=None)
+        call_command("import_custom_zones")
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        zone.name = "Nom choisi par l'admin"
+        zone.save()
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE detections.zae_layer SET layer_name = %s WHERE id = %s",
+                ["ZFEE nommée", source_id],
+            )
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(zone.name, "Nom choisi par l'admin")
+        self.assertEqual(zone.import_layer_name, "ZFEE nommée")
+
+    def test_override_replaces_a_zone_that_carries_no_source_row(self):
+        # Regression: zones predating this command (SQL import, insert_shp, the admin)
+        # have no import_id, and they are exactly what the duplicate check blocks on.
+        # Skipping them here left --override unable to resolve the conflict its own error
+        # message points at, silently adding a SECOND zone to the pair.
+        preexisting = GeoCustomZone.objects.create(
+            name="ZNAF 77",
+            geometry=Polygon(
+                ((3.0, 43.3), (3.2, 43.3), (3.2, 43.5), (3.0, 43.5), (3.0, 43.3)),
+                srid=4326,
+            ),
+            geo_custom_zone_category=self.categories["zfee"],
+        )
+        preexisting.geo_zones.add(self.department)
+        self.assertIsNone(preexisting.import_id)
+        source_id = _insert_source_row(
+            "zfee", "34", geometry_wkt=SHRUNK_HERAULT_POLYGON_WKT, layer_name="ZFEE v2"
+        )
+
+        call_command("import_custom_zones", "--override")
+
+        # replaced, not duplicated — the pair still holds exactly one zone
+        self.assertEqual(GeoCustomZone.objects.count(), 1)
+        # re-read rather than refresh_from_db: the manager defers `geometry`, so a
+        # refresh leaves the stale value this instance loaded on create()
+        reloaded = GeoCustomZone.objects.get(pk=preexisting.pk)
+        self.assertEqual(reloaded.import_id, source_id)
+        self.assertEqual(reloaded.import_layer_name, "ZFEE v2")
+        self.assertFalse(reloaded.geometry.covers(INSIDE_POINT))
+        # a name chosen outside the import is still not clobbered
+        self.assertEqual(reloaded.name, "ZNAF 77")
+
+    def test_override_prefers_the_imported_zone_when_both_hold_the_pair(self):
+        # --force runs can leave an import-born zone next to an older one; the import
+        # claims its own rather than an unrelated zone.
+        # the stray is created FIRST so it holds the lower id: picking the import-born
+        # zone then has to be a real preference, not just "the oldest one".
+        stray = GeoCustomZone.objects.create(
+            name="Zone héritée",
+            geometry=Polygon(
+                ((3.0, 43.3), (3.2, 43.3), (3.2, 43.5), (3.0, 43.5), (3.0, 43.3)),
+                srid=4326,
+            ),
+            geo_custom_zone_category=self.categories["zfee"],
+        )
+        stray.geo_zones.add(self.department)
+        first_source_id = _insert_source_row("zfee", "34", layer_name="ZFEE Hérault")
+        # --force is what leaves two zones on one pair in the first place
+        call_command("import_custom_zones", "--force")
+        imported = GeoCustomZone.objects.get(import_id=first_source_id)
+        self.assertGreater(imported.id, stray.id)
+
+        new_source_id = _insert_source_row("zfee", "34", layer_name="ZFEE v2")
+        call_command("import_custom_zones", "--override")
+
+        imported.refresh_from_db()
+        stray.refresh_from_db()
+        self.assertEqual(imported.import_id, new_source_id)
+        self.assertIsNone(stray.import_id)
+        self.assertEqual(stray.name, "Zone héritée")
+
+    def test_override_associates_user_groups_added_since_the_first_import(self):
+        _, zone = self._import_first_zone()
+        montpellier = create_montpellier_commune(department=self.department)
+        late_group = create_user_group(name="Montpellier", geo_zones=[montpellier])
+        self.assertNotIn(zone, late_group.geo_custom_zones.all())
+
+        _insert_source_row("zfee", "34", layer_name="ZFEE v2")
+        call_command("import_custom_zones", "--override")
+
+        self.assertIn(zone, late_group.geo_custom_zones.all())
+
+    def test_override_keeps_only_the_latest_of_two_rows_claiming_one_pair(self):
+        # Two source rows claiming one (department, category) is the case that aborts
+        # without a flag. Overriding resolves it the only way it can — one zone — and
+        # rows are written in source-id order, so the outcome is the same on every run.
+        first_source_id = _insert_source_row("zfee", "34", layer_name="A")
+        last_source_id = _insert_source_row("zfee", "34", layer_name="B")
+
+        call_command("import_custom_zones", "--override")
+
+        zone = GeoCustomZone.objects.get()
+        self.assertEqual(zone.import_id, last_source_id)
+        self.assertEqual(zone.name, "B")
+        self.assertFalse(
+            GeoCustomZone.objects.filter(import_id=first_source_id).exists()
+        )
+
+    def test_override_refreshes_each_zone_that_owns_its_own_source_row(self):
+        # Regression: rows must be matched to a zone one by one. Two rows that END UP
+        # on the same (department, category) — here because one had its layer_type
+        # corrected — still own distinct zones through import_id, and dropping either
+        # would leave a zone stale with the very flag meant to refresh it.
+        zfee_source_id, zfee_zone = self._import_first_zone()
+        zi_source_id = _insert_source_row("zi", "34", layer_name="ZI Hérault")
+        call_command("import_custom_zones")
+        zi_zone = GeoCustomZone.objects.get(import_id=zi_source_id)
+
+        # the zfee row is retyped at source: both rows now claim (Hérault, ZI)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE detections.zae_layer SET layer_type = 'zi' WHERE id = %s",
+                [zfee_source_id],
+            )
+        _update_source_geometry(zfee_source_id, SHRUNK_HERAULT_POLYGON_WKT)
+        _update_source_geometry(zi_source_id, SHRUNK_HERAULT_POLYGON_WKT)
+
+        call_command("import_custom_zones", "--override")
+
+        # both zones survive and both were refreshed — neither row was dropped
+        self.assertEqual(GeoCustomZone.objects.count(), 2)
+        for zone in (zfee_zone, zi_zone):
+            zone.refresh_from_db()
+            self.assertFalse(zone.geometry.covers(INSIDE_POINT), zone.name)
+        zfee_zone.refresh_from_db()
+        self.assertEqual(
+            zfee_zone.geo_custom_zone_category.name, LAYER_TYPE_CATEGORY_NAME_MAP["zi"]
+        )
+
+    def test_override_updates_the_category_when_the_layer_type_changed(self):
+        # A layer_type corrected at source must move the zone to the right category,
+        # otherwise it keeps occupying the pair it no longer belongs to.
+        source_id, zone = self._import_first_zone()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE detections.zae_layer SET layer_type = 'zi' WHERE id = %s",
+                [source_id],
+            )
+
+        call_command("import_custom_zones", "--override")
+
+        zone.refresh_from_db()
+        self.assertEqual(
+            zone.geo_custom_zone_category.name, LAYER_TYPE_CATEGORY_NAME_MAP["zi"]
+        )
+
+    def test_override_with_ignore_categories_keeps_an_existing_category(self):
+        # --ignore-categories resolves every row to a NULL category; that must not wipe
+        # the category a previous categorized import set on the zone.
+        source_id, zone = self._import_first_zone()
+
+        call_command("import_custom_zones", "--override", "--ignore-categories")
+
+        zone.refresh_from_db()
+        self.assertEqual(zone.import_id, source_id)
+        self.assertEqual(
+            zone.geo_custom_zone_category.name, LAYER_TYPE_CATEGORY_NAME_MAP["zfee"]
+        )
+
+    def test_override_wins_over_force(self):
+        # --force creates duplicates, --override replaces; together the replacement
+        # wins, so a run can never both replace and duplicate the same zone.
+        _insert_source_row("zfee", "34", layer_name="A")
+        _insert_source_row("zfee", "34", layer_name="B")
+
+        call_command("import_custom_zones", "--override", "--force")
+
+        self.assertEqual(GeoCustomZone.objects.count(), 1)
+
+    def test_override_creates_normally_when_nothing_conflicts(self):
+        source_id = _insert_source_row("zfee", "34", layer_name="ZFEE Hérault")
+
+        call_command("import_custom_zones", "--override")
+
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertEqual(zone.name, "ZFEE Hérault")
+        self.assertIn(
+            self.department.id, list(zone.geo_zones.values_list("id", flat=True))
+        )
+
+    def test_override_with_ignore_categories_matches_only_the_source_row(self):
+        # Uncategorized zones share the (department, NULL) pair, so it is not a usable
+        # key: only the row's own import_id can identify the zone to replace.
+        source_id = _insert_source_row("zfee", "34", layer_name="Uncat")
+        call_command("import_custom_zones", "--ignore-categories")
+        _update_source_geometry(source_id, SHRUNK_HERAULT_POLYGON_WKT)
+        _insert_source_row("zfee", "34", layer_name="Autre zone non catégorisée")
+
+        call_command("import_custom_zones", "--override", "--ignore-categories")
+
+        # the first row refreshed its own zone, the second created a new one
+        self.assertEqual(GeoCustomZone.objects.count(), 2)
+        zone = GeoCustomZone.objects.get(import_id=source_id)
+        self.assertIsNone(zone.geo_custom_zone_category)
+        self.assertFalse(zone.geometry.covers(INSIDE_POINT))
+
+    def test_override_ignores_a_soft_deleted_zone(self):
+        # A soft-deleted zone is invisible to the import (as it is to the deploy status),
+        # so the row is imported fresh rather than resurrecting it.
+        _, zone = self._import_first_zone()
+        zone.deleted = True
+        zone.save()
+        new_source_id = _insert_source_row("zfee", "34", layer_name="ZFEE v2")
+
+        call_command("import_custom_zones", "--override")
+
+        created = GeoCustomZone.objects.get(import_id=new_source_id)
+        self.assertNotEqual(created.id, zone.id)
+        zone.refresh_from_db()
+        self.assertTrue(zone.deleted)

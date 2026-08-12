@@ -3,7 +3,8 @@ from django.db.models import Q
 
 
 from core.models.geo_region import GeoRegion
-from core.permissions.user import UserPermission
+from core.models.geo_zone import GeoZoneType
+from core.views.utils.collectivity_scope import scope_by_collectivity
 from core.serializers.geo_region import GeoRegionDetailSerializer, GeoRegionSerializer
 from django_filters import FilterSet, CharFilter
 
@@ -33,18 +34,7 @@ class GeoRegionFilter(FilterSet):
         return self._scope_by_collectivity(queryset).filter(uuid__in=value)
 
     def _scope_by_collectivity(self, queryset):
-        collectivity_filter = UserPermission.from_request(
-            self.request
-        ).get_collectivity_filter()
-
-        if collectivity_filter:
-            queryset = queryset.filter(
-                Q(departments__communes__id__in=collectivity_filter.commune_ids or [])
-                | Q(departments__id__in=collectivity_filter.department_ids or [])
-                | Q(id__in=collectivity_filter.region_ids or [])
-            )
-
-        return queryset
+        return scope_by_collectivity(queryset, self.request, GeoZoneType.REGION)
 
     def filter_codes(self, queryset, name, value):
         codes = [code.strip() for code in value.split(",") if code.strip()]
