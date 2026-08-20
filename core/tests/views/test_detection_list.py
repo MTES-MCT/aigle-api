@@ -8,8 +8,11 @@ from django.urls import reverse
 from rest_framework import status
 
 from core.constants.geo import SRID
-from core.models.detection_data import DetectionControlStatus
-from core.models.geo_custom_zone import GeoCustomZone
+from core.models.detection_data import (
+    DetectionControlStatus,
+    DetectionValidationStatus,
+)
+from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.tile_set import TileSetType
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.users import (
@@ -68,6 +71,58 @@ class DetectionListViewSetTests(BaseAPITestCase):
         url = reverse("DetectionListViewSet-list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_download_excludes_deactivated_custom_zones(self):
+        # Regression: the CSV/XLSX export "Zones à enjeux" column is built from a
+        # separate Subquery annotation that bypassed the ACTIVE-filtered prefetch, so
+        # deactivated zones leaked into the downloaded file.
+        self.authenticate_user(self.super_admin)
+
+        tile_set = create_tile_set(name="DL TileSet 2024")
+        tile_set.geo_zones.add(self.geo_data["departments"]["herault"])
+
+        object_type = create_object_type(name="Cabane DL")
+        detection_object = create_detection_object(
+            object_type=object_type,
+            commune=self.geo_data["communes"]["montpellier"],
+        )
+        detection_data = create_detection_data(
+            detection_validation_status=DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+            detection_control_status=DetectionControlStatus.NOT_CONTROLLED,
+        )
+        create_detection(
+            detection_object=detection_object,
+            tile_set=tile_set,
+            geometry=Point(3.88, 43.61, srid=4326),
+            score=0.95,
+            detection_data=detection_data,
+        )
+
+        active_zone = GeoCustomZone.objects.create(
+            name="Active DL enjeux",
+            geometry=self.create_bbox_polygon(3.0, 43.0, 4.0, 44.0),
+            geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+        )
+        inactive_zone = GeoCustomZone.objects.create(
+            name="Deactivated DL enjeux",
+            geometry=self.create_bbox_polygon(3.0, 43.0, 4.0, 44.0),
+            geo_custom_zone_status=GeoCustomZoneStatus.INACTIVE,
+        )
+        detection_object.geo_custom_zones.add(active_zone, inactive_zone)
+
+        url = reverse("DetectionListViewSet-download")
+        response = self.client.get(
+            url,
+            {"customZonesUuids": str(active_zone.uuid), "outputFormat": "csv"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        rows = list(csv.reader(io.StringIO(response.content.decode("utf-8"))))
+        zones_index = rows[0].index("Zones à enjeux")
+        zone_cells = [row[zones_index] for row in rows[1:]]
+
+        self.assertTrue(any("Active DL enjeux" in cell for cell in zone_cells))
+        self.assertFalse(any("Deactivated DL enjeux" in cell for cell in zone_cells))
 
     def test_list_accepts_the_supported_orderings(self):
         self.authenticate_user(self.regular)

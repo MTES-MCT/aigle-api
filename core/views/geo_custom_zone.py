@@ -41,6 +41,7 @@ CUSTOM_ZONE_CSV_HEADERS = [
     "nom de la zone",
     "nom court de la zone",
     "couleur",
+    "description",
 ] + COLLECTIVITY_CSV_HEADERS
 
 
@@ -139,6 +140,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                     "nom de la zone": zone.name or "",
                     "nom court de la zone": zone.name_short or "",
                     "couleur": zone.color or "",
+                    "description": zone.description or "",
                     **collectivity_csv_cells(zones_by_type),
                 }
             )
@@ -199,6 +201,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
             name = row.get("nom de la zone", "")
             name_short = row.get("nom court de la zone", "")
             color = row.get("couleur", "")
+            description = row.get("description", "")
             collectivity_codes = parse_collectivity_columns(row)
 
             if not name:
@@ -272,6 +275,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
                     "nom de la zone": name,
                     "nom court de la zone": name_short,
                     "couleur": color,
+                    "description": description,
                     **collectivity_csv_cells(collectivity_codes),
                 }
             )
@@ -279,6 +283,7 @@ class GeoCustomZoneViewSet(UserActionLogMixin, BaseViewSetMixin[GeoCustomZone]):
             payload: Dict[str, Any] = {
                 "name": name,
                 "name_short": name_short or None,
+                "description": description or None,
                 "geo_custom_zone_status": GeoCustomZoneStatus.ACTIVE,
                 "geo_custom_zone_type": GeoCustomZoneType.COMMON,
                 **collectivity_uuids_payload(collectivity_uuids),

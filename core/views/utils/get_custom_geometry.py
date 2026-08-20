@@ -7,7 +7,7 @@ from rest_framework import serializers
 
 from core.constants.geo import SRID
 from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
+from core.models.geo_custom_zone import GeoCustomZone
 from core.serializers.geo_custom_zone import GeoCustomZoneGeoFeatureSerializer
 from core.utils.postgis import SimplifyPreserveTopology
 from django.contrib.gis.geos import Polygon
@@ -77,8 +77,7 @@ def endpoint(request):
 
 
 def get_negative_geometry(uuids: List[str], polygon_requested: Polygon):
-    queryset = GeoCustomZone.objects.filter(
-        geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+    queryset = GeoCustomZone.objects.active().filter(
         geometry__intersects=polygon_requested,
     )
 
@@ -110,7 +109,7 @@ def get_queryset_geocustomzone(uuids: List[str], polygon_requested: Polygon):
     except (ValueError, TypeError):
         pass
 
-    queryset = queryset.filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
+    queryset = queryset.active()
     queryset = queryset.filter(geometry__intersects=polygon_requested)
     queryset = queryset.values("uuid", "geo_custom_zone_status", "geo_custom_zone_type")
     queryset = queryset.annotate(

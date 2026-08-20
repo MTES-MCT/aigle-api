@@ -4,6 +4,7 @@ from django.db.models.query import QuerySet
 
 from core.models.analytic_log import AnalyticLogType
 from core.models.detection_data import DetectionControlStatus, DetectionValidationStatus
+from core.models.geo_custom_zone import GeoCustomZoneStatus
 from core.models.parcel import Parcel
 from core.models.user_group import UserGroup
 from core.permissions.geo_custom_zone import GeoCustomZonePermission
@@ -199,7 +200,14 @@ class ParcelService:
 
     @staticmethod
     def get_parcel_custom_geo_zones(parcel: Parcel) -> List[Dict[str, Any]]:
-        """Relies on prefetched detection_objects when available."""
+        """Relies on prefetched detection_objects when available.
+
+        Deactivated (INACTIVE) zones are excluded: a "zone à enjeux" that has been
+        turned off must not surface in the signalement report. Sub zones carry no
+        status of their own, so dropping an inactive parent from the list also drops
+        its sub zones (reconciliate_custom_zones_with_sub only emits sub zones under a
+        parent present in `custom_zones`).
+        """
         from core.serializers.utils.custom_zones import (
             reconciliate_custom_zones_with_sub,
         )
@@ -208,7 +216,11 @@ class ParcelService:
         sub_custom_zones_set = set()
 
         for detection_obj in parcel.detection_objects.all():
-            geo_custom_zones_set.update(detection_obj.geo_custom_zones.all())
+            geo_custom_zones_set.update(
+                geo_custom_zone
+                for geo_custom_zone in detection_obj.geo_custom_zones.all()
+                if geo_custom_zone.geo_custom_zone_status == GeoCustomZoneStatus.ACTIVE
+            )
             sub_custom_zones_set.update(detection_obj.geo_sub_custom_zones.all())
 
         return reconciliate_custom_zones_with_sub(

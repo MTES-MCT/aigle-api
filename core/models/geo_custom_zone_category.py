@@ -12,6 +12,7 @@ class GeoCustomZoneCategory(TimestampedModelMixin, UuidModelMixin, DeletableMode
     name_short = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True, null=True)
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
     name_normalized = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
+    description = models.TextField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
         self.name_normalized = normalize(self.name)

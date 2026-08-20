@@ -56,9 +56,7 @@ class GeoCustomZonePermission(
         if self._is_unrestricted():
             geo_custom_zones_prefetch = Prefetch(
                 f"{lookup_root}geo_custom_zones",
-                queryset=GeoCustomZone.objects.filter(
-                    geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
-                ),
+                queryset=GeoCustomZone.objects.active(),
             )
             geo_custom_zones_category_prefetch = Prefetch(
                 f"{lookup_root}geo_custom_zones__geo_custom_zone_category",
@@ -69,8 +67,7 @@ class GeoCustomZonePermission(
         elif self.scoped_user_group:
             geo_custom_zones_prefetch = Prefetch(
                 f"{lookup_root}geo_custom_zones",
-                queryset=GeoCustomZone.objects.filter(
-                    geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+                queryset=GeoCustomZone.objects.active().filter(
                     user_groups_custom_geo_zones=self.scoped_user_group,
                 ),
             )
@@ -84,8 +81,7 @@ class GeoCustomZonePermission(
         else:
             geo_custom_zones_prefetch = Prefetch(
                 f"{lookup_root}geo_custom_zones",
-                queryset=GeoCustomZone.objects.filter(
-                    geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
+                queryset=GeoCustomZone.objects.active().filter(
                     user_groups_custom_geo_zones__user_user_groups__user=self.user.id,
                 ),
             )
@@ -115,9 +111,7 @@ class GeoCustomZonePermission(
         spanning several adjacent accessible zones (inside their union but inside no
         single one) is still allowed; it is simply created with no zone associated (the
         association rule stays single-zone `covers`)."""
-        queryset = GeoCustomZone.objects.filter(
-            geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
-        )
+        queryset = GeoCustomZone.objects.active()
 
         if self.scoped_user_group:
             queryset = queryset.filter(
