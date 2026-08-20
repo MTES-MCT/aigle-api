@@ -21,10 +21,19 @@ class UserSerializer(UserSerializerBase):
             "deleted",
             "is_staff",
             "user_user_groups",
+            "feature_flags",
         ]
 
     email = serializers.CharField()
     user_user_groups = UserUserGroupSerializer(many=True)
+    feature_flags = serializers.SerializerMethodField()
+
+    def get_feature_flags(self, obj):
+        from core.services.user import UserService
+
+        return UserService.get_feature_flags(
+            user_user_group.user_group for user_user_group in obj.user_user_groups.all()
+        )
 
 
 class UserInputSerializer(UserSerializer):

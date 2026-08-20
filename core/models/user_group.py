@@ -3,6 +3,7 @@ from django.db import models
 
 from common.constants.models import DEFAULT_MAX_LENGTH
 from common.models.deletable import DeletableModelMixin
+from common.models.functions import ArrayHasUniqueValues
 from common.models.timestamped import TimestampedModelMixin
 from common.models.uuid import UuidModelMixin
 from django.contrib.postgres.fields import ArrayField
@@ -20,6 +21,15 @@ class UserGroupType(models.TextChoices):
     COLLECTIVITY = "COLLECTIVITY", "COLLECTIVITY"
 
 
+class FeatureFlag(models.TextChoices):
+    """Every feature that can be switched on per user group.
+
+    The label is what the admin form displays, so it is written for a human.
+    """
+
+    STATS = "STATS", "Statistiques"
+
+
 class UserGroup(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)
     geo_zones = models.ManyToManyField(GeoZone, related_name="user_groups")
@@ -33,9 +43,23 @@ class UserGroup(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
         max_length=DEFAULT_MAX_LENGTH,
         choices=UserGroupType.choices,
     )
+    feature_flags = ArrayField(
+        models.CharField(
+            max_length=DEFAULT_MAX_LENGTH,
+            choices=FeatureFlag.choices,
+        ),
+        default=list,
+        blank=True,
+    )
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + []
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(ArrayHasUniqueValues("feature_flags")),
+                name="user_group_feature_flags_unique",
+            ),
+        ]
 
 
 class UserGroupRight(models.TextChoices):
