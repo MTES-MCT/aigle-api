@@ -5,7 +5,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import Q
 
 from core.models.geo_commune import GeoCommune
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
+from core.models.geo_custom_zone import GeoCustomZone
 from core.models.geo_department import GeoDepartment
 from core.models.geo_epci import GeoEpci
 from core.models.geo_zone import GeoZone, GeoZoneType
@@ -398,10 +398,8 @@ class DataDeploymentService:
         scope_ids.discard(None)  # communes without an epci
 
         user_group.geo_custom_zones.add(
-            *GeoCustomZone.objects.filter(
-                geo_zones__id__in=scope_ids,
-                geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
-            )
+            *GeoCustomZone.objects.active()
+            .filter(geo_zones__id__in=scope_ids)
             .distinct()
             .values_list("id", flat=True)
         )

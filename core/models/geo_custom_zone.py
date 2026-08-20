@@ -1,12 +1,31 @@
 from common.constants.models import DEFAULT_MAX_LENGTH
 from core.models.geo_custom_zone_category import GeoCustomZoneCategory
-from core.models.geo_zone import GeoZone
+from core.models.geo_zone import GeoZone, GeoZoneManager
 from django.db import models
 
 
 class GeoCustomZoneStatus(models.TextChoices):
     ACTIVE = "ACTIVE", "ACTIVE"
     INACTIVE = "INACTIVE", "INACTIVE"
+
+
+class GeoCustomZoneQuerySet(models.QuerySet):
+    def active(self):
+        """Only zones à enjeux that are turned on.
+
+        The default idiom for ANY user-facing read of custom zones: a deactivated zone
+        must not surface for regular users. Available on `GeoCustomZone.objects` and,
+        because the M2M related managers subclass this manager, on relations too, e.g.
+        `detection_object.geo_custom_zones.active()`. Admin/management code that must also
+        see deactivated zones (CRUD, import upsert, reactivation) keeps plain `objects`.
+        """
+        return self.filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
+
+
+# Keeps GeoZoneManager's geometry deferral while adding `active()`. `objects` stays
+# unfiltered on purpose (a filtered default manager would hide deactivated zones from the
+# admin/import/base-manager paths that need them); `active()` is the explicit opt-in.
+GeoCustomZoneManager = GeoZoneManager.from_queryset(GeoCustomZoneQuerySet)
 
 
 class GeoCustomZoneType(models.TextChoices):
@@ -35,6 +54,7 @@ class GeoCustomZone(GeoZone):
         null=True,
     )
     name_short = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True, null=True)
+    description = models.TextField(null=True, blank=True)
     # id of the source row a zone was imported from (e.g. detections.zae_layer.id,
     # which is int8); null for zones created manually through the app. Same role as
     # the import_id on Detection / DetectionObject (see common.models.importable),
@@ -46,6 +66,8 @@ class GeoCustomZone(GeoZone):
     import_layer_name = models.CharField(
         max_length=DEFAULT_MAX_LENGTH, null=True, editable=False
     )
+
+    objects = GeoCustomZoneManager()
 
     class Meta:
         indexes = []

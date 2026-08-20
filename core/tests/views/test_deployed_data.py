@@ -338,11 +338,29 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         # An object in NO custom zone -> excluded from the in-zae count.
         create_detection_object(object_type=object_type, commune=self.montpellier)
 
+        # An object whose ONLY zone is DEACTIVATED -> counted in the total but NOT in the
+        # in-zae subset (a turned-off zone à enjeux does not place an object "in a zone").
+        inactive_only = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        inactive_zone = GeoCustomZone.objects.create(
+            name="Zone PLU inactive",
+            geo_custom_zone_type=GeoCustomZoneType.COMMON,
+            geo_custom_zone_status=GeoCustomZoneStatus.INACTIVE,
+            color="#0000FF",
+            geometry=Polygon(
+                [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)],
+                srid=4326,
+            ),
+        )
+        inactive_only.geo_custom_zones.add(inactive_zone)
+
         herault = self._get_detail(self.herault.uuid)
         commune = next(c for c in herault["communes"] if c["name"] == "Montpellier")
-        # base setup (2) + the two objects created here = 4 objects total
-        self.assertEqual(commune["detectionObjectsCount"], 4)
-        # only `in_zone` falls inside a custom zone (counted once despite two zones)
+        # base setup (2) + the three objects created here = 5 objects total
+        self.assertEqual(commune["detectionObjectsCount"], 5)
+        # only `in_zone` falls inside an ACTIVE custom zone (counted once despite two
+        # zones); the deactivated-only object is excluded.
         self.assertEqual(commune["detectionObjectsInCustomZoneCount"], 1)
 
     def test_detail_detections_by_tile_set(self):
@@ -386,13 +404,31 @@ class StatisticsDeployedDataViewTests(BaseAPITestCase):
         other_in_zone.geo_custom_zones.add(self.custom_zone)
         create_detection(detection_object=other_in_zone, tile_set=tile_set_b)
 
+        # Montpellier, "Hérault 2024": an object whose only zone is DEACTIVATED. Its
+        # detection counts in the total but NOT in the in-zae subset.
+        inactive_only_obj = create_detection_object(
+            object_type=object_type, commune=self.montpellier
+        )
+        inactive_zone = GeoCustomZone.objects.create(
+            name="Zone PLU inactive",
+            geo_custom_zone_type=GeoCustomZoneType.COMMON,
+            geo_custom_zone_status=GeoCustomZoneStatus.INACTIVE,
+            color="#0000FF",
+            geometry=Polygon(
+                [(3.8, 43.5), (3.9, 43.5), (3.9, 43.6), (3.8, 43.6), (3.8, 43.5)],
+                srid=4326,
+            ),
+        )
+        inactive_only_obj.geo_custom_zones.add(inactive_zone)
+        create_detection(detection_object=inactive_only_obj, tile_set=self.tile_set)
+
         herault = self._get_detail(self.herault.uuid)
         by_name = {t["name"]: t for t in herault["detectionsByTileSet"]}
 
         # "Hérault 2024": base setup added 2 detections (Montpellier, no zone); this test
         # adds 1 in-zone (Montpellier, counted once despite two zones) + 1 out-of-zone
-        # (Béziers) -> 4 total, 1 in ZAE.
-        self.assertEqual(by_name["Hérault 2024"]["detectionsCount"], 4)
+        # (Béziers) + 1 deactivated-only (Montpellier) -> 5 total, 1 in ZAE.
+        self.assertEqual(by_name["Hérault 2024"]["detectionsCount"], 5)
         self.assertEqual(by_name["Hérault 2024"]["detectionsInCustomZoneCount"], 1)
 
         # "Hérault 2023": a single in-zone detection.

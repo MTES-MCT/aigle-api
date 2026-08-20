@@ -9,7 +9,7 @@ from core.models.detection_data import DetectionValidationStatusChangeReason
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
 from core.models.geo_epci import GeoEpci
-from core.models.geo_custom_zone import GeoCustomZone
+from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
 from core.models.geo_department import GeoDepartment
 from core.models.parcel import Parcel
 from core.models.tile_set import TileSet
@@ -68,7 +68,9 @@ DEPLOYED_DATA_CACHE_TTL = int(os.environ.get("DEPLOYED_DATA_CACHE_TTL", 24 * 60 
 # v10: detail scoped to populated communes; sitadel count is now detection-object driven.
 # v11: dropped the geo-associated tile_sets list (redundant with detections_by_tile_set).
 # v12: EPCI zones now resolve to their department (EPCI became a real collectivity level).
-_CACHE_SCHEMA = "v12"
+# v13: in-custom-zone counts (per-commune objects + per-tile-set detections) now exclude
+#      DEACTIVATED zones, so cached pre-v13 figures are stale and must be orphaned.
+_CACHE_SCHEMA = "v13"
 
 
 class DeployedDataService:
@@ -382,11 +384,13 @@ class DeployedDataService:
 
         # Per-commune in-custom-zone OBJECT counts. The geo_custom_zones M2M join
         # multiplies an object sitting in several zones, so Count(distinct) the object id.
+        # Only ACTIVE zones count: an object whose zones are all deactivated is not "in a
+        # zone à enjeux".
         objects_in_zone_by_commune = defaultdict(int)
         for row in (
             DetectionObject.objects.filter(
                 commune_id__in=populated_commune_ids,
-                geo_custom_zones__isnull=False,
+                geo_custom_zones__geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE,
             )
             .values("commune_id")
             .annotate(count=Count("id", distinct=True))
@@ -428,14 +432,16 @@ class DeployedDataService:
                 FROM core_detection d
                 JOIN core_detectionobject o ON o.id = d.detection_object_id
                 LEFT JOIN (
-                    SELECT detectionobject_id
-                    FROM core_detectionobject_geo_custom_zones
-                    GROUP BY detectionobject_id
+                    SELECT j.detectionobject_id
+                    FROM core_detectionobject_geo_custom_zones j
+                    JOIN core_geocustomzone c ON c.geozone_ptr_id = j.geocustomzone_id
+                    WHERE c.geo_custom_zone_status = %s
+                    GROUP BY j.detectionobject_id
                 ) z ON z.detectionobject_id = d.detection_object_id
                 WHERE o.commune_id = ANY(%s)
                 GROUP BY d.tile_set_id
                 """,
-                [populated_commune_ids],
+                [GeoCustomZoneStatus.ACTIVE.value, populated_commune_ids],
             )
             for tile_set_id, total, in_zone in cursor.fetchall():
                 detections_by_tile_set[tile_set_id] = (total, in_zone)

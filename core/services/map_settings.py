@@ -5,7 +5,7 @@ from django.contrib.gis.db.models.aggregates import Union
 from django.contrib.gis.geos import GEOSGeometry
 
 from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS, TILE_SETS_ORDER_BYS
-from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
+from core.models.geo_custom_zone import GeoCustomZone
 from core.models.tile_set import TileSet, TileSetStatus
 from core.models.user import UserRole
 from core.permissions.user import UserPermission
@@ -155,7 +155,7 @@ class MapSettingsService:
     def _get_custom_zones_data(self) -> tuple[List[Dict], Dict]:
         geo_custom_zones_data = GeoCustomZone.objects.order_by(
             *GEO_CUSTOM_ZONES_ORDER_BYS
-        ).filter(geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE)
+        ).active()
 
         if self.scoped_user_group:
             geo_custom_zones_data = geo_custom_zones_data.filter(

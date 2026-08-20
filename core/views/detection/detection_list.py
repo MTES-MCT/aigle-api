@@ -2,7 +2,7 @@ from aigle.settings.base import DOMAIN
 from common.views.base import BaseViewSetMixin
 
 from django_filters import FilterSet, NumberFilter, ChoiceFilter, OrderingFilter
-from django.db.models import QuerySet, OuterRef, Subquery
+from django.db.models import QuerySet, OuterRef, Subquery, Q
 
 from core.constants.labels import (
     DETECTION_CONTROL_STATUSES_NAMES_MAP,
@@ -11,6 +11,7 @@ from core.constants.labels import (
     DETECTION_VALIDATION_STATUSES_NAMES_MAP,
 )
 from core.models.detection import Detection
+from core.models.geo_custom_zone import GeoCustomZoneStatus
 from django.http import JsonResponse
 from django.db.models import Prefetch
 from django.http import HttpResponse
@@ -363,6 +364,9 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
             .values("tile_set_names")[:1]
         )
 
+        # Deactivated zones must not surface in the export. `default=[]` keeps the value
+        # a list (never NULL) for objects whose zones are all inactive, so process_rows'
+        # set(...) stays safe.
         custom_zones_subquery = (
             DetectionObject.objects.filter(id=OuterRef("detection_object__id"))
             .annotate(
@@ -372,6 +376,10 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
                         "geo_custom_zones__name",
                     ),
                     distinct=True,
+                    filter=Q(
+                        geo_custom_zones__geo_custom_zone_status=GeoCustomZoneStatus.ACTIVE
+                    ),
+                    default=Value([]),
                 ),
             )
             .values("zone_names")[:1]

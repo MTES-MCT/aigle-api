@@ -42,6 +42,7 @@ class GeoCustomZoneMinimalSerializer(UuidTimestampedModelSerializerMixin):
             "id",
             "name",
             "name_short",
+            "description",
             "color",
             "geo_custom_zone_status",
             "geo_custom_zone_type",
@@ -84,6 +85,7 @@ class GeoCustomZoneInputSerializer(
         fields = WithCollectivitiesInputSerializerMixin.Meta.fields + [
             "name",
             "name_short",
+            "description",
             "color",
             "geo_custom_zone_status",
             "geo_custom_zone_type",

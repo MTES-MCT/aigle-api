@@ -11,6 +11,7 @@ class GeoCustomZoneCategorySerializer(UuidTimestampedModelSerializerMixin):
             "name",
             "name_short",
             "name_normalized",
+            "description",
         ]
 
     name_normalized = serializers.CharField(read_only=True)
@@ -27,4 +28,4 @@ class GeoCustomZoneCategoryDetailSerializer(GeoCustomZoneCategorySerializer):
     def get_geo_custom_zones(self, obj):
         from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 
-        return GeoCustomZoneSerializer(obj.geo_custom_zones, many=True).data
+        return GeoCustomZoneSerializer(obj.geo_custom_zones.active(), many=True).data
