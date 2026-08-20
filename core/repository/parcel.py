@@ -11,7 +11,7 @@ from core.models.detection_data import (
     DetectionPrescriptionStatus,
     DetectionValidationStatus,
 )
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Exists, OuterRef, Prefetch, Subquery
 from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
 from core.repository.base import (
@@ -40,6 +40,7 @@ class DetectionFilter:
     )
     filter_detection_control_status_in: Optional[List[DetectionControlStatus]] = None
     filter_prescribed: Optional[bool] = None
+    filter_object_prescribed: Optional[bool] = None
     additional_filter: Optional[Q] = None
 
     def is_empty(self) -> bool:
@@ -52,6 +53,7 @@ class DetectionFilter:
             and self.filter_detection_validation_status_in is None
             and self.filter_detection_control_status_in is None
             and self.filter_prescribed is None
+            and self.filter_object_prescribed is None
             and self.additional_filter is None
         )
 
@@ -562,6 +564,11 @@ class ParcelRepository(
             ):
                 q &= ~Q(detections__detection_source=DetectionSource.INTERFACE_DRAWN)
 
+        if filter_detection.filter_tile_set_uuid_in is not None:
+            q &= Q(
+                detections__tile_set__uuid__in=filter_detection.filter_tile_set_uuid_in
+            )
+
         if filter_detection.filter_parcel_uuid_in is not None:
             q &= Q(parcel__uuid__in=filter_detection.filter_parcel_uuid_in)
 
@@ -589,6 +596,29 @@ class ParcelRepository(
                         detections__detection_data__detection_prescription_status__isnull=True
                     )
                 )
+
+        if filter_detection.filter_object_prescribed is not None:
+            # only the most recent detection answers "is this object prescribed": a
+            # procès-verbal un-prescribes the row it was drawn on and leaves its older
+            # auto-prescribed siblings alone, so "any prescribed row" would hide the
+            # objects the DDTM has formally acted on
+            latest_detection_id = Subquery(
+                Detection.objects.filter(detection_object=OuterRef("detection_object"))
+                .order_by("-tile_set__date", "-id")
+                .values("id")[:1]
+            )
+            object_is_prescribed = Exists(
+                Detection.objects.filter(
+                    detection_object=OuterRef("pk"),
+                    id=latest_detection_id,
+                    detection_data__detection_prescription_status=DetectionPrescriptionStatus.PRESCRIBED,
+                )
+            )
+            q &= (
+                Q(object_is_prescribed)
+                if filter_detection.filter_object_prescribed
+                else ~Q(object_is_prescribed)
+            )
 
         if filter_detection.additional_filter is not None:
             transformed_q = ParcelRepository._transform_q_for_detection_object(

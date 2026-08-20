@@ -2,6 +2,7 @@ import hashlib
 import logging
 from collections import defaultdict
 from datetime import date as date_type
+from dateutil.relativedelta import relativedelta
 from typing import List, Optional, TypedDict, Tuple
 from core.constants.collectivity import (
     COLLECTIVITY_LEVELS,
@@ -458,8 +459,8 @@ def get_tile_set_years_ago(
     tile_sets: List[TileSet], relative_years: int
 ) -> Optional[TileSet]:
     tile_set_years_ago = None
-    today = date_type.today()
-    date_years_ago = today.replace(year=today.year - relative_years)
+    # date.replace(year=...) raises on 29 February: year - relative_years is never a leap year
+    date_years_ago = date_type.today() - relativedelta(years=relative_years)
 
     for tile_set in tile_sets:
         if tile_set.date <= date_years_ago:

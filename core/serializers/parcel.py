@@ -108,11 +108,14 @@ class ParcelDetailSerializer(
 
         request = self.context["request"]
 
-        tile_set_previews = ParcelService.get_parcel_tile_set_previews_data(
-            parcel=obj,
-            user=request.user,
-            scoped_user_group=resolve_scoped_user_group(request),
-        )
+        tile_set_previews = getattr(obj, "tile_set_previews_computed", None)
+
+        if tile_set_previews is None:
+            tile_set_previews = ParcelService.get_parcel_tile_set_previews_data(
+                parcel=obj,
+                user=request.user,
+                scoped_user_group=resolve_scoped_user_group(request),
+            )
 
         from core.serializers.detection_object import (
             DetectionObjectTileSetPreviewSerializer,

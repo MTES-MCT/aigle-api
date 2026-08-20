@@ -31,8 +31,15 @@ class ParcelService:
             user=user, scoped_user_group=scoped_user_group
         ).get_geo_custom_zones_q()
 
+        tile_set_previews = ParcelService._get_tile_set_previews_for_uuid(
+            parcel_uuid=uuid, user=user, scoped_user_group=scoped_user_group
+        )
+        preview_tile_set_uuids = [
+            str(preview["tile_set"].uuid) for preview in tile_set_previews
+        ]
+
         repo = ParcelRepository()
-        return repo.get(
+        parcel = repo.get(
             filter_uuid_in=[uuid],
             filter_collectivities=collectivity_filter,
             filter_detection=DetectionFilter(
@@ -56,13 +63,51 @@ class ParcelService:
                     DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
                     DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
                     DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+                    DetectionControlStatus.JUGEMENT,
                 ],
                 filter_prescribed=False,
+                # a time-barred object must not reach an official report, and it is
+                # prescribed as a whole even though only its later detections carry the status
+                filter_object_prescribed=False,
+                # no preview means no imagery at all for this parcel: restricting to an empty
+                # list would report "nothing to signal" for what is really a missing-tile-set
+                filter_tile_set_uuid_in=preview_tile_set_uuids or None,
             ),
             filter_geo_custom_zones=filter_geo_custom_zones,
             with_detail_prefetch=True,
             with_commune=True,
         )
+
+        if parcel is None:
+            return None
+
+        if not parcel.detection_objects.all():
+            return None
+
+        parcel.tile_set_previews_computed = tile_set_previews
+
+        return parcel
+
+    @staticmethod
+    def _get_tile_set_previews_for_uuid(
+        parcel_uuid: str,
+        user: "User",
+        scoped_user_group: Optional[UserGroup] = None,
+    ) -> List[Dict[str, Any]]:
+        from core.permissions.tile_set import TileSetPermission
+
+        geometry = (
+            Parcel.objects.filter(uuid=parcel_uuid)
+            .values_list("geometry", flat=True)
+            .first()
+        )
+
+        if geometry is None:
+            return []
+
+        return TileSetPermission(
+            user=user, scoped_user_group=scoped_user_group
+        ).get_previews(filter_tile_set_intersects_geometry=geometry)
 
     @staticmethod
     def log_parcel_download(
@@ -249,4 +294,4 @@ class ParcelService:
                 if detection.detection_data.updated_at:
                     updated_at_values.append(detection.detection_data.updated_at)
 
-        return min(updated_at_values) if updated_at_values else None
+        return max(updated_at_values) if updated_at_values else None
