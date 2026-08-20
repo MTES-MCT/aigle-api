@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Dict, Any, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from django.contrib.auth import get_user_model
 from django.contrib.gis.geos import Point
 from django.contrib.gis.db.models.functions import Centroid
@@ -26,6 +26,19 @@ class UserService:
             analytic_log_type=AnalyticLogType.USER_ACCESS,
         )
         return user
+
+    @staticmethod
+    def get_feature_flags(user_groups: Iterable[UserGroup]) -> List[str]:
+        """Union of the feature flags of the given groups.
+
+        A user gets a feature as soon as one of their groups has it activated.
+        """
+        flags = set()
+
+        for user_group in user_groups:
+            flags.update(user_group.feature_flags or [])
+
+        return sorted(flags)
 
     @staticmethod
     def get_filtered_users_queryset(user: "User", queryset: QuerySet) -> QuerySet:

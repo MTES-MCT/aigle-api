@@ -4,11 +4,12 @@ from django_filters import CharFilter, FilterSet
 
 from core.utils.filters import ChoiceInFilter
 from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from common.views.base import BaseViewSetMixin
 from core.models.object_type_category import ObjectTypeCategory
 from core.models.user import UserRole
-from core.models.user_group import UserGroup, UserGroupType
+from core.models.user_group import FeatureFlag, UserGroup, UserGroupType
 from core.serializers.user_group import (
     UserGroupDetailSerializer,
     UserGroupInputSerializer,
@@ -92,6 +93,13 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
             queryset = queryset.filter(id__in=user_group_ids)
 
         return queryset
+
+    @action(methods=["get"], detail=False, url_path="feature-flags")
+    def feature_flags(self, request):
+        """The catalogue the admin form builds its toggle list from."""
+        return Response(
+            [{"value": value, "label": label} for value, label in FeatureFlag.choices]
+        )
 
     @action(
         methods=["get"],

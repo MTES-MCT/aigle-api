@@ -37,6 +37,7 @@ class UserGroupDetailSerializer(UserGroupSerializer, WithCollectivitiesSerialize
             + [
                 "object_type_categories",
                 "geo_custom_zones",
+                "feature_flags",
             ]
         )
 
@@ -53,6 +54,7 @@ class UserGroupInputSerializer(
             "geo_custom_zones_uuids",
             "object_type_categories_uuids",
             "user_group_type",
+            "feature_flags",
         ]
 
     geo_custom_zones_uuids = serializers.ListField(
@@ -61,6 +63,15 @@ class UserGroupInputSerializer(
     object_type_categories_uuids = serializers.ListField(
         child=serializers.UUIDField(), required=False, allow_empty=True, write_only=True
     )
+
+    def validate_feature_flags(self, value):
+        # Mirrors the DB check constraint so a duplicate comes back as a 400 rather
+        # than an IntegrityError.
+        if len(set(value)) != len(value):
+            raise serializers.ValidationError(
+                "Un feature flag ne peut être activé qu'une fois."
+            )
+        return value
 
     def _extract_collectivities(self, validated_data):
         collectivities = extract_collectivities(validated_data)

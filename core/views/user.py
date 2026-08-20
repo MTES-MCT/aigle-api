@@ -141,6 +141,7 @@ class UserViewSet(
                     )
                 ).data
             ]
+            data["feature_flags"] = UserService.get_feature_flags([scoped_user_group])
 
         return Response(data)
 

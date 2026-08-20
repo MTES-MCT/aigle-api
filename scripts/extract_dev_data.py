@@ -855,6 +855,7 @@ def write_users_and_groups(f, ids, metadata):
         "deleted_at",
         "name",
         "user_group_type",
+        "feature_flags",
     ]
     group_rows = [
         (
@@ -866,6 +867,7 @@ def write_users_and_groups(f, ids, metadata):
             None,
             f"DDTM {first_dept_name}",
             "DDTM",
+            [],
         ),
         (
             coll_group_id,
@@ -876,6 +878,7 @@ def write_users_and_groups(f, ids, metadata):
             None,
             f"Collectivite {first_commune_name}",
             "COLLECTIVITY",
+            [],
         ),
     ]
 
