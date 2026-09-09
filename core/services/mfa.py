@@ -9,6 +9,7 @@ from core.models.user import UserRole
 from core.models.user_group import FeatureFlag, UserGroup
 from core.utils import mfa_challenge
 from core.utils.email import send_mail
+from core.utils.string import strip_email_subaddress
 
 UserModel = get_user_model()
 logger = logging.getLogger("aigle")
@@ -16,7 +17,7 @@ logger = logging.getLogger("aigle")
 EMAIL_SUBJECT = "Aigle - votre lien de connexion"
 EMAIL_BODY = """Bonjour,
 
-Une connexion à Aigle vient d'être demandée avec votre adresse.
+Une connexion à Aigle vient d'être demandée pour le compte {account}.
 
 Pour la valider, ouvrez ce lien dans les {minutes} minutes :
 
@@ -79,11 +80,14 @@ class MfaService:
             send_mail(
                 subject=EMAIL_SUBJECT,
                 message=EMAIL_BODY.format(
+                    account=user.email,
                     link=f"{settings.MFA_LOGIN_LINK_BASE_URL}{token}",
                     minutes=mfa_challenge.CHALLENGE_TTL_SECONDS // 60,
                 ),
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
+                # Plusieurs comptes sous-adressés partagent une seule boîte : c'est
+                # pour cela que le corps du message rappelle le compte concerné.
+                recipient_list=[strip_email_subaddress(user.email)],
                 email_type=EmailType.MFA_LOGIN_LINK,
                 stored_message=STORED_MESSAGE,
             )
