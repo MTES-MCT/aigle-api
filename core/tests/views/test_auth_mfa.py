@@ -128,6 +128,32 @@ class MfaLoginTests(BaseAPITestCase):
         self.assertEqual(stored.message, STORED_MESSAGE)
         self.assertNotIn(token, stored.message)
 
+    def test_link_goes_to_the_base_mailbox_of_a_subaddressed_account(self):
+        """Les comptes de test sont sous-adressés : le lien doit arriver dans la boîte."""
+        tagged = create_regular_user(email="stephen+xyz@mail.com", password=PASSWORD)
+        add_user_to_group(tagged, self.group)
+
+        response = self.login(email=tagged.email)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(mail.outbox[0].to, ["stephen@mail.com"])
+        # L'adresse du compte reste l'identifiant, et le corps la rappelle puisque
+        # plusieurs comptes atterrissent dans la même boîte.
+        self.assertEqual(tagged.email, "stephen+xyz@mail.com")
+        self.assertIn("stephen+xyz@mail.com", mail.outbox[0].body)
+
+    def test_subaddressed_link_still_authenticates_the_tagged_account(self):
+        tagged = create_regular_user(email="stephen+abc@mail.com", password=PASSWORD)
+        add_user_to_group(tagged, self.group)
+        self.login(email=tagged.email)
+
+        access = self.verify(extract_token(mail.outbox[0])).data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"JWT {access}")
+
+        response = self.client.get("/api/users/me/")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json()["email"], "stephen+abc@mail.com")
+
     def test_failed_send_does_not_consume_the_quota(self):
         """Une panne SMTP ne doit pas verrouiller le compte une heure pour rien."""
         with patch(
