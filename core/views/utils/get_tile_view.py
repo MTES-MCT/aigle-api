@@ -2,7 +2,7 @@ from django.http import JsonResponse
 
 from rest_framework import serializers
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from core.utils.permissions import IsActiveAuthenticated
 
 
 from core.utils.filters import UuidInFilter
@@ -15,7 +15,7 @@ class EndpointSerializer(serializers.Serializer):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsActiveAuthenticated])
 def endpoint(request):
     params_serializer = EndpointSerializer(data=request.GET)
     params_serializer.is_valid(raise_exception=True)

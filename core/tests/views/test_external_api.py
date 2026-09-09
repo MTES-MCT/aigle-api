@@ -5,6 +5,12 @@ from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.users import create_api_key
 
 
+from core.models.detection_data import DetectionControlStatus
+from core.serializers.external_api import (
+    UpdateControlStatusExternalApiInputSerializer,
+)
+
+
 class ExternalAPITestViewTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
@@ -182,3 +188,35 @@ class ExternalAPIUpdateControlStatusViewTests(BaseAPITestCase):
         self.authenticate_user(user)
         response = self.client.post(self.url, {}, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_malformed_insee_code_is_rejected(self):
+        # Seule entrée libre non bornée de l'API externe : parcel_code est validé au
+        # caractère près, insee_code ne l'était pas du tout.
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.api_key}")
+
+        for insee_code in ["", "34", "341720", "34A72", "x" * 300]:
+            with self.subTest(insee_code=insee_code):
+                response = self.client.post(
+                    self.url,
+                    {
+                        "insee_code": insee_code,
+                        "parcel_code": "AB1234",
+                        "control_status": DetectionControlStatus.CONTROLLED_FIELD,
+                    },
+                    format="json",
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_corsican_insee_code_is_accepted(self):
+        self.client.credentials(HTTP_AUTHORIZATION=f"Api-Key {self.api_key}")
+
+        serializer = UpdateControlStatusExternalApiInputSerializer(
+            data={
+                "insee_code": "2a004",
+                "parcel_code": "AB1234",
+                "control_status": DetectionControlStatus.CONTROLLED_FIELD,
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        self.assertEqual(serializer.validated_data["insee_code"], "2A004")

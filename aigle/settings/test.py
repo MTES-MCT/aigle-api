@@ -10,7 +10,13 @@ ALLOWED_HOSTS = ["*"]
 # running server instead.
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,
-    "DEFAULT_THROTTLE_RATES": {"anon": None, "user": None, "login": None, "mfa": None},
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": None,
+        "user": None,
+        "login": None,
+        "mfa": None,
+        "contact": None,
+    },
 }
 
 DATABASES = {

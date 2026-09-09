@@ -41,13 +41,12 @@ class DetectionPermission(
             scoped_user_group=resolve_scoped_user_group(request),
         )
 
-    def _writable_communes(self) -> QuerySet[GeoCommune]:
-        """Communes reachable from the zones the user holds WRITE on — the same clauses
-        as DetectionRepository._filter_collectivities, anchored on GeoCommune."""
-        zones = self.user_permission.accessible_geo_zones(UserGroupRight.WRITE)
-
-        # Fail closed: with no writable zone every subquery is empty, so no commune
-        # matches — never all of them.
+    @staticmethod
+    def _communes_from(zones: QuerySet) -> QuerySet[GeoCommune]:
+        """Communes reachable from `zones` — the same clauses as
+        DetectionRepository._filter_collectivities, anchored on GeoCommune."""
+        # Fail closed: with no zone every subquery is empty, so no commune matches —
+        # never all of them.
         q = Q()
         for level, lookup in COMMUNE_LOOKUP_BY_LEVEL.items():
             q |= Q(
@@ -57,6 +56,45 @@ class DetectionPermission(
             )
 
         return GeoCommune.objects.filter(q)
+
+    def _writable_communes(self) -> QuerySet[GeoCommune]:
+        """Communes reachable from the zones the user holds WRITE on."""
+        return self._communes_from(
+            self.user_permission.accessible_geo_zones(UserGroupRight.WRITE)
+        )
+
+    def get_readable_objects_q(self, prefix: str = "") -> Optional[Q]:
+        """Portée de LECTURE des objets de détection, ancrée sur le DetectionObject
+        atteint via `prefix`. None signifie aucune restriction (super-admin non
+        impersonné).
+
+        Même règle que les écritures, au droit près : la commune de l'objet doit être
+        atteignable depuis les zones de l'utilisateur, et les lignes héritées dont la
+        commune n'a jamais été résolue retombent sur la containment géométrique. Sans ce
+        repli, un objet éditable (validate_detection_object_edit_permission l'accepte)
+        deviendrait illisible, donc inatteignable depuis l'interface.
+
+        Le repli lit ici N'IMPORTE QUELLE détection de l'objet là où l'écriture ne juge
+        que la plus récente : c'est un sur-ensemble de ce qui est éditable, et il reste
+        borné aux zones de l'utilisateur.
+        """
+        if self.user_permission.is_unrestricted():
+            return None
+
+        zones = self.user_permission.accessible_geo_zones()
+
+        # `commune__isnull=True` d'abord : sans lui le ST_Covers corrélé s'évaluerait
+        # sur TOUTES les détections, alors que seules les lignes héritées concernent ce
+        # repli.
+        legacy_detections = Detection.objects.filter(
+            Exists(zones.filter(geometry__covers=OuterRef("geometry"))),
+            detection_object__commune__isnull=True,
+        ).values("detection_object_id")
+
+        return Q(**{f"{prefix}commune__in": self._communes_from(zones)}) | (
+            Q(**{f"{prefix}commune__isnull": True})
+            & Q(**{f"{prefix}id__in": legacy_detections})
+        )
 
     def validate_detections_edit_permission(self, detections: List[Detection]) -> None:
         """All or nothing: every detection of the selection must pass."""

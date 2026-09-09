@@ -14,13 +14,17 @@ from core.serializers.command_run import (
 from core.serializers.run_command import RunCommandSerializer
 from core.services.command_async import CommandAsyncService
 from core.utils.command_progress import get_command_progress_many
-from core.utils.permissions import SuperAdminRoleModifyActionPermission
+from core.utils.permissions import SuperAdminRolePermission
 from core.utils.run_command import COMMANDS_AND_PARAMETERS, CommandParameters
 from core.utils.user_action_log import UserActionLogMixin
 
 
 class CommandAsyncViewSet(UserActionLogMixin, ViewSet):
-    permission_classes = [SuperAdminRoleModifyActionPermission]
+    # Le rôle est contrôlé sur TOUTES les méthodes, lectures comprises : la variante
+    # "ModifyAction" laisse passer les méthodes sûres pour tout compte authentifié, et
+    # `tasks` rend `CommandRun.arguments` et `CommandRun.output` — soit le mot de passe
+    # passé à create_super_admin et la clé d'API journalisée par create_api_key.
+    permission_classes = [SuperAdminRolePermission]
     # Raw JSON, not camelCase: the default renderer/parser would mangle CLI-flag keys in
     # CommandRun.arguments (e.g. "--table-name"). Frontend models for this admin feature expect snake_case.
     renderer_classes = [JSONRenderer]

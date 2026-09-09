@@ -24,6 +24,25 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             help="Number of days until expiry (optional)",
         )
 
+    def _reveal_key(self, key: str):
+        """La clé en clair ne doit jamais atterrir dans ``CommandRun.output`` : cette
+        colonne est persistée, rendue par l'admin run-command et recopiée entre
+        environnements (aigle-utils/import_from_preprod.sql). Une clé d'API ouvre
+        /api/external/* sans authentification utilisateur.
+
+        Sur un lancement CLI, seul le logger ``aigle`` est capturé : stdout va au
+        terminal de l'opérateur et nulle part ailleurs. Sur un lancement API (Celery),
+        stdout EST capturé, donc on ne révèle rien et l'opérateur relance en CLI."""
+        if getattr(self, "_aigle_cli_invocation", False):
+            self.stdout.write(f"API Key: {key}")
+            return
+
+        log_event(
+            "Clé générée mais non affichée : relancer la commande en CLI "
+            "(python manage.py create_api_key) pour la récupérer, puis révoquer "
+            "celle-ci avec revoke_api_key."
+        )
+
     def handle(self, *args, **options):
         name = options["name"]
         expiry_days = options.get("expiry_days")
@@ -34,11 +53,15 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             expiry_str = expiry_date.strftime("%Y-%m-%d %H:%M:%S")
 
             log_event(
-                f"API Key created successfully - Name: {name}, Expires: {expiry_str}, Key: {key}"
+                f"API Key created successfully - Name: {name}, Expires: {expiry_str}, "
+                f"Prefix: {api_key.prefix}"
             )
         else:
             api_key, key = APIKey.objects.create_key(name=name)
 
             log_event(
-                f"API Key created successfully - Name: {name}, Expires: Never, Key: {key}"
+                f"API Key created successfully - Name: {name}, Expires: Never, "
+                f"Prefix: {api_key.prefix}"
             )
+
+        self._reveal_key(key)

@@ -12,6 +12,7 @@ CSV format:
 
 import csv
 import io
+import logging
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from django.db import transaction
@@ -24,6 +25,12 @@ from core.models.geo_zone import GeoZone, GeoZoneType
 from core.serializers.utils.with_collectivities import FIELD_NAME_BY_LEVEL
 from core.models.user_action_log import UserActionLog, UserActionLogAction
 
+
+logger = logging.getLogger(__name__)
+
+# Un CSV d'import est lu intégralement en mémoire : au-delà de cette taille on refuse
+# avant la lecture plutôt que de laisser un envoi arbitraire saturer le worker.
+MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024
 
 CSV_SEP = ";"
 LIST_SEP = "|"
@@ -44,7 +51,26 @@ COL_BY_LEVEL = {
 }
 COLLECTIVITY_CSV_HEADERS = list(COL_BY_LEVEL.values())
 
+# Excel et LibreOffice évaluent une cellule commençant par un de ces caractères comme
+# une formule. Un nom de groupe ou de zone est du texte libre : =HYPERLINK(...) s'y
+# glisse et s'exécute sur le poste de l'administrateur qui ouvre l'export. Même
+# neutralisation que côté frontend (aigle-frontend, utils/download.ts).
+CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
 BulkError = Dict[str, Any]
+
+
+def escape_csv_formula(value: str) -> str:
+    return f"'{value}" if value.startswith(CSV_FORMULA_PREFIXES) else value
+
+
+def unescape_csv_formula(value: str) -> str:
+    """Inverse exacte d'``escape_csv_formula`` : l'aller-retour export -> import doit
+    rendre le nom d'origine. N'enlève l'apostrophe que devant un caractère déclencheur,
+    donc un vrai nom commençant par une apostrophe est laissé intact."""
+    if value.startswith("'") and value[1:2] in CSV_FORMULA_PREFIXES:
+        return value[1:]
+    return value
 
 
 def bulk_error(message: str, line: Optional[int] = None) -> BulkError:
@@ -69,10 +95,21 @@ def parse_csv(uploaded_file) -> Tuple[List[Dict[str, str]], List[BulkError]]:
     header (lowercase, stripped). Errors is a list of structured error dicts;
     if non-empty, callers should bail before attempting any per-row validation.
     """
+    size = getattr(uploaded_file, "size", None)
+    if size is not None and size > MAX_UPLOAD_SIZE_BYTES:
+        return [], [
+            bulk_error(
+                f"Fichier trop volumineux (maximum {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} Mo)"
+            )
+        ]
+
+    # Le texte de l'exception décrit l'intérieur du serveur (chemins, pilote, encodage) :
+    # il part au log, le client reçoit un message stable.
     try:
         raw = uploaded_file.read()
-    except Exception as exc:
-        return [], [bulk_error(f"Impossible de lire le fichier: {exc}")]
+    except Exception:
+        logger.exception("Lecture du CSV importé impossible")
+        return [], [bulk_error("Impossible de lire le fichier")]
 
     if isinstance(raw, bytes):
         try:
@@ -80,8 +117,9 @@ def parse_csv(uploaded_file) -> Tuple[List[Dict[str, str]], List[BulkError]]:
         except UnicodeDecodeError:
             try:
                 text = raw.decode("latin-1")
-            except UnicodeDecodeError as exc:
-                return [], [bulk_error(f"Encodage du fichier non supporté: {exc}")]
+            except UnicodeDecodeError:
+                logger.exception("Encodage du CSV importé non supporté")
+                return [], [bulk_error("Encodage du fichier non supporté")]
     else:
         text = raw.lstrip(BOM)
 
@@ -96,7 +134,7 @@ def parse_csv(uploaded_file) -> Tuple[List[Dict[str, str]], List[BulkError]]:
         normalized: Dict[str, str] = {}
         for original, normalized_key in normalized_field_map.items():
             value = raw_row.get(original)
-            normalized[normalized_key] = (value or "").strip()
+            normalized[normalized_key] = unescape_csv_formula((value or "").strip())
         rows.append(normalized)
 
     return rows, []
@@ -120,7 +158,7 @@ def write_csv(
             value = row.get(key, "")
             if isinstance(value, (list, tuple)):
                 value = join_list(str(v) for v in value)
-            cleaned[key] = "" if value is None else str(value)
+            cleaned[key] = "" if value is None else escape_csv_formula(str(value))
         writer.writerow(cleaned)
     response.write(buffer.getvalue())
 

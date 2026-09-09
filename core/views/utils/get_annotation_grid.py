@@ -10,7 +10,7 @@ from core.views.detection.detection_geo import DetectionGeoFilter
 
 from django.core.exceptions import BadRequest
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from core.utils.permissions import IsActiveAuthenticated
 from django.contrib.gis.geos import MultiPolygon
 from django.db.models import F, Value, IntegerField, Func, ExpressionWrapper
 from django.contrib.gis.db.models.aggregates import Union
@@ -55,7 +55,7 @@ class Envelope(Func):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsActiveAuthenticated])
 def endpoint(request):
     polygon_requested = Polygon.from_bbox(
         (

@@ -53,6 +53,9 @@ INSTALLED_APPS = [
     "rest_framework_api_key",
     "core",
     "djoser",
+    # Tables de révocation des refresh tokens : sans cette app, ROTATE/BLACKLIST sont
+    # sans effet et aucun jeton volé ne peut être invalidé sans changer SECRET_KEY.
+    "rest_framework_simplejwt.token_blacklist",
     "django_filters",
     "simple_history",
 ]
@@ -198,6 +201,9 @@ REST_FRAMEWORK = {
         # épuisent le seau et l'utilisateur ne peut plus ouvrir le lien qu'il vient
         # de recevoir. Le jeton fait 256 bits, le plafond n'est pas anti-force-brute.
         "mfa": os.environ.get("THROTTLE_MFA", "20/min"),
+        # Formulaire de contact public : chaque appel déclenche un envoi SMTP synchrone,
+        # donc un plafond horaire bien plus bas que "anon" (qui est par minute).
+        "contact": os.environ.get("THROTTLE_CONTACT", "10/hour"),
     },
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
@@ -223,6 +229,15 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=int(os.environ.get("REFRESH_TOKEN_LIFETIME_DAYS", "7"))
     ),
+    # Rotation + liste noire : /auth/jwt/refresh/ rend un refresh token neuf et invalide
+    # l'ancien. Un refresh volé n'est donc utilisable qu'une fois, et sa réutilisation
+    # après le rafraîchissement légitime du vrai titulaire échoue. C'est aussi ce qui
+    # donne du sens à /auth/jwt/logout/, qui met le jeton courant sur la liste noire :
+    # jusqu'ici changer le mot de passe ou désactiver un compte ne révoquait rien.
+    # Le front stocke déjà le `refresh` renvoyé (utils/api.ts), la rotation est donc
+    # transparente pour lui.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
 }
 

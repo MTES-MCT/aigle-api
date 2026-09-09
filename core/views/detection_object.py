@@ -4,6 +4,7 @@ from common.views.base import BaseViewSetMixin
 
 from rest_framework.response import Response
 from rest_framework import serializers, status
+from rest_framework.permissions import SAFE_METHODS
 from django.contrib.gis.geos import Point
 from core.constants.geo import SRID
 from core.models.detection import Detection
@@ -22,6 +23,7 @@ from rest_framework.decorators import action
 
 from core.utils.filters import UuidInFilter
 from core.permissions.scope import resolve_scoped_user_group
+from core.permissions.detection import DetectionPermission
 from core.services.detection_object import DetectionObjectService
 from core.services.tile_set import TileSetService
 from django.contrib.gis.db.models.functions import Centroid
@@ -91,6 +93,21 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
         detail = bool(self.request.query_params.get("detail"))
 
         queryset = DetectionObject.objects.order_by("-detections__tile_set__date")
+
+        # Les écritures étaient contrôlées (DetectionPermission), pas les lectures :
+        # list/retrieve/history rendaient l'adresse, le commentaire, la parcelle et
+        # l'historique de n'importe quel objet du territoire national.
+        #
+        # Restreint aux méthodes sûres : sur une écriture, c'est le serializer qui
+        # appelle validate_detection_object_edit_permission et rend un 403 explicite —
+        # filtrer ici le transformerait en 404 muet.
+        if self.request.method in SAFE_METHODS:
+            readable_q = DetectionPermission.from_request(
+                self.request
+            ).get_readable_objects_q()
+            if readable_q is not None:
+                queryset = queryset.filter(readable_q)
+
         queryset = queryset.select_related(
             "object_type", "parcel", "parcel__commune"
         ).prefetch_related(
@@ -205,10 +222,10 @@ class DetectionObjectViewSet(BaseViewSetMixin[DetectionObject]):
 
     @action(methods=["get"], detail=True)
     def history(self, request, uuid):
-        queryset = self.get_queryset()
-        detection_object = (
-            queryset.prefetch_related("detections").filter(uuid=uuid).first()
-        )
+        # get_object() plutôt qu'un .first() sur le queryset : un uuid inconnu ou hors
+        # périmètre rendait un 200 avec un objet fantôme ({"address": "", ...}) au lieu
+        # d'un 404.
+        detection_object = self.get_object()
         SerializerClass = self.get_serializer_class()
         serializer = SerializerClass(
             detection_object, context=self.get_serializer_context()

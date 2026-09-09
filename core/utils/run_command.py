@@ -181,3 +181,26 @@ def parse_parameters(
             )
 
     return parsed_parameters
+
+
+# Fragments désignant un paramètre secret. `CommandRun.arguments` est persisté, rendu
+# par l'admin run-command et recopié entre environnements : le mot de passe passé à
+# create_super_admin n'y a pas sa place, ni dans les logs applicatifs.
+SECRET_PARAMETER_HINTS = ("password", "secret", "token", "api-key", "api_key")
+REDACTED_PARAMETER_VALUE = "***"
+
+
+def is_secret_parameter(name: str) -> bool:
+    return any(hint in name.lower() for hint in SECRET_PARAMETER_HINTS)
+
+
+def redact_secret_parameters(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    """Copie de ``parameters`` dont les valeurs secrètes sont masquées.
+
+    Le rejeu d'un run depuis l'admin repart donc de la valeur masquée pour ces
+    paramètres : c'est voulu, on ne rejoue pas une création de compte à l'identique.
+    """
+    return {
+        name: REDACTED_PARAMETER_VALUE if is_secret_parameter(str(name)) else value
+        for name, value in parameters.items()
+    }

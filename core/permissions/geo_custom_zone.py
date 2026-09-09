@@ -104,6 +104,23 @@ class GeoCustomZonePermission(
     def get_parcel_prefetch(self):
         return self._get_prefetch()
 
+    def accessible_zones(self) -> QuerySet[GeoCustomZone]:
+        """Zones à enjeux ACTIVES que l'utilisateur peut voir : celles de son groupe
+        (ou du groupe impersonné), toutes pour un super-admin non impersonné."""
+        queryset = GeoCustomZone.objects.active()
+
+        if self.scoped_user_group:
+            return queryset.filter(user_groups_custom_geo_zones=self.scoped_user_group)
+
+        if self._is_unrestricted():
+            return queryset
+
+        # distinct : la jointure sur la M2M duplique une zone partagée par deux groupes
+        # de l'utilisateur, ce qui la ferait rendre deux fois dans le GeoJSON.
+        return queryset.filter(
+            user_groups_custom_geo_zones__user_user_groups__user=self.user.id
+        ).distinct()
+
     def covers_geometry(self, geometry) -> bool:
         """True if the active custom zones accessible to the user cover `geometry`
         (point or polygon). Areas outside every accessible zone à enjeux are "zones
@@ -111,16 +128,7 @@ class GeoCustomZonePermission(
         spanning several adjacent accessible zones (inside their union but inside no
         single one) is still allowed; it is simply created with no zone associated (the
         association rule stays single-zone `covers`)."""
-        queryset = GeoCustomZone.objects.active()
-
-        if self.scoped_user_group:
-            queryset = queryset.filter(
-                user_groups_custom_geo_zones=self.scoped_user_group
-            )
-        elif not self._is_unrestricted():
-            queryset = queryset.filter(
-                user_groups_custom_geo_zones__user_user_groups__user=self.user.id
-            )
+        queryset = self.accessible_zones()
 
         # Fast path: a single zone covers it (indexed ST_Covers, GiST). Covers every point
         # and any polygon fully inside one zone — the overwhelming majority of calls.

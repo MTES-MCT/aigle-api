@@ -75,7 +75,9 @@ class CommandRunTrackerMixin:
                     continue
                 kwargs[action.option_strings[-1]] = value
 
-            arguments = {"kwargs": kwargs}
+            from core.utils.run_command import redact_secret_parameters
+
+            arguments = {"kwargs": redact_secret_parameters(kwargs)}
             if command_args:
                 arguments["args"] = list(command_args)
             return arguments
