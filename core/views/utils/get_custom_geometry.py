@@ -7,7 +7,7 @@ from rest_framework import serializers
 
 from core.constants.geo import SRID
 from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
-from core.models.geo_custom_zone import GeoCustomZone
+from core.permissions.geo_custom_zone import GeoCustomZonePermission
 from core.serializers.geo_custom_zone import GeoCustomZoneGeoFeatureSerializer
 from core.utils.postgis import SimplifyPreserveTopology
 from django.contrib.gis.geos import Polygon
@@ -15,7 +15,7 @@ from django.contrib.gis.db.models.functions import Intersection
 from django.contrib.gis.db.models.aggregates import Union
 from django.db.models.functions import Coalesce
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from core.utils.permissions import IsActiveAuthenticated
 
 SIMPLIFY_TOLERANCE = 0.0001
 
@@ -31,10 +31,15 @@ class GeometrySerializer(serializers.Serializer):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsActiveAuthenticated])
 def endpoint(request):
     geometry_serializer = GeometrySerializer(data=request.GET)
     geometry_serializer.is_valid(raise_exception=True)
+
+    # Sans ce filtrage, une bbox arbitraire rendait nom, couleur, type et géométrie de
+    # zones à enjeux hors du périmètre de l'utilisateur : seuls les uuids demandés, le
+    # statut ACTIVE et l'intersection étaient contrôlés.
+    accessible_zones = GeoCustomZonePermission.from_request(request).accessible_zones()
 
     polygon_requested = Polygon.from_bbox(
         (
@@ -52,6 +57,7 @@ def endpoint(request):
         queryset = get_queryset_geocustomzone(
             uuids=geometry_serializer.data["uuids"].split(","),
             polygon_requested=polygon_requested,
+            accessible_zones=accessible_zones,
         )
 
         custom_zones = queryset.all()
@@ -62,6 +68,7 @@ def endpoint(request):
         geometry_negative = get_negative_geometry(
             uuids=geometry_serializer.data["uuidsNegative"].split(","),
             polygon_requested=polygon_requested,
+            accessible_zones=accessible_zones,
         )
 
     return JsonResponse(
@@ -76,8 +83,10 @@ def endpoint(request):
     )
 
 
-def get_negative_geometry(uuids: List[str], polygon_requested: Polygon):
-    queryset = GeoCustomZone.objects.active().filter(
+def get_negative_geometry(
+    uuids: List[str], polygon_requested: Polygon, accessible_zones
+):
+    queryset = accessible_zones.filter(
         geometry__intersects=polygon_requested,
     )
 
@@ -101,15 +110,16 @@ def get_negative_geometry(uuids: List[str], polygon_requested: Polygon):
     return result.simplify(SIMPLIFY_TOLERANCE, preserve_topology=True)
 
 
-def get_queryset_geocustomzone(uuids: List[str], polygon_requested: Polygon):
-    queryset = GeoCustomZone.objects.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
+def get_queryset_geocustomzone(
+    uuids: List[str], polygon_requested: Polygon, accessible_zones
+):
+    queryset = accessible_zones.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
 
     try:
         queryset = queryset.filter(uuid__in=uuids)
     except (ValueError, TypeError):
         pass
 
-    queryset = queryset.active()
     queryset = queryset.filter(geometry__intersects=polygon_requested)
     queryset = queryset.values("uuid", "geo_custom_zone_status", "geo_custom_zone_type")
     queryset = queryset.annotate(

@@ -1,7 +1,14 @@
 from django.conf import settings
-from django.http import HttpResponse
 
 from rest_framework import serializers
+from rest_framework.decorators import (
+    api_view,
+    permission_classes,
+    throttle_classes,
+)
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.throttling import SimpleRateThrottle
 
 
 from common.constants.models import DEFAULT_MAX_LENGTH
@@ -10,6 +17,20 @@ from rest_framework.status import HTTP_200_OK
 
 from core.models.email import EmailType
 from core.utils.email import send_mail
+
+
+class ContactUsRateThrottle(SimpleRateThrottle):
+    """Plafond dédié (DEFAULT_THROTTLE_RATES["contact"]) : chaque appel déclenche un
+    envoi SMTP synchrone. Contrairement à AnonRateThrottle il s'applique aussi à un
+    appelant authentifié, qui sinon échapperait au quota."""
+
+    scope = "contact"
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {
+            "scope": self.scope,
+            "ident": self.get_ident(request),
+        }
 
 
 class ContactReason(models.TextChoices):
@@ -55,8 +76,16 @@ class EndpointSerializer(serializers.Serializer):
     )
 
 
+# Vue Django brute à l'origine (ni APIView ni @api_view) : elle échappait donc à
+# DEFAULT_THROTTLE_CLASSES comme à DEFAULT_PERMISSION_CLASSES, soit un envoi de courriel
+# non authentifié et sans plafond. Et c'était un GET, donc l'état civil, le téléphone et
+# l'adresse du demandeur passaient en query string — journalisés par le proxy et l'API,
+# conservés dans l'historique du navigateur. POST + corps de requête + quota dédié.
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([ContactUsRateThrottle])
 def endpoint(request):
-    params_serializer = EndpointSerializer(data=request.GET)
+    params_serializer = EndpointSerializer(data=request.data)
     params_serializer.is_valid(raise_exception=True)
 
     send_mail(
@@ -76,7 +105,7 @@ def endpoint(request):
         email_type=EmailType.CONTACT_US,
     )
 
-    return HttpResponse(status=HTTP_200_OK)
+    return Response(status=HTTP_200_OK)
 
 
 URL = "contact-us/"

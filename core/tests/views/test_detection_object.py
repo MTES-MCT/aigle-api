@@ -13,10 +13,13 @@ from core.tests.fixtures.users import (
     create_regular_user,
     create_super_admin,
     create_user_group,
+    create_user_with_group,
 )
 from core.tests.fixtures.detection_data import (
     create_complete_detection_setup,
+    create_detection_object,
     create_detection_with_object,
+    create_object_type,
     create_tile_set,
 )
 
@@ -37,7 +40,14 @@ class DetectionObjectViewSetTests(BaseAPITestCase):
         self.detection = self.detection_setup["detection"]
         self.tile_set = self.detection_setup["tile_set"]
 
-        self.user = create_regular_user()
+        self.communes = self.geo_data["communes"]
+        # Les lectures sont désormais bornées à la portée géographique du groupe : un
+        # compte sans zone ne voit plus rien, ce qui est le correctif lui-même.
+        self.user, _, _ = create_user_with_group(
+            email="do-montpellier@test.com",
+            group_name="Montpellier group",
+            geo_zones=[self.communes["montpellier"]],
+        )
         self.authenticate_user(self.user)
 
     def test_list_detection_objects_authenticated(self):
@@ -173,6 +183,84 @@ class DetectionObjectViewSetTests(BaseAPITestCase):
 
             if new_obj_index is not None and old_obj_index is not None:
                 self.assertLess(new_obj_index, old_obj_index)
+
+
+class DetectionObjectScopeTests(BaseAPITestCase):
+    """Les lectures étaient hors périmètre : n'importe quel compte authentifié listait
+    et consultait les objets de tout le territoire (adresse, commentaire, parcelle,
+    historique). Elles suivent maintenant la même règle que les écritures."""
+
+    def setUp(self):
+        super().setUp()
+        self.geo_data = create_complete_geo_hierarchy()
+        self.communes = self.geo_data["communes"]
+
+        self.montpellier_object = create_detection_object(
+            object_type=create_object_type(name="Piscine"),
+            commune=self.communes["montpellier"],
+        )
+        self.nimes_object = create_detection_object(
+            object_type=create_object_type(name="Cabane"),
+            commune=self.communes["nimes"],
+        )
+
+        self.user, _, _ = create_user_with_group(
+            email="scope-montpellier@test.com",
+            group_name="Montpellier scope group",
+            geo_zones=[self.communes["montpellier"]],
+        )
+        self.authenticate_user(self.user)
+
+    def _uuids(self, response):
+        results = response.data
+        if isinstance(results, dict) and "results" in results:
+            results = results["results"]
+        return [result["uuid"] for result in results]
+
+    def test_list_excludes_objects_outside_perimeter(self):
+        response = self.client.get(reverse("DetectionObjectViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        uuids = self._uuids(response)
+        self.assertIn(str(self.montpellier_object.uuid), uuids)
+        self.assertNotIn(str(self.nimes_object.uuid), uuids)
+
+    def test_uuids_filter_cannot_reach_outside_perimeter(self):
+        response = self.client.get(
+            reverse("DetectionObjectViewSet-list"),
+            {"uuids": str(self.nimes_object.uuid)},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self._uuids(response), [])
+
+    def test_retrieve_outside_perimeter_returns_404(self):
+        response = self.client.get(
+            reverse(
+                "DetectionObjectViewSet-detail",
+                kwargs={"uuid": str(self.nimes_object.uuid)},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_history_outside_perimeter_returns_404(self):
+        response = self.client.get(
+            reverse(
+                "DetectionObjectViewSet-history",
+                kwargs={"uuid": str(self.nimes_object.uuid)},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_super_admin_still_sees_everything(self):
+        self.authenticate_user(create_super_admin(email="scope-sa@test.com"))
+
+        response = self.client.get(reverse("DetectionObjectViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(str(self.nimes_object.uuid), self._uuids(response))
 
 
 class FromCoordinatesCustomZoneTests(BaseAPITestCase):

@@ -11,7 +11,10 @@ from core.models.detection_data import (
     DetectionValidationStatus,
 )
 from core.tests.base import BaseAPITestCase
-from core.tests.fixtures.users import create_super_admin, create_regular_user
+from core.tests.fixtures.users import (
+    create_super_admin,
+    create_user_with_group,
+)
 from core.tests.fixtures.detection_data import (
     create_complete_detection_setup,
     create_detection,
@@ -30,12 +33,18 @@ class DetectionDataViewSetTests(BaseAPITestCase):
     def setUp(self):
         super().setUp()
         self.super_admin = create_super_admin(email="ddadmin@test.com")
-        self.regular = create_regular_user(email="dduser@test.com")
         self.geo_data = create_complete_geo_hierarchy()
         self.detection_setup = create_complete_detection_setup(
             commune=self.geo_data["communes"]["montpellier"],
         )
         self.detection_data = self.detection_setup["detection_data"]
+        # Les lectures suivent maintenant la portée géographique du groupe : un compte
+        # sans zone ne lit plus aucune donnée de détection.
+        self.regular, _, _ = create_user_with_group(
+            email="dduser@test.com",
+            group_name="Montpellier data group",
+            geo_zones=[self.geo_data["communes"]["montpellier"]],
+        )
 
     def test_list_authenticated(self):
         self.authenticate_user(self.regular)
@@ -95,6 +104,66 @@ class DetectionDataViewSetTests(BaseAPITestCase):
             self.detection_data.detection_validation_status,
             DetectionValidationStatus.SUSPECT,
         )
+
+
+class DetectionDataScopeTests(BaseAPITestCase):
+    """Le queryset n'était pas borné : statuts de contrôle, dates de PV et références
+    d'autorisation de n'importe quelle détection du territoire étaient lisibles."""
+
+    def setUp(self):
+        super().setUp()
+        self.geo_data = create_complete_geo_hierarchy()
+        self.communes = self.geo_data["communes"]
+
+        self.montpellier_data = create_complete_detection_setup(
+            commune=self.communes["montpellier"],
+        )["detection_data"]
+        self.nimes_data = create_complete_detection_setup(
+            commune=self.communes["nimes"],
+        )["detection_data"]
+
+        self.user, _, _ = create_user_with_group(
+            email="dd-scope@test.com",
+            group_name="Montpellier dd group",
+            geo_zones=[self.communes["montpellier"]],
+        )
+        self.authenticate_user(self.user)
+
+    def test_list_excludes_data_outside_perimeter(self):
+        response = self.client.get(reverse("DetectionDataViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data
+        if isinstance(results, dict) and "results" in results:
+            results = results["results"]
+        uuids = [result["uuid"] for result in results]
+
+        self.assertIn(str(self.montpellier_data.uuid), uuids)
+        self.assertNotIn(str(self.nimes_data.uuid), uuids)
+
+    def test_retrieve_outside_perimeter_returns_404(self):
+        response = self.client.get(
+            reverse(
+                "DetectionDataViewSet-detail",
+                kwargs={"uuid": str(self.nimes_data.uuid)},
+            )
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_update_outside_perimeter_still_returns_403(self):
+        # Le filtrage ne couvre que les méthodes sûres : une écriture doit rendre le 403
+        # explicite du serializer, pas un 404 muet.
+        response = self.client.patch(
+            reverse(
+                "DetectionDataViewSet-detail",
+                kwargs={"uuid": str(self.nimes_data.uuid)},
+            ),
+            {"detectionControlStatus": DetectionControlStatus.CONTROLLED_FIELD},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class DetectionBulkUpdateTests(BaseAPITestCase):

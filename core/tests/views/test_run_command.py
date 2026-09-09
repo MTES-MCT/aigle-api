@@ -35,18 +35,48 @@ class CommandAsyncViewSetTests(BaseAPITestCase):
         self.authenticate_user(self.admin)
         url = reverse("CommandAsyncViewSet-list")
         response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_list_as_regular(self):
         self.authenticate_user(self.regular)
         url = reverse("CommandAsyncViewSet-list")
         response = self.client.get(url)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_list_unauthenticated(self):
         url = reverse("CommandAsyncViewSet-list")
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_tasks_forbidden_for_regular_user(self):
+        # CommandRun.output porte la sortie des commandes d'administration : la clé
+        # d'API de create_api_key, le mot de passe de create_super_admin. La permission
+        # "ModifyAction" laissait passer tout GET pour un compte authentifié.
+        CommandRun.objects.create(
+            command_name="create_api_key",
+            task_id="77777777-7777-7777-7777-777777777777",
+            status=CommandRunStatus.SUCCESS,
+            output="API Key created successfully",
+        )
+        self.authenticate_user(self.regular)
+
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_tasks_forbidden_for_admin(self):
+        self.authenticate_user(self.admin)
+        response = self.client.get(reverse("CommandAsyncViewSet-list-tasks"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_run_forbidden_for_regular_user(self):
+        self.authenticate_user(self.regular)
+        response = self.client.post(
+            reverse("CommandAsyncViewSet-run"),
+            {"command": "import_custom_zones", "args": {}},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class CommandMetadataTests(SimpleTestCase):
@@ -182,6 +212,29 @@ class RunCommandEndpointTests(BaseAPITestCase):
         dispatched_args = mock_apply.call_args.kwargs["args"]
         self.assertEqual(dispatched_args[0], "import_custom_zones")
         self.assertEqual(dispatched_args[2], {"ids": [1, 2, 3]})
+
+    @patch("core.services.command_async.run_management_command.apply_async")
+    def test_run_masks_secret_arguments_in_command_run(self, mock_apply):
+        # CommandRun.arguments est persisté, rendu par l'admin et recopié entre
+        # environnements : le mot de passe n'y survit pas. La commande, elle, le reçoit.
+        self.authenticate_user(self.super_admin)
+
+        response = self.client.post(
+            reverse("CommandAsyncViewSet-run"),
+            {
+                "command": "create_super_admin",
+                "args": {"--email": "a@b.fr", "--password": "s3cr3t-plaintext"},
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        command_run = CommandRun.objects.get(task_id=response.data["task_id"])
+        self.assertEqual(command_run.arguments["kwargs"]["--password"], "***")
+        self.assertEqual(command_run.arguments["kwargs"]["--email"], "a@b.fr")
+
+        dispatched_kwargs = mock_apply.call_args.kwargs["args"][2]
+        self.assertEqual(dispatched_kwargs["password"], "s3cr3t-plaintext")
 
     def test_run_with_invalid_parameter_returns_400_and_creates_no_row(self):
         # Validation happens before the row is created, so bad input never leaves a PENDING

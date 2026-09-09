@@ -17,12 +17,13 @@ class CommandAsyncService:
         """Run a Django management command asynchronously via Celery.
 
         ``parameters`` is exactly what the client sent — keyed by the raw CLI flags
-        ("--table-name"), the same keys the run-command form uses. It is stored verbatim in
-        ``CommandRun.arguments`` and served back untouched so the admin UI can replay a run.
+        ("--table-name"), the same keys the run-command form uses. It is stored in
+        ``CommandRun.arguments`` — secrets masked, everything else verbatim — and served
+        back so the admin UI can replay a run.
         call_command() needs validated/coerced values under argparse dests ("table_name"),
         so that form is derived only for dispatch, never persisted.
         """
-        from core.utils.run_command import parse_parameters
+        from core.utils.run_command import parse_parameters, redact_secret_parameters
 
         # Validates the input (raises BadRequest -> 400) and coerces values to their declared
         # types — done before creating the row so bad input never leaves a PENDING task.
@@ -35,7 +36,7 @@ class CommandAsyncService:
         command_run = CommandRun.objects.create(
             command_name=command_name,
             task_id=command_run_uuid,
-            arguments={"kwargs": parameters},
+            arguments={"kwargs": redact_secret_parameters(parameters)},
             run_origin=CommandRunOrigin.API,
             status=CommandRunStatus.PENDING,
         )
@@ -43,7 +44,7 @@ class CommandAsyncService:
         logger.info(
             "run_command_async: command_name=%s, kwargs=%s, uuid=%s",
             command_name,
-            command_kwargs,
+            redact_secret_parameters(command_kwargs),
             command_run_uuid,
         )
 
