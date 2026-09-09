@@ -1,10 +1,14 @@
 import os
 from .base import *  # noqa: F403, F401
-from .base import SQL_ECHO, INSTALLED_APPS, MIDDLEWARE
+from .base import SQL_ECHO, INSTALLED_APPS, MIDDLEWARE, REST_FRAMEWORK
 import builtins
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
+
+# Le serveur de dev est joint en direct : aucun proxy de confiance à déballer, l'identité
+# de throttling est REMOTE_ADDR.
+REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": 0}
 
 # django-debug-toolbar is a development-only tool: it exposes SQL, settings and request
 # internals. It is installed here (not in base) so it can never load in production.

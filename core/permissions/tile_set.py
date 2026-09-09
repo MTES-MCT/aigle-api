@@ -259,11 +259,6 @@ class TileSetPermission(
         for i, ts_info in enumerate(cached_tilesets):
             where = Q(**{f"{detection_prefix}tile_set__id": ts_info["id"]})
 
-            if intersects_geometry:
-                where &= Q(
-                    **{f"{detection_prefix}geometry__intersects": intersects_geometry}
-                )
-
             where_zones = Q()
             gz = ts_info["geo_zones"]
             # AND across levels, as before: a tile set carrying zones at two levels
@@ -289,6 +284,8 @@ class TileSetPermission(
             wheres_zones.append(where_zones)
             where &= where_zones
 
+            subtracted: set = set()
+
             for i_previous in range(i):
                 prev = cached_tilesets[i_previous]
 
@@ -298,17 +295,27 @@ class TileSetPermission(
                 ):
                     continue
 
-                where &= ~wheres_zones[i_previous]
+                previous_zones = wheres_zones[i_previous]
+
+                if previous_zones in subtracted:
+                    continue
+
+                subtracted.add(previous_zones)
+                where &= ~previous_zones
 
             wheres.append(where)
 
         if not wheres:
             return None
 
-        if len(wheres) == 1:
-            return wheres[0]
+        combined = wheres[0] if len(wheres) == 1 else reduce(or_, wheres)
 
-        return reduce(or_, wheres)
+        if intersects_geometry:
+            combined &= Q(
+                **{f"{detection_prefix}geometry__intersects": intersects_geometry}
+            )
+
+        return combined
 
     def get_user_tile_sets(
         self,

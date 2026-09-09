@@ -11,6 +11,7 @@ from django.contrib.postgres.fields import ArrayField
 
 class EmailType(models.TextChoices):
     CONTACT_US = "CONTACT_US", "CONTACT_US"
+    MFA_LOGIN_LINK = "MFA_LOGIN_LINK", "MFA_LOGIN_LINK"
 
 
 class Email(TimestampedModelMixin, UuidModelMixin):

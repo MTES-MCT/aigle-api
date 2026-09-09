@@ -172,7 +172,17 @@ class DataOutputRow:
 
 
 class Command(CommandRunTrackerMixin, BaseCommand):
-    help = "Import Sitadel file"
+    help = (
+        "Mark detections as LEGITIMATE when a building permit covers their parcel. "
+        "Reads a Sitadel 'autorisations d'urbanisme' CSV (semicolon-separated; the "
+        "columns read are DEP_CODE, COMM, NUM_DAU, ETAT_DAU, DATE_REELLE_AUTORISATION "
+        "and SEC_CADASTRE1-3 / NUM_CADASTRE1-3, every other one is ignored, see "
+        "docs/import_sitadel_template.csv), or downloads the latest ones from the "
+        "SDES DiDo API when --file-csv-path is omitted. Rows whose ETAT_DAU "
+        "is 4 (annule) are ignored, and a parcel is skipped entirely as soon as one of "
+        "its detections was controlled by a user. NOTHING IS WRITTEN without "
+        "--persist-data."
+    )
     dpt_detection_objects_ids_updated_map = defaultdict(set)
     dpt_parcels_ids_updated_map = defaultdict(set)
 
@@ -192,9 +202,25 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             "--file-csv-path is omitted. If omitted, the Sitadel dataset is "
             "auto-resolved from the catalogue by title.",
         )
-        parser.add_argument("--persist-data", type=bool, default=False)
-        parser.add_argument("--commune-code", action="append", required=False)
-        parser.add_argument("--department-code", action="append", required=False)
+        parser.add_argument(
+            "--persist-data",
+            type=bool,
+            default=False,
+            help="Write the changes. Omitted, the run is an analysis only. Beware: any "
+            "value passed on the command line means true, '--persist-data false' included",
+        )
+        parser.add_argument(
+            "--commune-code",
+            action="append",
+            required=False,
+            help="Only import rows of this commune (INSEE code, repeatable)",
+        )
+        parser.add_argument(
+            "--department-code",
+            action="append",
+            required=False,
+            help="Only import rows of this department (code, repeatable)",
+        )
 
     def handle(self, *args, **options):
         file_csv_path = options["file_csv_path"]

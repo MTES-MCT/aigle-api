@@ -10,7 +10,7 @@ ALLOWED_HOSTS = ["*"]
 # running server instead.
 REST_FRAMEWORK = {
     **REST_FRAMEWORK,
-    "DEFAULT_THROTTLE_RATES": {"anon": None, "user": None, "login": None},
+    "DEFAULT_THROTTLE_RATES": {"anon": None, "user": None, "login": None, "mfa": None},
 }
 
 DATABASES = {
@@ -89,6 +89,8 @@ CACHES = {
 }
 
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+# core_email.from_email est NOT NULL : sans expéditeur, tout envoi casse.
+DEFAULT_FROM_EMAIL = "aigle@test.local"
 
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles_test")
 MEDIA_ROOT = os.path.join(BASE_DIR, "media_test")

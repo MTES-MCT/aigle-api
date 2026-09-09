@@ -1,65 +1,195 @@
-import csv
-from datetime import datetime
-from typing import List, Optional, Tuple
+"""Update detection control statuses from a per-parcel CSV.
 
-from django.core.management.base import BaseCommand
-from core.management.base import CommandRunTrackerMixin
+The CSV holds one control status per row, in a single STATUT_CONTROLE column: a row
+names a parcel (INSEE code + cadastral section + number) and the status to apply to
+every live detection sitting on it.
+
+Template to hand out to the services filling it: docs/import_control_statuses_template.csv
+"""
+
+import csv
+import re
+import time
+import unicodedata
+from datetime import UTC, date, datetime, time as time_of_day
+from typing import Dict, List, NamedTuple, Optional
+
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.db.models import Prefetch
 
+from core.management.base import CommandRunTrackerMixin
 from core.models.detection import Detection
 from core.models.detection_data import (
     DetectionControlStatus,
+    DetectionData,
     DetectionPrescriptionStatus,
 )
 from core.models.detection_object import DetectionObject
 from core.models.parcel import Parcel
-from core.utils.logs_helpers import log_command_event
+from core.models.user import User
+from core.utils.cache import invalidate_count_caches, suppress_count_cache_invalidation
+from core.utils.logs_helpers import log_command_event, log_command_progress
 
 COMMAND_NAME = "import_control_statuses"
 
 COL_INSEE = "COM_INSEE"
 COL_SECTION = "PARCELLE_SECTION"
 COL_NUM = "PARCELLE_NUM"
-COL_STATUS_1 = "STATUT_CONTROLE_1"
-COL_STATUS_2 = "STATUT_CONTROLE_2"
-REQUIRED_COLUMNS = {COL_INSEE, COL_SECTION, COL_NUM, COL_STATUS_1, COL_STATUS_2}
+COL_STATUS = "STATUT_CONTROLE"
+# optional: a row without a date is imported, it just carries no date information
+COL_DATE = "DATE"
+REQUIRED_COLUMNS = (COL_INSEE, COL_SECTION, COL_NUM, COL_STATUS)
 
-# CSV status label -> DetectionControlStatus. Keys are normalized (stripped + lowercased)
-# so matching is case/whitespace-insensitive (the CSV mixes "Jugement"/"jugement", and
-# "Astreinte Administratives" with a trailing "s").
-CONTROL_STATUS_MAP = {
-    "pv dressé": DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
-    "jugement": DetectionControlStatus.JUGEMENT,
-    "astreinte administrative": DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
-    "astreinte administratives": DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
-    "remis en état": DetectionControlStatus.REHABILITATED,
-    "rapport de constatation redigé": DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
-    "contrôlé terrain": DetectionControlStatus.CONTROLLED_FIELD,
+DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d")
+
+PROGRESS_LOG_EVERY = 100
+
+# Characters that survive NFKD and would break an otherwise exact match: zero-width
+# spaces, soft hyphen, direction marks, a BOM pasted in the middle of a cell.
+_INVISIBLE_RE = re.compile(r"[\u00ad\u200b-\u200f\u2060\ufeff]")
+# Word separators. NFKD has already rewritten non-breaking and thin spaces as plain ones.
+_SEPARATORS_RE = re.compile(r"[\s\-_]+")
+# Punctuation an external file may wrap a label in: "PV dressé.", « Remis en état »
+_SURROUNDING_PUNCTUATION = " .,;:!?*\"'`«»()[]{}"
+
+
+def _singular(word: str) -> str:
+    """Fold the plural mark of a word ("astreintes" -> "astreinte").
+
+    Both the map keys and the CSV labels go through it and no two statuses differ only
+    by a plural, so this can only ever turn a near miss into a match.
+    """
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+
+
+def normalize_label(label: str) -> str:
+    """Case-, accent-, spacing- and plural-insensitive form used to look a label up.
+
+    The maps are built with it too, so both sides of the lookup are compared on the same
+    form: whatever spelling the external file uses ("REMIS  EN  ETAT", "Astreintes
+    administratives.", a value pasted from Word with a non-breaking or zero-width space
+    in it) reaches the same key.
+    """
+    # NFKD splits an accented letter into letter + combining mark (dropped right after)
+    # and rewrites non-breaking / thin spaces as plain ones.
+    decomposed = unicodedata.normalize("NFKD", label)
+    visible = _INVISIBLE_RE.sub(
+        "", "".join(char for char in decomposed if not unicodedata.combining(char))
+    )
+    words = _SEPARATORS_RE.sub(" ", visible).strip(_SURROUNDING_PUNCTUATION).split()
+    return " ".join(_singular(word.casefold()) for word in words)
+
+
+def _build_label_map(labels: dict, statuses) -> dict:
+    """Normalized label -> status, every enum value included so a CSV exported from the
+    app imports back as-is.
+
+    Raises when two labels normalize to the same key for different statuses: the maps are
+    static, so a collision is a coding mistake to catch at import time rather than a row
+    to silently mis-assign.
+    """
+    mapping = {}
+
+    for label, status in [
+        *((status.value, status) for status in statuses),
+        *labels.items(),
+    ]:
+        key = normalize_label(label)
+        colliding = mapping.get(key)
+        if colliding is not None and colliding != status:
+            raise ValueError(
+                f"label {label!r} normalizes to {key!r}, already mapped to {colliding}"
+            )
+        mapping[key] = status
+
+    return mapping
+
+
+# One entry per control status the app displays (mirrors the frontend
+# DETECTION_CONTROL_STATUSES_NAMES_MAP), plus the wordings met in the DDTM files. Case,
+# accents, hyphens, plurals, repeated spaces and surrounding punctuation are handled by
+# normalize_label and need no entry of their own.
+_CONTROL_STATUS_LABELS = {
+    "Non contrôlé": DetectionControlStatus.NOT_CONTROLLED,
+    "À contrôler": DetectionControlStatus.TO_CONTROL,
+    "Courrier préalable envoyé": DetectionControlStatus.PRIOR_LETTER_SENT,
+    "Contrôlé terrain": DetectionControlStatus.CONTROLLED_FIELD,
+    "PV dressé": DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+    "Procès-verbal dressé": DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP,
+    "Rapport de constatations rédigé": DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
+    "Astreinte administrative": DetectionControlStatus.ADMINISTRATIVE_CONSTRAINT,
+    "En jugement": DetectionControlStatus.JUGEMENT,
+    "Jugement": DetectionControlStatus.JUGEMENT,
+    "Remis en état": DetectionControlStatus.REHABILITATED,
 }
 
-# "Prescrit" is a *prescription* state, not a control state. It cannot be expressed as a
-# DetectionControlStatus, so it is applied to detection_prescription_status instead and
-# leaves detection_control_status untouched.
-PRESCRIPTION_STATUS_MAP = {
-    "prescrit": DetectionPrescriptionStatus.PRESCRIBED,
+CONTROL_STATUS_MAP: Dict[str, DetectionControlStatus] = _build_label_map(
+    _CONTROL_STATUS_LABELS, DetectionControlStatus
+)
+
+# "Prescrit" / "Non prescrit" describe prescription, not control: they have no
+# DetectionControlStatus equivalent, so they are written to detection_prescription_status
+# and leave detection_control_status untouched.
+_PRESCRIPTION_STATUS_LABELS = {
+    "Prescrit": DetectionPrescriptionStatus.PRESCRIBED,
+    "Non prescrit": DetectionPrescriptionStatus.NOT_PRESCRIBED,
 }
+
+PRESCRIPTION_STATUS_MAP: Dict[str, DetectionPrescriptionStatus] = _build_label_map(
+    _PRESCRIPTION_STATUS_LABELS, DetectionPrescriptionStatus
+)
+
+# Counters, in the order they are logged at the end of the run.
+COUNTER_LABELS = {
+    "rows_total": "rows total",
+    "rows_no_status": "rows without status",
+    "rows_invalid_num": f"rows with an invalid {COL_NUM}",
+    "rows_invalid_date": f"rows with an invalid {COL_DATE}",
+    "rows_unknown_status": "rows with an unknown status",
+    "rows_overriding": "rows overriding an earlier row for the same parcel",
+    "parcels_targeted": "parcels targeted",
+    "parcels_found": "parcels found",
+    "parcels_not_found": "parcels not found",
+    "detection_objects_updated": "detection objects updated",
+    "detections_updated": "detections updated",
+}
+
+
+class ResolvedStatus(NamedTuple):
+    control: Optional[DetectionControlStatus]
+    prescription: Optional[DetectionPrescriptionStatus]
+
+    @property
+    def name(self) -> str:
+        return (self.control or self.prescription).value
+
+
+class ParcelKey(NamedTuple):
+    insee: str
+    section: str
+    num_parcel: int
+
+
+class ParcelTarget(NamedTuple):
+    status: ResolvedStatus
+    label: str
+    line_number: int
+    raw_section: str
+    raw_num: str
+    date: Optional[date]
 
 
 def log_event(info: str):
     log_command_event(command_name=COMMAND_NAME, info=info)
 
 
-def normalize_label(label: str) -> str:
-    return label.strip().lower()
-
-
 def normalize_section(raw_section: str) -> str:
     """Match the cadastre storage format.
 
     Sections are stored on 2 chars: single-letter sections are left zero-padded
-    ("B" -> "0B", "A" -> "0A"), two-letter sections ("ZH", "AC") are kept as-is.
-    The CSV uses the unpadded form and sometimes has trailing spaces ("A ").
+    ("B" -> "0B"), two-letter sections ("ZH", "AC") are kept as-is. The CSV uses the
+    unpadded form and sometimes has trailing spaces ("A ").
     """
     section = raw_section.strip().upper()
     if len(section) == 1:
@@ -67,35 +197,93 @@ def normalize_section(raw_section: str) -> str:
     return section
 
 
-def resolve_status(label: str) -> Tuple[Optional[str], Optional[str], bool]:
-    """Resolve a raw CSV status label.
+def parse_date(raw_date: str) -> Optional[date]:
+    """Parse a CSV date, None when it matches none of DATE_FORMATS.
 
-    Returns (control_status, prescription_status, known). At most one of the two
-    statuses is set. `known` is False when the label is non-empty but maps to nothing,
-    so the caller can skip the row and report it instead of guessing.
+    Only the first token is read: Excel writes a date-only cell back with a trailing
+    time often enough ("12/03/2025 00:00") to be worth ignoring.
     """
-    normalized = normalize_label(label)
-    if not normalized:
-        return None, None, True
+    value = raw_date.strip().split(" ")[0]
 
-    control_status = CONTROL_STATUS_MAP.get(normalized)
+    for date_format in DATE_FORMATS:
+        try:
+            return datetime.strptime(value, date_format).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def to_datetime(value: date) -> datetime:
+    """Midday UTC of that date.
+
+    updated_at is a timestamp rendered in the reader's own timezone, and the app serves
+    territories from UTC-4 (Martinique) to UTC+4 (Réunion): anchoring at midday keeps the
+    displayed day equal to the day written in the CSV for all of them, where midnight
+    would show the day before or after.
+    """
+    return datetime.combine(value, time_of_day(hour=12), tzinfo=UTC)
+
+
+def resolve_status(normalized_label: str) -> Optional[ResolvedStatus]:
+    """Resolve a label already run through normalize_label, None when it maps to nothing.
+
+    At most one of the two statuses is set; a None result makes the caller report the
+    row rather than guess.
+    """
+    control_status = CONTROL_STATUS_MAP.get(normalized_label)
     if control_status is not None:
-        return control_status, None, True
+        return ResolvedStatus(control=control_status, prescription=None)
 
-    prescription_status = PRESCRIPTION_STATUS_MAP.get(normalized)
+    prescription_status = PRESCRIPTION_STATUS_MAP.get(normalized_label)
     if prescription_status is not None:
-        return None, prescription_status, True
+        return ResolvedStatus(control=None, prescription=prescription_status)
 
-    return None, None, False
+    return None
 
 
-def build_parcel_queryset(insee: str, section: str, num_parcel: int):
-    # only consider live detections/detection objects: DeletableModelMixin does NOT
-    # filter soft-deleted rows at the manager level, so it must be done explicitly.
+def read_csv_rows(csv_path: str) -> List[dict]:
+    # utf-8-sig: Excel exports carry a BOM, which would otherwise stick to the first
+    # column name and fail the required-column check.
+    with open(csv_path, mode="r", encoding="utf-8-sig", newline="") as csv_file:
+        reader = csv.DictReader(csv_file, delimiter=",")
+        # Reading .fieldnames consumes the header line; assigning it back replaces the
+        # keys of every row to come, so surrounding spaces never hide a column.
+        fieldnames = [(name or "").strip() for name in reader.fieldnames or []]
+        reader.fieldnames = fieldnames
+
+        missing_columns = sorted(set(REQUIRED_COLUMNS) - set(fieldnames))
+        if missing_columns:
+            raise CommandError(
+                f"missing columns: {missing_columns} (found: {fieldnames})"
+            )
+
+        rows = list(reader)
+
+    if not rows:
+        raise CommandError(f"empty CSV: {csv_path}")
+
+    return rows
+
+
+def resolve_user(user_email: str) -> User:
+    """The user recorded as the author of every row the import changes."""
+    user = User.objects.filter(email__iexact=user_email.strip(), deleted=False).first()
+
+    if user is None:
+        raise CommandError(f"user not found: {user_email!r}")
+
+    return user
+
+
+def build_parcel_queryset(key: ParcelKey):
+    # DeletableModelMixin does not filter soft-deleted rows at the manager level, so
+    # every level of the walk has to exclude them explicitly.
     return Parcel.objects.filter(
-        commune__iso_code=insee,
-        section=section,
-        num_parcel=num_parcel,
+        deleted=False,
+        commune__iso_code=key.insee,
+        section=key.section,
+        num_parcel=key.num_parcel,
     ).prefetch_related(
         Prefetch(
             "detection_objects",
@@ -114,13 +302,22 @@ def build_parcel_queryset(insee: str, section: str, num_parcel: int):
 class Command(CommandRunTrackerMixin, BaseCommand):
     help = (
         "Update detection control / prescription statuses from a per-parcel CSV "
-        f"(columns: {COL_INSEE}, {COL_SECTION}, {COL_NUM}, {COL_STATUS_1}, "
-        f"{COL_STATUS_2}). When both status columns are filled, {COL_STATUS_2} wins."
+        f"(columns: {', '.join(REQUIRED_COLUMNS)}, plus an optional {COL_DATE}). The "
+        "status of a row is applied to every live detection of every live detection "
+        f"object of the matching parcel. {COL_DATE} sets the update date, and the "
+        "official report date when the status draws a PV up. When a parcel appears on "
+        "several rows, the last one wins."
     )
 
     def add_arguments(self, parser):
         parser.add_argument(
             "--csv-path", type=str, required=True, help="Path to the CSV file to import"
+        )
+        parser.add_argument(
+            "--user-email",
+            type=str,
+            required=True,
+            help="Email of the user recorded as the author of the updates",
         )
         parser.add_argument(
             "--dry-run",
@@ -131,153 +328,224 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     def handle(self, *args, **options):
         csv_path = options["csv_path"]
         dry_run = options["dry_run"]
+        self.user = resolve_user(options["user_email"])
 
         log_event(
-            f"IMPORT CONTROL STATUSES: starting (csv_path={csv_path}, dry_run={dry_run})"
+            f"Starting importing control statuses... (user={self.user.email}, dry_run={dry_run})"
         )
 
-        with open(csv_path, mode="r") as csv_file:
-            rows = list(csv.DictReader(csv_file, delimiter=","))
+        self.counters = dict.fromkeys(COUNTER_LABELS, 0)
+        self.applied_by_status: Dict[str, int] = {}
+        self.parcels_not_found: List[list] = []
+        self.unknown_statuses: List[list] = []
 
-        if not rows:
-            log_event("IMPORT CONTROL STATUSES: ABORT, empty CSV")
-            return
+        rows = read_csv_rows(csv_path)
+        self.counters["rows_total"] = len(rows)
 
-        missing_columns = REQUIRED_COLUMNS - set(rows[0].keys())
-        if missing_columns:
+        targets = self.collect_targets(rows)
+        self.counters["parcels_targeted"] = len(targets)
+
+        self.apply_targets(targets, dry_run=dry_run)
+
+        self.write_reports()
+        self.log_summary(dry_run=dry_run)
+
+    def collect_targets(self, rows: List[dict]) -> Dict[ParcelKey, ParcelTarget]:
+        """Turn the rows into one target per parcel, dropping the ones that can't be used.
+
+        A parcel repeated on several rows is kept once: the last row wins (the previous
+        two-column "STATUT_CONTROLE_2 overrides STATUT_CONTROLE_1" rule, applied to rows).
+        """
+        targets: Dict[ParcelKey, ParcelTarget] = {}
+
+        # +2: line 1 is the header and enumerate is 0-based -> human line numbers
+        for line_number, row in enumerate(rows, start=2):
+            insee = (row.get(COL_INSEE) or "").strip()
+            raw_section = (row.get(COL_SECTION) or "").strip()
+            raw_num = (row.get(COL_NUM) or "").strip()
+            raw_date = (row.get(COL_DATE) or "").strip()
+            label = (row.get(COL_STATUS) or "").strip()
+            # a placeholder cell ("-", "...") normalizes away: no status, not an unknown one
+            normalized_label = normalize_label(label)
+
+            if not normalized_label:
+                self.counters["rows_no_status"] += 1
+                continue
+
+            try:
+                num_parcel = int(raw_num)
+            except ValueError:
+                self.counters["rows_invalid_num"] += 1
+                log_event(
+                    f"Line {line_number}: invalid {COL_NUM}={raw_num!r}, skipping"
+                )
+                continue
+
+            row_date = parse_date(raw_date) if raw_date else None
+            if raw_date and row_date is None:
+                self.counters["rows_invalid_date"] += 1
+                log_event(
+                    f"Line {line_number}: invalid {COL_DATE}={raw_date!r}, skipping"
+                )
+                continue
+
+            status = resolve_status(normalized_label)
+            if status is None:
+                self.counters["rows_unknown_status"] += 1
+                self.unknown_statuses.append([insee, raw_section, raw_num, label])
+                log_event(
+                    f"Line {line_number}: unknown status {label!r}, skipping (no data written)"
+                )
+                continue
+
+            key = ParcelKey(
+                insee=insee,
+                section=normalize_section(raw_section),
+                num_parcel=num_parcel,
+            )
+            previous = targets.get(key)
+            if previous is not None and previous.status != status:
+                self.counters["rows_overriding"] += 1
+                log_event(
+                    f"Line {line_number}: parcel {insee} {key.section} {num_parcel} already "
+                    f"had status {previous.label!r} (line {previous.line_number}), "
+                    f"{label!r} wins"
+                )
+
+            targets[key] = ParcelTarget(
+                status=status,
+                label=label,
+                line_number=line_number,
+                raw_section=raw_section,
+                raw_num=raw_num,
+                date=row_date,
+            )
+
+        return targets
+
+    def apply_targets(self, targets: Dict[ParcelKey, ParcelTarget], dry_run: bool):
+        total = len(targets)
+        start_time = time.monotonic()
+
+        # A per-row save() bumps the count-cache version once per detection: suppress the
+        # signal and invalidate once at the end, as the contextmanager contract requires.
+        with suppress_count_cache_invalidation():
+            for done, (key, target) in enumerate(targets.items(), start=1):
+                self.apply_target(key, target, dry_run=dry_run)
+
+                if done % PROGRESS_LOG_EVERY == 0 or done == total:
+                    log_command_progress(COMMAND_NAME, done, total, start_time)
+
+        if not dry_run and self.counters["detections_updated"]:
+            invalidate_count_caches()
+
+    def apply_target(self, key: ParcelKey, target: ParcelTarget, dry_run: bool):
+        parcels = list(build_parcel_queryset(key))
+
+        if not parcels:
+            self.counters["parcels_not_found"] += 1
+            self.parcels_not_found.append(
+                [
+                    key.insee,
+                    target.raw_section,
+                    target.raw_num,
+                    key.section,
+                    target.label,
+                ]
+            )
             log_event(
-                f"IMPORT CONTROL STATUSES: ABORT, missing columns: {sorted(missing_columns)}"
+                f"Line {target.line_number}: parcel not found (insee={key.insee}, "
+                f"section={key.section}, num={key.num_parcel})"
             )
             return
 
-        counters = {
-            "rows_total": len(rows),
-            "rows_no_status": 0,
-            "rows_invalid_num": 0,
-            "rows_unknown_status": 0,
-            "parcels_found": 0,
-            "parcels_not_found": 0,
-            "detection_objects_updated": 0,
-            "detections_updated": 0,
-        }
-        applied_by_status: dict[str, int] = {}
-        parcels_not_found: List[list] = []
-        unknown_statuses: List[list] = []
+        self.counters["parcels_found"] += len(parcels)
+        if len(parcels) > 1:
+            log_event(
+                f"Line {target.line_number}: {len(parcels)} parcels match (insee={key.insee}, "
+                f"section={key.section}, num={key.num_parcel}); updating all"
+            )
 
+        # One transaction per parcel: a whole-file transaction would hold locks on rows
+        # users edit from the interface for the entire run. The import is idempotent, so
+        # a partial run is simply resumed by running the command again.
         with transaction.atomic():
-            # +1 for the header line, +1 because enumerate is 0-based -> human line numbers
-            for line_number, row in enumerate(rows, start=2):
-                insee = (row.get(COL_INSEE) or "").strip()
-                raw_section = row.get(COL_SECTION) or ""
-                raw_num = (row.get(COL_NUM) or "").strip()
+            for parcel in parcels:
+                for detection_object in parcel.detection_objects.all():
+                    updated_detections = 0
 
-                status_1 = (row.get(COL_STATUS_1) or "").strip()
-                status_2 = (row.get(COL_STATUS_2) or "").strip()
-                # conflict rule: STATUT_CONTROLE_2 wins when present
-                effective_label = status_2 if status_2 else status_1
+                    for detection in detection_object.detections.all():
+                        if self.apply_to_detection(detection, target, dry_run=dry_run):
+                            updated_detections += 1
 
-                if not effective_label:
-                    counters["rows_no_status"] += 1
-                    log_event(
-                        f"IMPORT CONTROL STATUSES: line {line_number}: no status, skipping "
-                        f"({insee} {raw_section.strip()} {raw_num})"
-                    )
-                    continue
+                    if updated_detections:
+                        self.counters["detection_objects_updated"] += 1
+                        self.counters["detections_updated"] += updated_detections
+                        self.applied_by_status[target.status.name] = (
+                            self.applied_by_status.get(target.status.name, 0)
+                            + updated_detections
+                        )
 
-                try:
-                    num_parcel = int(raw_num)
-                except (TypeError, ValueError):
-                    counters["rows_invalid_num"] += 1
-                    log_event(
-                        f"IMPORT CONTROL STATUSES: line {line_number}: invalid "
-                        f"{COL_NUM}={raw_num!r}, skipping"
-                    )
-                    continue
+    def apply_to_detection(
+        self, detection: Detection, target: ParcelTarget, dry_run: bool
+    ) -> bool:
+        """Apply the row to a detection, returning whether anything changed.
 
-                control_status, prescription_status, known = resolve_status(
-                    effective_label
-                )
-                if not known:
-                    counters["rows_unknown_status"] += 1
-                    unknown_statuses.append(
-                        [insee, raw_section.strip(), raw_num, effective_label]
-                    )
-                    log_event(
-                        f"IMPORT CONTROL STATUSES: line {line_number}: unknown status "
-                        f"{effective_label!r}, skipping (no data written)"
-                    )
-                    continue
+        Unchanged rows are left alone: saving them would add a history entry (and an
+        update) saying nothing, and would credit the import user with a non-change.
+        """
+        detection_data = detection.detection_data
+        if detection_data is None:
+            return False
 
-                section = normalize_section(raw_section)
-                parcels = list(build_parcel_queryset(insee, section, num_parcel))
+        fields = [
+            "detection_control_status",
+            "detection_validation_status",
+            "detection_prescription_status",
+            "official_report_date",
+        ]
+        before = [getattr(detection_data, field) for field in fields]
 
-                if not parcels:
-                    counters["parcels_not_found"] += 1
-                    parcels_not_found.append(
-                        [insee, raw_section.strip(), raw_num, section, effective_label]
-                    )
-                    log_event(
-                        f"IMPORT CONTROL STATUSES: line {line_number}: parcel not found "
-                        f"(insee={insee}, section={section}, num={num_parcel})"
-                    )
-                    continue
+        status = target.status
+        if status.control is not None:
+            # applies the business rules: un-prescribes on OFFICIAL_REPORT_DRAWN_UP and
+            # upgrades DETECTED_NOT_VERIFIED -> SUSPECT
+            detection_data.set_detection_control_status(status.control)
+        if status.prescription is not None:
+            detection_data.detection_prescription_status = status.prescription
+        if (
+            target.date is not None
+            and status.control == DetectionControlStatus.OFFICIAL_REPORT_DRAWN_UP
+        ):
+            # the date of the row IS the date the report was drawn up
+            detection_data.official_report_date = target.date
 
-                counters["parcels_found"] += 1
-                if len(parcels) > 1:
-                    log_event(
-                        f"IMPORT CONTROL STATUSES: line {line_number}: {len(parcels)} "
-                        f"parcels match (insee={insee}, section={section}, "
-                        f"num={num_parcel}); updating all"
-                    )
+        if before == [getattr(detection_data, field) for field in fields]:
+            return False
 
-                for parcel in parcels:
-                    for detection_object in parcel.detection_objects.all():
-                        object_touched = False
-                        for detection in detection_object.detections.all():
-                            detection_data = detection.detection_data
-                            if detection_data is None:
-                                continue
+        if dry_run:
+            return True
 
-                            if control_status is not None:
-                                # set_detection_control_status applies the business rules:
-                                # un-prescribes on OFFICIAL_REPORT_DRAWN_UP and upgrades
-                                # DETECTED_NOT_VERIFIED -> SUSPECT.
-                                detection_data.set_detection_control_status(
-                                    control_status
-                                )
-                            if prescription_status is not None:
-                                detection_data.detection_prescription_status = (
-                                    prescription_status
-                                )
+        detection_data.user_last_update = self.user
+        # updated_at is auto_now: with update_fields it is only written if listed
+        detection_data.save(update_fields=fields + ["user_last_update", "updated_at"])
 
-                            if not dry_run:
-                                detection_data.save()
-                            counters["detections_updated"] += 1
-                            object_touched = True
+        if target.date is not None:
+            # save() always stamps updated_at with "now" (auto_now), so the date of the
+            # row has to be forced through an UPDATE of its own.
+            DetectionData.objects.filter(pk=detection_data.pk).update(
+                updated_at=to_datetime(target.date)
+            )
 
-                        if object_touched:
-                            counters["detection_objects_updated"] += 1
+        return True
 
-                applied_by_status[effective_label] = (
-                    applied_by_status.get(effective_label, 0) + 1
-                )
-
-            if dry_run:
-                log_event(
-                    "IMPORT CONTROL STATUSES: DRY-RUN, rolling back (no data written)"
-                )
-                transaction.set_rollback(True)
-
-        self._write_reports(parcels_not_found, unknown_statuses)
-        self._log_summary(counters, applied_by_status, dry_run)
-
-    @staticmethod
-    def _write_reports(parcels_not_found: List[list], unknown_statuses: List[list]):
+    def write_reports(self):
         suffix = datetime.today().strftime("%Y-%m-%d-%H%M%S")
+        # utf-8-sig: the reports hold accented labels, and are re-opened in Excel
 
-        if parcels_not_found:
+        if self.parcels_not_found:
             filename = f"import_control_statuses_parcels_not_found-{suffix}.csv"
-            with open(filename, "w", newline="") as report_file:
+            with open(filename, "w", newline="", encoding="utf-8-sig") as report_file:
                 writer = csv.writer(report_file)
                 writer.writerow(
                     [
@@ -285,50 +553,28 @@ class Command(CommandRunTrackerMixin, BaseCommand):
                         COL_SECTION,
                         COL_NUM,
                         "SECTION_NORMALIZED",
-                        "EFFECTIVE_STATUS",
+                        COL_STATUS,
                     ]
                 )
-                writer.writerows(parcels_not_found)
-            log_event(
-                f"IMPORT CONTROL STATUSES: parcels not found saved here={filename}"
-            )
+                writer.writerows(self.parcels_not_found)
+            log_event(f"Parcels not found saved here={filename}")
 
-        if unknown_statuses:
+        if self.unknown_statuses:
             filename = f"import_control_statuses_unknown_statuses-{suffix}.csv"
-            with open(filename, "w", newline="") as report_file:
+            with open(filename, "w", newline="", encoding="utf-8-sig") as report_file:
                 writer = csv.writer(report_file)
-                writer.writerow([COL_INSEE, COL_SECTION, COL_NUM, "EFFECTIVE_STATUS"])
-                writer.writerows(unknown_statuses)
-            log_event(
-                f"IMPORT CONTROL STATUSES: unknown statuses saved here={filename}"
-            )
+                writer.writerow([COL_INSEE, COL_SECTION, COL_NUM, COL_STATUS])
+                writer.writerows(self.unknown_statuses)
+            log_event(f"Unknown statuses saved here={filename}")
 
-    @staticmethod
-    def _log_summary(counters: dict, applied_by_status: dict, dry_run: bool):
+    def log_summary(self, dry_run: bool):
         log_event(
-            "IMPORT CONTROL STATUSES: FINISHED" + (" (DRY-RUN)" if dry_run else "")
+            "Finished importing control statuses"
+            + (" (DRY-RUN, no data written)" if dry_run else "")
         )
-        log_event(f"IMPORT CONTROL STATUSES: rows total={counters['rows_total']}")
-        log_event(
-            f"IMPORT CONTROL STATUSES: rows without status={counters['rows_no_status']}"
-        )
-        log_event(
-            f"IMPORT CONTROL STATUSES: rows invalid num={counters['rows_invalid_num']}"
-        )
-        log_event(
-            f"IMPORT CONTROL STATUSES: rows unknown status={counters['rows_unknown_status']}"
-        )
-        log_event(f"IMPORT CONTROL STATUSES: parcels found={counters['parcels_found']}")
-        log_event(
-            f"IMPORT CONTROL STATUSES: parcels not found={counters['parcels_not_found']}"
-        )
-        log_event(
-            f"IMPORT CONTROL STATUSES: detection objects updated={counters['detection_objects_updated']}"
-        )
-        log_event(
-            f"IMPORT CONTROL STATUSES: detections updated={counters['detections_updated']}"
-        )
-        for status_label, count in sorted(applied_by_status.items()):
-            log_event(
-                f"IMPORT CONTROL STATUSES: applied '{status_label}' on {count} matched row(s)"
-            )
+
+        for counter, label in COUNTER_LABELS.items():
+            log_event(f"{label}={self.counters[counter]}")
+
+        for status_name, count in sorted(self.applied_by_status.items()):
+            log_event(f"Applied {status_name} on {count} detection(s)")
