@@ -70,12 +70,24 @@ DJOSER = {
     "LOGIN_FIELD": "email",
     "SERIALIZERS": {
         "current_user": "core.serializers.user.UserSerializer",
-        "token_create": "core.serializers.auth.CustomTokenCreateSerializer",
-    },
-    "PERMISSIONS": {
-        "user_create": ["djoser.permissions.CurrentUserOrAdmin"],
     },
 }
+
+# Double authentification : lien de connexion à usage unique envoyé par courriel.
+# Désactivée par défaut, on l'active par groupe (FeatureFlag.REQUIRE_2FA) une fois
+# MFA_ENABLED passé à true. Les rôles ADMIN et SUPER_ADMIN y sont toujours soumis.
+MFA_ENABLED = strtobool(os.environ.get("MFA_ENABLED", "false"))
+MFA_LOGIN_LINK_BASE_URL = os.environ.get(
+    "MFA_LOGIN_LINK_BASE_URL",
+    f"https://{DOMAIN}/login/verify/"
+    if DOMAIN
+    else "http://localhost:5173/login/verify/",
+)
+
+# Le lien part pendant la requête de login, dans un worker gunicorn sync (il y en a 3).
+# Le plafond borne le temps qu'un SMTP dégradé peut immobiliser un worker ; le garder bas
+# est ce qui empêche quelques connexions lentes de saturer l'API.
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "5"))
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -164,6 +176,12 @@ REST_FRAMEWORK = {
     # is still valid are locked out of every endpoint by default.
     "DEFAULT_PERMISSION_CLASSES": ["core.utils.permissions.IsActiveAuthenticated"],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    # Sans cette valeur, DRF prend la chaîne X-Forwarded-For ENTIÈRE comme identité de
+    # throttling : l'incrémenter à chaque requête suffit à contourner toutes les limites,
+    # dont "login". Doit valoir le nombre EXACT de proxys de confiance devant gunicorn
+    # (1 = un seul nginx). Trop haut, l'identité redevient falsifiable ; trop bas, tous
+    # les clients partagent le seau du proxy et se throttlent mutuellement.
+    "NUM_PROXIES": int(os.environ.get("NUM_PROXIES", "1")),
     "DEFAULT_THROTTLE_CLASSES": [
         "rest_framework.throttling.AnonRateThrottle",
         "rest_framework.throttling.UserRateThrottle",
@@ -176,6 +194,10 @@ REST_FRAMEWORK = {
         "anon": os.environ.get("THROTTLE_ANON", "30/min"),
         "user": os.environ.get("THROTTLE_USER", "600/min"),
         "login": os.environ.get("THROTTLE_LOGIN", "5/min"),
+        # Scope distinct de "login" : sinon quelques essais de mot de passe ratés
+        # épuisent le seau et l'utilisateur ne peut plus ouvrir le lien qu'il vient
+        # de recevoir. Le jeton fait 256 bits, le plafond n'est pas anti-force-brute.
+        "mfa": os.environ.get("THROTTLE_MFA", "20/min"),
     },
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",

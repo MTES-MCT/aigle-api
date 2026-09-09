@@ -28,6 +28,7 @@ class FeatureFlag(models.TextChoices):
     """
 
     STATS = "STATS", "Statistiques"
+    REQUIRE_2FA = "REQUIRE_2FA", "Double authentification obligatoire"
 
 
 class UserGroup(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):

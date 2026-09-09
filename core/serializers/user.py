@@ -23,6 +23,10 @@ class UserSerializer(UserSerializerBase):
             "user_user_groups",
             "feature_flags",
         ]
+        # Ce sérialiseur décrit le compte courant : les champs qui portent les
+        # privilèges ne doivent jamais être écrivables par leur propre titulaire.
+        # UserInputSerializer, réservé à /api/users/, les rouvre explicitement.
+        read_only_fields = ["user_role", "is_staff", "deleted"]
 
     email = serializers.CharField()
     user_user_groups = UserUserGroupSerializer(many=True)
@@ -48,6 +52,9 @@ class UserInputSerializer(UserSerializer):
             "password",
             "user_user_groups",
         ]
+        # Réouvre ce que UserSerializer.Meta ferme : ici l'écriture est légitime, elle
+        # passe par UserService qui valide les droits du demandeur.
+        read_only_fields = []
 
     password = serializers.CharField()
     user_user_groups = UserUserGroupInputSerializer(many=True)
