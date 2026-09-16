@@ -26,28 +26,6 @@ def slugify(string: str) -> str:
     return "-".join(spliteds)
 
 
-def strip_email_subaddress(email: str) -> str:
-    """stephen+xyz@mail.com -> stephen@mail.com
-
-    Les comptes de test sont créés en sous-adressant une boîte unique. Tous les
-    fournisseurs ne routent pas le suffixe `+`, donc on l'enlève à l'envoi plutôt que
-    de compter dessus. L'adresse du compte, elle, n'est jamais modifiée : c'est
-    l'identifiant de connexion.
-    """
-    local, separator, domain = email.rpartition("@")
-
-    if not separator:
-        return email
-
-    stripped_local = local.split("+", 1)[0]
-
-    # "+xyz@mail.com" donnerait "@mail.com" : mieux vaut tenter l'adresse d'origine.
-    if not stripped_local:
-        return email
-
-    return f"{stripped_local}@{domain}"
-
-
 def to_array(
     string: str, sep: str = ",", default_value: Optional[List[str]] = None
 ) -> Optional[List[str]]:

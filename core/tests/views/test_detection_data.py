@@ -1,6 +1,7 @@
 import datetime
 import uuid
 
+from django.contrib.gis.geos import Point
 from django.urls import reverse
 from rest_framework import status
 
@@ -347,3 +348,48 @@ class DetectionDataPrescriptionTests(BaseAPITestCase):
             created.detection_data.detection_validation_status,
             DetectionValidationStatus.SUSPECT,
         )
+
+
+class DetectionDataLegacyReadScopeTests(BaseAPITestCase):
+    """Même repli géométrique que DetectionObject, atteint ici par le préfixe
+    detection__detection_object__."""
+
+    def setUp(self):
+        super().setUp()
+        self.geo_data = create_complete_geo_hierarchy()
+
+        # (3.3, 43.5) est dans l'Hérault des fixtures, (4.36, 43.84) dans le Gard.
+        self.legacy_inside = create_detection_data()
+        create_detection(
+            detection_object=create_detection_object(
+                object_type=create_object_type(name="Cabane")
+            ),
+            geometry=Point(3.3, 43.5, srid=4326),
+            detection_data=self.legacy_inside,
+        )
+        self.legacy_outside = create_detection_data()
+        create_detection(
+            detection_object=create_detection_object(
+                object_type=create_object_type(name="Mobil-home")
+            ),
+            geometry=Point(4.36, 43.84, srid=4326),
+            detection_data=self.legacy_outside,
+        )
+
+        self.user, _, _ = create_user_with_group(
+            email="dd-legacy-herault@test.com",
+            group_name="DDTM 34 dd legacy",
+            geo_zones=[self.geo_data["departments"]["herault"]],
+        )
+        self.authenticate_user(self.user)
+
+    def test_list_keeps_legacy_inside_and_drops_legacy_outside(self):
+        response = self.client.get(reverse("DetectionDataViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data
+        if isinstance(results, dict) and "results" in results:
+            results = results["results"]
+        uuids = {result["uuid"] for result in results}
+        self.assertIn(str(self.legacy_inside.uuid), uuids)
+        self.assertNotIn(str(self.legacy_outside.uuid), uuids)

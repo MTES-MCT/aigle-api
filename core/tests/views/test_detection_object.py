@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime
 
+from django.contrib.gis.geos import Point
+from django.db import connection
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -15,8 +17,12 @@ from core.tests.fixtures.users import (
     create_user_group,
     create_user_with_group,
 )
+from core.models.detection_object import DetectionObject
+from core.permissions.detection import DetectionPermission
 from core.tests.fixtures.detection_data import (
     create_complete_detection_setup,
+    create_detection,
+    create_detection_data,
     create_detection_object,
     create_detection_with_object,
     create_object_type,
@@ -332,3 +338,87 @@ class FromCoordinatesCustomZoneTests(BaseAPITestCase):
         self.authenticate_user(with_access)
         allowed = self.client.get(self.url, {"lat": 43.61, "lng": 3.88})
         self.assertFalse(self._is_urban_block(allowed))
+
+
+class DetectionObjectLegacyReadScopeTests(BaseAPITestCase):
+    """Objets hérités, dont la commune n'a jamais été résolue : leur lecture passe par le
+    repli géométrique. Les fixtures ne l'exerçaient jamais positivement pour un groupe
+    départemental, le point par défaut (Montpellier, 3.88) étant hors de l'Hérault."""
+
+    def setUp(self):
+        super().setUp()
+        self.geo_data = create_complete_geo_hierarchy()
+        herault = self.geo_data["departments"]["herault"]
+
+        # (3.3, 43.5) est dans l'Hérault des fixtures (2.9-3.7 / 43.2-43.9).
+        self.legacy_inside = create_detection_object(
+            object_type=create_object_type(name="Cabane")
+        )
+        create_detection(
+            detection_object=self.legacy_inside,
+            geometry=Point(3.3, 43.5, srid=4326),
+            detection_data=create_detection_data(),
+        )
+        # Nîmes, dans le Gard.
+        self.legacy_outside = create_detection_object(
+            object_type=create_object_type(name="Mobil-home")
+        )
+        create_detection(
+            detection_object=self.legacy_outside,
+            geometry=Point(4.36, 43.84, srid=4326),
+            detection_data=create_detection_data(),
+        )
+
+        self.user, _, _ = create_user_with_group(
+            email="legacy-herault@test.com",
+            group_name="DDTM 34 legacy",
+            geo_zones=[herault],
+        )
+        self.authenticate_user(self.user)
+
+    def _detail(self, detection_object):
+        return self.client.get(
+            reverse(
+                "DetectionObjectViewSet-detail",
+                kwargs={"uuid": str(detection_object.uuid)},
+            )
+        )
+
+    def test_legacy_object_inside_department_is_readable(self):
+        self.assertEqual(
+            self._detail(self.legacy_inside).status_code, status.HTTP_200_OK
+        )
+
+    def test_legacy_object_outside_department_returns_404(self):
+        self.assertEqual(
+            self._detail(self.legacy_outside).status_code, status.HTTP_404_NOT_FOUND
+        )
+
+    def test_list_keeps_legacy_inside_and_drops_legacy_outside(self):
+        response = self.client.get(reverse("DetectionObjectViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data
+        if isinstance(results, dict) and "results" in results:
+            results = results["results"]
+        uuids = {result["uuid"] for result in results}
+        self.assertIn(str(self.legacy_inside.uuid), uuids)
+        self.assertNotIn(str(self.legacy_outside.uuid), uuids)
+
+    def test_legacy_fallback_is_not_a_hashed_subplan(self):
+        """Haché, le repli se calcule sur TOUTES les détections héritées de France dès
+        que l'objet évalué a une commune NULL, même pour un retrieve : 35 à 73 s mesurés
+        sur un volume réaliste, contre ~1 ms corrélé ligne par ligne."""
+        queryset = DetectionObject.objects.filter(
+            DetectionPermission(user=self.user).get_readable_objects_q()
+        ).filter(uuid=self.legacy_inside.uuid)
+
+        sql, params = queryset.query.sql_with_params()
+        with connection.cursor() as cursor:
+            cursor.execute("EXPLAIN " + sql, params)
+            plan = "\n".join(row[0] for row in cursor.fetchall())
+
+        # Garde contre un passage à vide si le format du plan change.
+        self.assertRegex(plan, r"commune_id IS NULL\) AND \(", plan)
+        self.assertNotRegex(plan, r"IS NULL\) AND \(hashed SubPlan", plan)
+        self.assertTrue(queryset.exists())

@@ -2,12 +2,14 @@ from typing import List, Optional
 
 from django.core.exceptions import PermissionDenied
 from django.db.models import Exists, OuterRef, Q, QuerySet
+from django.db.models.lookups import IsNull
 
 from core.constants.collectivity import COMMUNE_LOOKUP_BY_LEVEL
 from core.constants.detection import DETECTION_EDIT_PERMISSION_DENIED_MESSAGE
 from core.models.detection import Detection
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
+from core.models.geo_zone import GeoZone
 from core.models.user import User
 from core.models.user_group import UserGroup, UserGroupRight
 from core.permissions.base import BasePermission
@@ -81,19 +83,32 @@ class DetectionPermission(
         if self.user_permission.is_unrestricted():
             return None
 
-        zones = self.user_permission.accessible_geo_zones()
+        # Ids matérialisés : ST_Covers ne porte ainsi que sur les zones de
+        # l'utilisateur, et non sur toutes celles dont la bbox contient la détection.
+        zone_ids = list(
+            self.user_permission.accessible_geo_zones()
+            .order_by()
+            .values_list("id", flat=True)
+            .distinct()
+        )
+        if not zone_ids:
+            return Q(**{f"{prefix}id__in": []})
 
-        # `commune__isnull=True` d'abord : sans lui le ST_Covers corrélé s'évaluerait
-        # sur TOUTES les détections, alors que seules les lignes héritées concernent ce
-        # repli.
-        legacy_detections = Detection.objects.filter(
-            Exists(zones.filter(geometry__covers=OuterRef("geometry"))),
-            detection_object__commune__isnull=True,
-        ).values("detection_object_id")
+        zones = GeoZone.objects.filter(id__in=zone_ids)
+
+        # Corrélé ligne par ligne, avec la commune de l'objet parent référencée DANS
+        # l'EXISTS : sans cette référence, PostgreSQL en fait un sous-plan haché calculé
+        # sur toutes les détections héritées de France, même pour un retrieve (35 à 73 s
+        # mesurés sur un volume réaliste, contre ~1 ms ici).
+        legacy = Exists(
+            Detection.objects.filter(
+                IsNull(OuterRef(f"{prefix}commune"), True),
+                detection_object_id=OuterRef(f"{prefix}id"),
+            ).filter(Exists(zones.filter(geometry__covers=OuterRef("geometry"))))
+        )
 
         return Q(**{f"{prefix}commune__in": self._communes_from(zones)}) | (
-            Q(**{f"{prefix}commune__isnull": True})
-            & Q(**{f"{prefix}id__in": legacy_detections})
+            Q(**{f"{prefix}commune__isnull": True}) & legacy
         )
 
     def validate_detections_edit_permission(self, detections: List[Detection]) -> None:

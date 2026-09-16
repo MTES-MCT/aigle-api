@@ -7,33 +7,13 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
-from core.serializers.auth import (
-    CustomTokenObtainPairSerializer,
-    MfaVerifyLinkSerializer,
-)
+from core.serializers.auth import CustomTokenObtainPairSerializer
 
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
     serializer_class = CustomTokenObtainPairSerializer
-
-
-class MfaVerifyLinkView(APIView):
-    """Échange le jeton du lien reçu par courriel contre une paire access/refresh."""
-
-    permission_classes = [AllowAny]
-    # Un jeton d'accès périmé encore présent côté client ne doit pas faire échouer
-    # cette route en 401 avant même d'être lue.
-    authentication_classes = []
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "mfa"
-
-    def post(self, request):
-        serializer = MfaVerifyLinkSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        return Response(serializer.validated_data)
 
 
 class LogoutView(APIView):

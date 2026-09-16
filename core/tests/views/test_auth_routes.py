@@ -65,7 +65,7 @@ class AuthRoutesSurfaceTests(BaseAPITestCase):
         self.assertFalse(self.user.is_staff)
 
     def test_token_login_route_is_gone(self):
-        """Seconde porte de login, qui contournerait entièrement la 2FA."""
+        """Seconde porte de login héritée de djoser, redondante avec /auth/jwt/create/."""
         with self.assertRaises(NoReverseMatch):
             reverse("token_login")
 

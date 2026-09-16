@@ -14,7 +14,6 @@ REST_FRAMEWORK = {
         "anon": None,
         "user": None,
         "login": None,
-        "mfa": None,
         "contact": None,
     },
 }
@@ -95,7 +94,8 @@ CACHES = {
 }
 
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
-# core_email.from_email est NOT NULL : sans expéditeur, tout envoi casse.
+# base.py lit DEFAULT_FROM_EMAIL de l'environnement, absent en CI : le courriel de
+# réinitialisation djoser partirait alors sans expéditeur.
 DEFAULT_FROM_EMAIL = "aigle@test.local"
 
 STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles_test")
