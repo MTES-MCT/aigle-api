@@ -2,7 +2,7 @@ from django.urls import path
 from djoser.views import UserViewSet
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
-from core.views.auth import CustomTokenObtainPairView, LogoutView, MfaVerifyLinkView
+from core.views.auth import CustomTokenObtainPairView, LogoutView
 
 # djoser.urls monte le UserViewSet entier avec les permissions de djoser, qui ignorent
 # user_role : POST /auth/users/ laissait n'importe quel compte authentifié créer un
@@ -14,7 +14,6 @@ urlpatterns = [
     path("jwt/refresh/", TokenRefreshView.as_view(), name="jwt-refresh"),
     path("jwt/verify/", TokenVerifyView.as_view(), name="jwt-verify"),
     path("jwt/logout/", LogoutView.as_view(), name="jwt-logout"),
-    path("mfa/verify-link/", MfaVerifyLinkView.as_view(), name="mfa-verify-link"),
     path(
         "users/reset_password/",
         UserViewSet.as_view({"post": "reset_password"}),

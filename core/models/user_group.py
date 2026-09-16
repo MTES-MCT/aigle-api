@@ -27,8 +27,6 @@ class FeatureFlag(models.TextChoices):
     The label is what the admin form displays, so it is written for a human.
     """
 
-    REQUIRE_2FA = "REQUIRE_2FA", "Double authentification obligatoire"
-
 
 class UserGroup(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH, unique=True)

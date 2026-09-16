@@ -6,7 +6,7 @@ This file contains settings specific to production and preprod environments.
 
 import os
 from .base import *  # noqa: F403, F401
-from .base import DOMAIN, MFA_ENABLED, SECRET_KEY
+from .base import DATABASES, DOMAIN, SECRET_KEY
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
@@ -18,21 +18,27 @@ if not os.environ.get("DJANGO_SECRET_KEY") or SECRET_KEY.startswith("django-inse
         "DJANGO_SECRET_KEY must be set to a strong, unique value in production."
     )
 
-# La 2FA envoie son lien de connexion depuis DEFAULT_FROM_EMAIL, et core_email.from_email
-# est NOT NULL : sans expéditeur configuré, chaque connexion échouerait en 503. Mieux vaut
-# refuser de démarrer que découvrir la panne au premier login.
-if MFA_ENABLED:
-    if not os.environ.get("DEFAULT_FROM_EMAIL"):
-        raise RuntimeError(
-            "DEFAULT_FROM_EMAIL must be set when MFA_ENABLED is true: the login link is sent from it."
-        )
-    # Sans DOMAIN ni override, MFA_LOGIN_LINK_BASE_URL retombe sur localhost:5173 et
-    # tous les liens envoyés seraient inouvrables.
-    if not os.environ.get("MFA_LOGIN_LINK_BASE_URL") and not DOMAIN:
-        raise RuntimeError(
-            "DOMAIN (or MFA_LOGIN_LINK_BASE_URL) must be set when MFA_ENABLED is true: "
-            "the login link would otherwise point at localhost."
-        )
+# ---------------------------------------------------------------------------
+# Database connections
+# TCP connects from the API host to the DB are intermittently left unanswered: libpq
+# has no connect timeout, so the worker hung until gunicorn killed it (nginx 502 without
+# CORS headers). Fail fast, and reuse connections so requests rarely open a new one.
+# Keepalives detect an idle reused connection that the network dropped silently.
+# ---------------------------------------------------------------------------
+DATABASES = {
+    **DATABASES,
+    "default": {
+        **DATABASES["default"],
+        "CONN_MAX_AGE": int(os.environ.get("SQL_CONN_MAX_AGE", "600")),
+        "CONN_HEALTH_CHECKS": True,
+        "OPTIONS": {
+            "connect_timeout": int(os.environ.get("SQL_CONNECT_TIMEOUT", "5")),
+            "keepalives_idle": 60,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        },
+    },
+}
 
 # ---------------------------------------------------------------------------
 # HTTPS / transport security

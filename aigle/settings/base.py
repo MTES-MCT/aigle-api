@@ -76,20 +76,9 @@ DJOSER = {
     },
 }
 
-# Double authentification : lien de connexion à usage unique envoyé par courriel.
-# Désactivée par défaut, on l'active par groupe (FeatureFlag.REQUIRE_2FA) une fois
-# MFA_ENABLED passé à true. Les rôles ADMIN et SUPER_ADMIN y sont toujours soumis.
-MFA_ENABLED = strtobool(os.environ.get("MFA_ENABLED", "false"))
-MFA_LOGIN_LINK_BASE_URL = os.environ.get(
-    "MFA_LOGIN_LINK_BASE_URL",
-    f"https://{DOMAIN}/login/verify/"
-    if DOMAIN
-    else "http://localhost:5173/login/verify/",
-)
-
-# Le lien part pendant la requête de login, dans un worker gunicorn sync (il y en a 3).
+# Les envois partent pendant la requête, dans un worker gunicorn sync (il y en a 3).
 # Le plafond borne le temps qu'un SMTP dégradé peut immobiliser un worker ; le garder bas
-# est ce qui empêche quelques connexions lentes de saturer l'API.
+# est ce qui empêche quelques envois lents de saturer l'API.
 EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "5"))
 
 MIDDLEWARE = [
@@ -197,10 +186,6 @@ REST_FRAMEWORK = {
         "anon": os.environ.get("THROTTLE_ANON", "30/min"),
         "user": os.environ.get("THROTTLE_USER", "600/min"),
         "login": os.environ.get("THROTTLE_LOGIN", "5/min"),
-        # Scope distinct de "login" : sinon quelques essais de mot de passe ratés
-        # épuisent le seau et l'utilisateur ne peut plus ouvrir le lien qu'il vient
-        # de recevoir. Le jeton fait 256 bits, le plafond n'est pas anti-force-brute.
-        "mfa": os.environ.get("THROTTLE_MFA", "20/min"),
         # Formulaire de contact public : chaque appel déclenche un envoi SMTP synchrone,
         # donc un plafond horaire bien plus bas que "anon" (qui est par minute).
         "contact": os.environ.get("THROTTLE_CONTACT", "10/hour"),
