@@ -1,6 +1,9 @@
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 
+from core.services.path_validation_progress import PathValidationProgressService
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.users import (
     add_user_to_group,
@@ -199,3 +202,116 @@ class UserFeatureFlagsTests(BaseAPITestCase):
             item for item in response.data if item["email"] == self.user.email
         )
         self.assertEqual(listed["feature_flags"], ["STATS"])
+
+
+class UserPathValidationTests(BaseAPITestCase):
+    """/users/me/ stays lean: only the admin list and detail join the progress row."""
+
+    def setUp(self):
+        super().setUp()
+        self.super_admin = create_super_admin(email="pv-admin@test.com")
+        self.started = create_regular_user(email="pv-started@test.com")
+        self.never_started = create_regular_user(email="pv-never@test.com")
+        PathValidationProgressService.apply(
+            user=self.started, item_count=11, check=[0, 1], uncheck=[]
+        )
+
+    def listed(self, response, user):
+        return next(item for item in response.data if item["email"] == user.email)
+
+    def test_list_exposes_path_validation(self):
+        self.authenticate_user(self.super_admin)
+        response = self.client.get(reverse("UserViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(self.listed(response, self.never_started)["path_validation"])
+        path_validation = self.listed(response, self.started)["path_validation"]
+        self.assertIsInstance(path_validation.pop("updated_at"), str)
+        self.assertEqual(
+            path_validation,
+            {
+                "checked_items": [0, 1],
+                "checked_count": 2,
+                "item_count": 11,
+                "completed_at": None,
+            },
+        )
+
+    def test_list_query_count_does_not_grow_with_progress_rows(self):
+        self.authenticate_user(self.super_admin)
+        url = reverse("UserViewSet-list")
+
+        with CaptureQueriesContext(connection) as with_one_row:
+            self.client.get(url)
+
+        for index in range(3):
+            PathValidationProgressService.apply(
+                user=create_regular_user(email=f"pv-more-{index}@test.com"),
+                item_count=11,
+                check=[index],
+                uncheck=[],
+            )
+
+        with CaptureQueriesContext(connection) as with_four_rows:
+            response = self.client.get(url)
+
+        self.assertEqual(
+            len([item for item in response.data if item["path_validation"]]), 4
+        )
+        self.assertEqual(
+            len(with_four_rows.captured_queries), len(with_one_row.captured_queries)
+        )
+
+    def test_retrieve_exposes_path_validation(self):
+        self.authenticate_user(self.super_admin)
+        response = self.client.get(
+            reverse("UserViewSet-detail", kwargs={"uuid": str(self.started.uuid)})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["path_validation"]["checked_items"], [0, 1])
+
+    def test_me_does_not_read_path_validation(self):
+        self.authenticate_user(self.started)
+
+        with CaptureQueriesContext(connection) as context:
+            response = self.client.get(reverse("UserViewSet-get-me"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("path_validation", response.data)
+        self.assertFalse(
+            any(
+                "core_pathvalidationprogress" in query["sql"]
+                for query in context.captured_queries
+            )
+        )
+
+    def test_admin_list_keeps_its_scope(self):
+        admin = create_admin(email="pv-group-admin@test.com")
+        group = create_user_group(name="PV Admin Group")
+        add_user_to_group(admin, group)
+        add_user_to_group(self.started, group)
+        in_group_never_started = create_regular_user(email="pv-in-group@test.com")
+        add_user_to_group(in_group_never_started, group)
+        add_user_to_group(self.never_started, create_user_group(name="PV Other Group"))
+        other_admin = create_admin(email="pv-other-admin@test.com")
+        add_user_to_group(other_admin, group)
+        PathValidationProgressService.apply(
+            user=other_admin, item_count=11, check=[0], uncheck=[]
+        )
+
+        self.authenticate_user(admin)
+        response = self.client.get(reverse("UserViewSet-list"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            {
+                item["email"]: item["path_validation"] is not None
+                for item in response.data
+            },
+            {self.started.email: True, in_group_never_started.email: False},
+        )
+        self.assertEqual(
+            self.listed(response, self.started)["path_validation"]["checked_items"],
+            [0, 1],
+        )

@@ -16,7 +16,11 @@ from core.models.user import UserRole
 from core.models.user_action_log import UserActionLog, UserActionLogAction
 from core.models.user_group import UserGroup, UserGroupRight, UserUserGroup
 from core.permissions.scope import resolve_scoped_user_group
-from core.serializers.user import UserInputSerializer, UserSerializer
+from core.serializers.user import (
+    UserInputSerializer,
+    UserSerializer,
+    UserWithPathValidationSerializer,
+)
 from core.serializers.user_group import UserUserGroupSerializer
 from core.services.user import UserService
 from core.utils.bulk_csv import (
@@ -31,6 +35,7 @@ from core.utils.bulk_csv import (
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 from core.utils.permissions import (
     MODIFY_ACTIONS,
+    READ_ACTIONS,
     AdminRolePermission,
     SuperAdminRolePermission,
 )
@@ -149,6 +154,9 @@ class UserViewSet(
         if self.action in MODIFY_ACTIONS:
             return UserInputSerializer
 
+        if self.action in READ_ACTIONS:
+            return UserWithPathValidationSerializer
+
         return UserSerializer
 
     def get_queryset(self):
@@ -161,6 +169,8 @@ class UserViewSet(
                 queryset=_geo_zones_with_code(),
             ),
         )
+        if self.action in READ_ACTIONS:
+            queryset = queryset.select_related("path_validation_progress")
 
         return UserService.get_filtered_users_queryset(
             user=self.request.user, queryset=queryset

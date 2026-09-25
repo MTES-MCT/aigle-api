@@ -19,6 +19,7 @@ from .tile import Tile
 from .tile_set import TileSet, TileSetStatus, TileSetScheme, TileSetType
 
 from .user_group import UserGroup, UserUserGroup
+from .path_validation_progress import PathValidationProgress
 
 from .parcel import Parcel
 

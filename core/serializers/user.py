@@ -4,6 +4,8 @@ from django.core.exceptions import PermissionDenied
 
 from rest_framework import serializers
 
+from core.serializers.path_validation_progress import PathValidationProgressSerializer
+
 UserModel = get_user_model()
 
 
@@ -34,6 +36,15 @@ class UserSerializer(UserSerializerBase):
         return UserService.get_feature_flags(
             user_user_group.user_group for user_user_group in obj.user_user_groups.all()
         )
+
+
+class UserWithPathValidationSerializer(UserSerializer):
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ["path_validation"]
+
+    path_validation = PathValidationProgressSerializer(
+        source="path_validation_progress", read_only=True
+    )
 
 
 class UserInputSerializer(UserSerializer):

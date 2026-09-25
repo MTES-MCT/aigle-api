@@ -16,6 +16,7 @@ from core.views.map_settings import MapSettingsView
 from core.views.object_type import ObjectTypeViewSet
 from core.views.object_type_category import ObjectTypeCategoryViewSet
 from core.views.parcel import ParcelViewSet
+from core.views.path_validation_progress import PathValidationProgressView
 from core.views.run_command import CommandAsyncViewSet
 from core.views.statistics.ddtm_activity import (
     StatisticsDdtmActivityGroupsActivityView,
@@ -81,6 +82,11 @@ urlpatterns = router.urls
 
 urlpatterns += [
     path("map-settings/", MapSettingsView.as_view(), name="MapSettingsView"),
+    path(
+        "help-center/path-validation/",
+        PathValidationProgressView.as_view(),
+        name="PathValidationProgressView",
+    ),
     path("external/test/", ExternalAPITestView.as_view(), name="ExternalAPITestView"),
     path(
         "external/update-control-status/",
