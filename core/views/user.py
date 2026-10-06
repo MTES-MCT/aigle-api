@@ -4,19 +4,23 @@ from typing import Any, Dict, List, Tuple
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
-from django.db.models import Case, CharField, F, Prefetch, When
+from django.db.models import Prefetch
 from django_filters import CharFilter, FilterSet, OrderingFilter
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from common.views.base import BaseViewSetMixin
-from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.user import UserRole
 from core.models.user_action_log import UserActionLog, UserActionLogAction
 from core.models.user_group import UserGroup, UserGroupRight, UserUserGroup
 from core.permissions.scope import resolve_scoped_user_group
-from core.serializers.user import UserInputSerializer, UserSerializer
+from core.serializers.geo_zone import geo_zones_with_code
+from core.serializers.user import (
+    UserInputSerializer,
+    UserSerializer,
+    UserWithPathValidationSerializer,
+)
 from core.serializers.user_group import UserUserGroupSerializer
 from core.services.user import UserService
 from core.utils.bulk_csv import (
@@ -31,36 +35,13 @@ from core.utils.bulk_csv import (
 from core.utils.filters import ChoiceInFilter, UuidInFilter
 from core.utils.permissions import (
     MODIFY_ACTIONS,
+    READ_ACTIONS,
     AdminRolePermission,
     SuperAdminRolePermission,
 )
 from core.utils.user_action_log import UserActionLogMixin
 
 UserModel = get_user_model()
-
-
-def _geo_zones_with_code():
-    return GeoZone.objects.annotate(
-        code=Case(
-            When(
-                geo_zone_type=GeoZoneType.COMMUNE,
-                then=F("geocommune__iso_code"),
-            ),
-            When(
-                geo_zone_type=GeoZoneType.DEPARTMENT,
-                then=F("geodepartment__insee_code"),
-            ),
-            When(
-                geo_zone_type=GeoZoneType.REGION,
-                then=F("georegion__insee_code"),
-            ),
-            When(
-                geo_zone_type=GeoZoneType.EPCI,
-                then=F("geoepci__siren_code"),
-            ),
-            output_field=CharField(),
-        )
-    )
 
 
 USER_CSV_HEADERS = ["email", "role", "nom du groupe", "droits du groupe"]
@@ -112,7 +93,7 @@ class UserViewSet(
                 "user_user_groups__user_group",
                 Prefetch(
                     "user_user_groups__user_group__geo_zones",
-                    queryset=_geo_zones_with_code(),
+                    queryset=geo_zones_with_code(),
                 ),
             )
             .first()
@@ -149,6 +130,9 @@ class UserViewSet(
         if self.action in MODIFY_ACTIONS:
             return UserInputSerializer
 
+        if self.action in READ_ACTIONS:
+            return UserWithPathValidationSerializer
+
         return UserSerializer
 
     def get_queryset(self):
@@ -158,9 +142,11 @@ class UserViewSet(
             "user_user_groups__user_group",
             Prefetch(
                 "user_user_groups__user_group__geo_zones",
-                queryset=_geo_zones_with_code(),
+                queryset=geo_zones_with_code(),
             ),
         )
+        if self.action in READ_ACTIONS:
+            queryset = queryset.select_related("path_validation_progress")
 
         return UserService.get_filtered_users_queryset(
             user=self.request.user, queryset=queryset

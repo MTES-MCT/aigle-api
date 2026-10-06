@@ -10,7 +10,6 @@ from django.urls import reverse
 from rest_framework import status
 
 from core.models.object_type_category import ObjectTypeCategory
-from core.models.user_group import FeatureFlag
 from core.permissions.scope import UNKNOWN_SCOPED_USER_GROUP_CODE
 from core.permissions.user import UserPermission
 from core.services.map_settings import MapSettingsService
@@ -26,6 +25,7 @@ from core.tests.fixtures.geo_data import (
     create_occitanie_region,
 )
 from core.tests.fixtures.users import (
+    TEST_FEATURE_FLAG,
     add_user_to_group,
     create_super_admin,
     create_user_group,
@@ -187,7 +187,7 @@ class ScopedUsersMeTests(BaseAPITestCase):
         self.assertCountEqual(rights, ["WRITE", "ANNOTATE", "READ"])
 
     def test_scoped_returns_the_feature_flags_of_the_impersonated_group(self):
-        self.own_group.feature_flags = [FeatureFlag.STATS]
+        self.own_group.feature_flags = [TEST_FEATURE_FLAG]
         self.own_group.save()
 
         self.authenticate_user(self.super_admin)
@@ -201,13 +201,13 @@ class ScopedUsersMeTests(BaseAPITestCase):
         # override that always blanks the list.
         self.own_group.feature_flags = []
         self.own_group.save()
-        self.scoped_group.feature_flags = [FeatureFlag.STATS]
+        self.scoped_group.feature_flags = [TEST_FEATURE_FLAG]
         self.scoped_group.save()
 
         response = self.client.get(
             self.url, HTTP_X_USER_GROUP_UUID=str(self.scoped_group.uuid)
         )
-        self.assertEqual(response.data["feature_flags"], ["STATS"])
+        self.assertEqual(response.data["feature_flags"], [TEST_FEATURE_FLAG])
 
 
 class ScopedObjectTypeUuidsTests(BaseAPITestCase):

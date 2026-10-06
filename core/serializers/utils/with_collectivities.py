@@ -31,10 +31,14 @@ class WithCollectivitiesSerializerMixin(serializers.ModelSerializer):
 
     @staticmethod
     def _zones_of_level(obj, level: GeoZoneType):
-        from core.serializers.geo_zone import GeoZoneSerializer
+        from core.serializers.geo_zone import GeoZoneSerializer, fill_geo_zone_codes
+
+        geo_zones = obj.geo_zones.all()
+        # One code lookup for all four levels when the prefetch did not annotate them.
+        fill_geo_zone_codes(geo_zones)
 
         return GeoZoneSerializer(
-            [zone for zone in obj.geo_zones.all() if zone.geo_zone_type == level],
+            [zone for zone in geo_zones if zone.geo_zone_type == level],
             many=True,
             read_only=True,
         ).data

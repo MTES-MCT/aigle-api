@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Tuple
 
+from django.db.models import Prefetch
 from django_filters import CharFilter, FilterSet
 
 from core.utils.filters import ChoiceInFilter
@@ -10,6 +11,7 @@ from common.views.base import BaseViewSetMixin
 from core.models.object_type_category import ObjectTypeCategory
 from core.models.user import UserRole
 from core.models.user_group import FeatureFlag, UserGroup, UserGroupType
+from core.serializers.geo_zone import geo_zones_with_code
 from core.serializers.user_group import (
     UserGroupDetailSerializer,
     UserGroupInputSerializer,
@@ -80,7 +82,7 @@ class UserGroupViewSet(UserActionLogMixin, BaseViewSetMixin[UserGroup]):
     def get_queryset(self):
         queryset = UserGroup.objects.order_by("name")
         queryset = queryset.prefetch_related(
-            "geo_zones",
+            Prefetch("geo_zones", queryset=geo_zones_with_code()),
             "object_type_categories",
             "geo_custom_zones",
             "geo_custom_zones__geo_custom_zone_category",
