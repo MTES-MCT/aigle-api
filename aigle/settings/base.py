@@ -70,7 +70,6 @@ DJOSER = {
     "LOGIN_FIELD": "email",
     "SERIALIZERS": {
         "current_user": "core.serializers.user.UserSerializer",
-        "token_create": "core.serializers.auth.CustomTokenCreateSerializer",
     },
     "PERMISSIONS": {
         "user_create": ["djoser.permissions.CurrentUserOrAdmin"],
@@ -216,6 +215,8 @@ CORS_ALLOW_HEADERS = [
 
 CORS_EXPOSE_HEADERS = [
     "content-disposition",
+    "x-export-row-count",
+    "x-export-truncated",
 ]
 
 # Internationalization

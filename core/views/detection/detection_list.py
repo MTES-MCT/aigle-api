@@ -1,3 +1,5 @@
+from typing import Optional
+
 from aigle.settings.base import DOMAIN
 from common.views.base import BaseViewSetMixin
 
@@ -109,6 +111,9 @@ DETECTION_CONTROL_STATUSES_ORDERED = [
     DetectionControlStatus.OBSERVARTION_REPORT_REDACTED,
 ]
 DOWNLOAD_LIMIT_ROWS = 20000
+# Read by the frontend (listed in CORS_EXPOSE_HEADERS) to warn about a truncated file.
+EXPORT_ROW_COUNT_HEADER = "X-Export-Row-Count"
+EXPORT_TRUNCATED_HEADER = "X-Export-Truncated"
 
 
 def order_queryset(queryset: QuerySet[Detection], ordering: str) -> QuerySet[Detection]:
@@ -206,7 +211,7 @@ class DetectionListFilter(FilterSet):
     parcelsUuids = UuidInFilter(method="pass_")
 
     ordering = OrderingFilter(
-        fields=["score", "id", "parcel", "detectionControlStatus", "detectionsCount"],
+        fields=["score", "id", "parcel", "detectionControlStatus"],
         method="pass_",
     )
 
@@ -219,16 +224,28 @@ class DetectionListFilter(FilterSet):
             else None
         )
 
-        if view and view.action in ["list", "download"]:
-            if not self.data.get("ordering"):
-                self.data = self.data.copy()
-                self.data["ordering"] = DEFAULT_ORDERING
+        # Not the overview: order_queryset's distinct(fields) cannot go with its annotate().
+        self.ordered = bool(view and view.action in ["list", "download"])
 
     def pass_(self, queryset, name, value):
         return queryset
 
+    def get_ordering(self) -> Optional[str]:
+        # The form splits the param on commas, order_queryset sorts on one key.
+        orderings = [
+            ordering
+            for ordering in self.form.cleaned_data.get("ordering") or []
+            if ordering
+        ]
+        if len(orderings) > 1:
+            raise serializers.ValidationError(
+                {"ordering": ["Un seul critère de tri est accepté."]}
+            )
+        return orderings[0] if orderings else None
+
     def filter_queryset(self, queryset):
         require_custom_zones(self.data)
+        ordering = self.get_ordering()
 
         user_permission = UserPermission.from_request(self.request)
 
@@ -320,10 +337,10 @@ class DetectionListFilter(FilterSet):
             "tile_set",
         ).select_related("detection_data")
 
-        ordering = self.data.get("ordering")
-
-        if ordering:
-            queryset = order_queryset(queryset=queryset, ordering=ordering)
+        if self.ordered:
+            queryset = order_queryset(
+                queryset=queryset, ordering=ordering or DEFAULT_ORDERING
+            )
 
         return queryset
 
@@ -336,22 +353,6 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
 
     def get_filtered_queryset(self):
         queryset = self.filter_queryset(self.get_queryset())
-
-        if self.action == "download":
-            queryset = get_list_values_list(
-                queryset,
-                "detection_object__id",
-                "detection_object__uuid",
-                "detection_object__commune__name",
-                "detection_object__object_type__name",
-                "detection_object__parcel__section",
-                "detection_object__parcel__num_parcel",
-                "score",
-                "detection_source",
-                "detection_data__detection_control_status",
-                "detection_data__detection_prescription_status",
-                "detection_data__detection_validation_status",
-            )
 
         tile_sets_subquery = (
             DetectionObject.objects.filter(id=OuterRef("detection_object__id"))
@@ -383,6 +384,32 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
             geometry_center=Centroid("geometry"),
         )
 
+        if self.action == "download":
+            queryset = get_list_values_list(
+                queryset,
+                "detection_object__id",
+                "detection_object__uuid",
+                "detection_object__commune__name",
+                "detection_object__object_type__name",
+                "detection_object__parcel__section",
+                "detection_object__parcel__num_parcel",
+                "score",
+                "detection_source",
+                "detection_data__detection_control_status",
+                "detection_data__detection_prescription_status",
+                "detection_data__detection_validation_status",
+                "tile_sets",
+                "geo_custom_zones",
+                "geometry_center",
+                # DISTINCT ON can only name a selected annotation (the control status
+                # sort): kept as a trailing column that process_rows does not read.
+                *[
+                    name
+                    for name in queryset.query.distinct_fields
+                    if name in queryset.query.annotations
+                ],
+            )
+
         return queryset
 
     def list(self, request, *args, **kwargs):
@@ -406,11 +433,15 @@ class DetectionListViewSet(BaseViewSetMixin[Detection]):
         queryset = self.get_filtered_queryset()
 
         # safety to not consume too much memory and kill the api
-        queryset = queryset[:DOWNLOAD_LIMIT_ROWS]
+        # (the extra row flags a truncated export without a COUNT query)
+        rows = list(queryset[: DOWNLOAD_LIMIT_ROWS + 1])
+        truncated = len(rows) > DOWNLOAD_LIMIT_ROWS
 
-        results = process_rows(list(queryset))
+        results = process_rows(rows[:DOWNLOAD_LIMIT_ROWS])
 
         response = HttpResponse()
+        response[EXPORT_ROW_COUNT_HEADER] = str(len(results))
+        response[EXPORT_TRUNCATED_HEADER] = "true" if truncated else "false"
         if params_serializer.validated_data["outputFormat"] == "xlsx":
             response["Content-Disposition"] = (
                 'attachment; filename="detection_list.xlsx"'
