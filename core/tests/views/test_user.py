@@ -6,6 +6,7 @@ from rest_framework import status
 from core.services.path_validation_progress import PathValidationProgressService
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.users import (
+    TEST_FEATURE_FLAG,
     add_user_to_group,
     create_super_admin,
     create_admin,
@@ -14,7 +15,7 @@ from core.tests.fixtures.users import (
     create_user_group,
 )
 from core.models import User, UserRole, UserUserGroup
-from core.models.user_group import FeatureFlag, UserGroupRight
+from core.models.user_group import UserGroupRight
 
 
 class UserViewSetTests(BaseAPITestCase):
@@ -249,8 +250,8 @@ class UserFeatureFlagsTests(BaseAPITestCase):
 
     def test_one_group_with_the_flag_is_enough(self):
         plain = create_user_group(name="FF Plain")
-        with_flag = create_user_group(name="FF With Stats")
-        with_flag.feature_flags = [FeatureFlag.STATS]
+        with_flag = create_user_group(name="FF With Flag")
+        with_flag.feature_flags = [TEST_FEATURE_FLAG]
         with_flag.save()
         add_user_to_group(self.user, plain)
         add_user_to_group(self.user, with_flag)
@@ -258,23 +259,23 @@ class UserFeatureFlagsTests(BaseAPITestCase):
         self.authenticate_user(self.user)
         response = self.client.get(self.url)
 
-        self.assertEqual(response.data["feature_flags"], ["STATS"])
+        self.assertEqual(response.data["feature_flags"], [TEST_FEATURE_FLAG])
 
     def test_flag_shared_by_two_groups_is_returned_once(self):
-        for name in ["FF Stats A", "FF Stats B"]:
+        for name in ["FF Flag A", "FF Flag B"]:
             group = create_user_group(name=name)
-            group.feature_flags = [FeatureFlag.STATS]
+            group.feature_flags = [TEST_FEATURE_FLAG]
             group.save()
             add_user_to_group(self.user, group)
 
         self.authenticate_user(self.user)
         response = self.client.get(self.url)
 
-        self.assertEqual(response.data["feature_flags"], ["STATS"])
+        self.assertEqual(response.data["feature_flags"], [TEST_FEATURE_FLAG])
 
     def test_user_list_exposes_feature_flags(self):
         group = create_user_group(name="FF Listed")
-        group.feature_flags = [FeatureFlag.STATS]
+        group.feature_flags = [TEST_FEATURE_FLAG]
         group.save()
         add_user_to_group(self.user, group)
 
@@ -285,7 +286,7 @@ class UserFeatureFlagsTests(BaseAPITestCase):
         listed = next(
             item for item in response.data if item["email"] == self.user.email
         )
-        self.assertEqual(listed["feature_flags"], ["STATS"])
+        self.assertEqual(listed["feature_flags"], [TEST_FEATURE_FLAG])
 
 
 class UserPathValidationTests(BaseAPITestCase):

@@ -1,19 +1,24 @@
 import uuid
+from unittest import mock
 
 from django.db import IntegrityError, transaction
 from django.urls import reverse
-from rest_framework import status
+from rest_framework import serializers, status
 
-from core.models.user_group import FeatureFlag, UserGroup, UserGroupType
+from core.models.user_group import UserGroup, UserGroupType
 from core.tests.base import BaseAPITestCase
 from core.tests.fixtures.detection_data import create_object_type_category
 from core.tests.fixtures.geo_data import create_herault_department
 from core.tests.fixtures.users import (
+    TEST_FEATURE_FLAG,
     create_super_admin,
     create_admin,
     create_regular_user,
     create_user_group,
 )
+
+# The real catalogue is empty for now, so the tests that need a valid flag bring their own.
+TEST_CATALOGUE = [(TEST_FEATURE_FLAG, "Test")]
 
 
 class UserGroupViewSetTests(BaseAPITestCase):
@@ -98,20 +103,28 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
             **overrides,
         }
 
+    def _input_serializer_with_test_catalogue(self, **overrides):
+        # Import core.urls first: importing the serializer directly trips a serializer
+        # import cycle.
+        import core.urls  # noqa: F401
+        from core.serializers.user_group import UserGroupInputSerializer
+
+        class TestCatalogueInputSerializer(UserGroupInputSerializer):
+            feature_flags = serializers.ListField(
+                child=serializers.ChoiceField(choices=TEST_CATALOGUE), required=False
+            )
+
+        return TestCatalogueInputSerializer(data=self._payload(**overrides))
+
     def test_catalogue_lists_every_feature_flag(self):
         self.authenticate_user(self.regular)
         url = reverse("UserGroupViewSet-feature-flags")
-        response = self.client.get(url)
+        with mock.patch("core.views.user_group.FeatureFlag") as feature_flag:
+            feature_flag.choices = TEST_CATALOGUE
+            response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            response.data,
-            [{"value": value, "label": label} for value, label in FeatureFlag.choices],
-        )
-        self.assertIn(
-            {"value": "STATS", "label": "Statistiques"},
-            response.data,
-        )
+        self.assertEqual(response.data, [{"value": TEST_FEATURE_FLAG, "label": "Test"}])
 
     def test_catalogue_unauthenticated(self):
         url = reverse("UserGroupViewSet-feature-flags")
@@ -119,7 +132,7 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_retrieve_exposes_feature_flags(self):
-        self.group.feature_flags = [FeatureFlag.STATS]
+        self.group.feature_flags = [TEST_FEATURE_FLAG]
         self.group.save()
 
         self.authenticate_user(self.super_admin)
@@ -127,7 +140,7 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
         response = self.client.get(url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["feature_flags"], ["STATS"])
+        self.assertEqual(response.data["feature_flags"], [TEST_FEATURE_FLAG])
 
     def test_defaults_to_no_feature_flag(self):
         self.authenticate_user(self.super_admin)
@@ -138,16 +151,16 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
         created = UserGroup.objects.get(name="FF Created Group")
         self.assertEqual(created.feature_flags, [])
 
-    def test_create_with_feature_flags(self):
+    def test_create_rejects_the_retired_stats_flag(self):
         self.authenticate_user(self.super_admin)
         url = reverse("UserGroupViewSet-list")
         response = self.client.post(
             url, self._payload(feature_flags=["STATS"]), format="json"
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        created = UserGroup.objects.get(name="FF Created Group")
-        self.assertEqual(created.feature_flags, ["STATS"])
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("featureFlags", response.json())
+        self.assertFalse(UserGroup.objects.filter(name="FF Created Group").exists())
 
     def test_create_rejects_unknown_feature_flag(self):
         self.authenticate_user(self.super_admin)
@@ -159,19 +172,27 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("featureFlags", response.json())
 
-    def test_create_rejects_duplicated_feature_flags(self):
-        self.authenticate_user(self.super_admin)
-        url = reverse("UserGroupViewSet-list")
-        response = self.client.post(
-            url, self._payload(feature_flags=["STATS", "STATS"]), format="json"
+    def test_create_with_feature_flags(self):
+        serializer = self._input_serializer_with_test_catalogue(
+            feature_flags=[TEST_FEATURE_FLAG]
         )
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("featureFlags", response.json())
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+        created = UserGroup.objects.get(name="FF Created Group")
+        self.assertEqual(created.feature_flags, [TEST_FEATURE_FLAG])
+
+    def test_create_rejects_duplicated_feature_flags(self):
+        serializer = self._input_serializer_with_test_catalogue(
+            feature_flags=[TEST_FEATURE_FLAG, TEST_FEATURE_FLAG]
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("feature_flags", serializer.errors)
         self.assertFalse(UserGroup.objects.filter(name="FF Created Group").exists())
 
     def test_update_feature_flags(self):
-        self.group.feature_flags = [FeatureFlag.STATS]
+        self.group.feature_flags = [TEST_FEATURE_FLAG]
         self.group.save()
 
         self.authenticate_user(self.super_admin)
@@ -189,7 +210,7 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
     def test_update_as_regular_forbidden(self):
         self.authenticate_user(self.regular)
         url = reverse("UserGroupViewSet-detail", kwargs={"uuid": str(self.group.uuid)})
-        response = self.client.patch(url, {"feature_flags": ["STATS"]}, format="json")
+        response = self.client.patch(url, {"feature_flags": []}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
@@ -201,5 +222,5 @@ class UserGroupFeatureFlagsTests(BaseAPITestCase):
                 UserGroup.objects.create(
                     name="FF Duplicated",
                     user_group_type=UserGroupType.DDTM,
-                    feature_flags=["STATS", "STATS"],
+                    feature_flags=[TEST_FEATURE_FLAG, TEST_FEATURE_FLAG],
                 )

@@ -22,12 +22,10 @@ class UserGroupType(models.TextChoices):
 
 
 class FeatureFlag(models.TextChoices):
-    """Every feature that can be switched on per user group.
+    """Every feature that can be switched on per user group. None for now.
 
     The label is what the admin form displays, so it is written for a human.
     """
-
-    STATS = "STATS", "Statistiques"
 
 
 class UserGroup(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):

@@ -215,7 +215,7 @@ class UserService:
     def _validate_is_staff_permissions(
         current_is_staff: bool, new_is_staff: bool, requesting_user: "User"
     ) -> None:
-        # is_staff grants the statistics and the Django admin, it is not just a label.
+        # is_staff opens the Django admin and leaves the user out of the statistics.
         changed = bool(new_is_staff) != bool(current_is_staff)
         if changed and requesting_user.user_role != UserRole.SUPER_ADMIN:
             raise PermissionDenied(

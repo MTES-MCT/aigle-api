@@ -1,6 +1,6 @@
 from core.models.geo_custom_zone import GeoCustomZone
 from core.models.object_type_category import ObjectTypeCategory
-from core.models.user_group import UserGroup, UserUserGroup
+from core.models.user_group import FeatureFlag, UserGroup, UserUserGroup
 from core.serializers import UuidTimestampedModelSerializerMixin
 from core.serializers.geo_custom_zone import GeoCustomZoneSerializer
 from core.serializers.geo_zone import GeoZoneSerializer
@@ -62,6 +62,11 @@ class UserGroupInputSerializer(
     )
     object_type_categories_uuids = serializers.ListField(
         child=serializers.UUIDField(), required=False, allow_empty=True, write_only=True
+    )
+    # Declared, not generated: DRF drops the choice check of a model field whose
+    # choices are empty, so an empty catalogue would accept any string.
+    feature_flags = serializers.ListField(
+        child=serializers.ChoiceField(choices=FeatureFlag.choices), required=False
     )
 
     def validate_feature_flags(self, value):
