@@ -249,10 +249,11 @@ class EpciUserGroupSerializationTests(EpciPermissionTestsBase):
 
         detail = self.client.get(f"/api/user-group/{group.uuid}/")
         self.assertEqual(detail.status_code, status.HTTP_200_OK)
-        # `code` is null here for every level (GeoZoneSerializer reads an annotation this
-        # payload does not carry) — a pre-existing gap, so identify the zone by uuid.
         self.assertEqual(
             [row["uuid"] for row in detail.data["epcis"]], [str(self.epci.uuid)]
+        )
+        self.assertEqual(
+            [row["code"] for row in detail.data["epcis"]], [self.epci.siren_code]
         )
         self.assertEqual(
             [row["name"] for row in detail.data["epcis"]], [self.epci.name]

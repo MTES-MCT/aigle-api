@@ -1,5 +1,6 @@
 from typing import Callable, Iterable, Optional, List, Dict, Any, TYPE_CHECKING
 from django.db import connection, transaction
+from django.db.models import Prefetch
 from django.contrib.gis.geos import GEOSGeometry, Polygon
 from django.contrib.gis.db.models.functions import Intersection
 
@@ -377,9 +378,12 @@ class GeoCustomZoneService:
         scoped_user_group: Optional[UserGroup] = None,
     ):
         from core.constants.order_by import GEO_CUSTOM_ZONES_ORDER_BYS
+        from core.serializers.geo_zone import geo_zones_with_code
 
         queryset = GeoCustomZone.objects.order_by(*GEO_CUSTOM_ZONES_ORDER_BYS)
-        queryset = queryset.prefetch_related("geo_zones")
+        queryset = queryset.prefetch_related(
+            Prefetch("geo_zones", queryset=geo_zones_with_code())
+        )
         queryset = queryset.select_related("geo_custom_zone_category")
 
         if scoped_user_group is not None:

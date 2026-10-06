@@ -7,11 +7,12 @@ from django_filters import FilterSet, CharFilter
 from django.db.models import Q
 from rest_framework import serializers
 from rest_framework.response import Response
-from django.db.models import Value
+from django.db.models import Prefetch, Value
 
 from core.constants.order_by import TILE_SETS_ORDER_BYS
 from core.models.tile_set import TileSet, TileSetScheme, TileSetStatus, TileSetType
 from core.permissions.scope import resolve_scoped_user_group
+from core.serializers.geo_zone import geo_zones_with_code
 from core.services.tile_set import TileSetService
 from rest_framework import status
 
@@ -94,6 +95,9 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
     def get_queryset(self):
         queryset = TileSet.objects.order_by(*TILE_SETS_ORDER_BYS)
         queryset = queryset.annotate(detections_count=Value(0))
+        queryset = queryset.prefetch_related(
+            Prefetch("geo_zones", queryset=geo_zones_with_code())
+        )
 
         return queryset
 
