@@ -60,7 +60,7 @@ class UserInputSerializer(UserSerializer):
             "user_user_groups",
         ]
 
-    password = serializers.CharField()
+    password = serializers.CharField(write_only=True)
     user_user_groups = UserUserGroupInputSerializer(many=True)
 
     def create(self, validated_data):

@@ -17,6 +17,10 @@ if TYPE_CHECKING:
 else:
     User = get_user_model()
 
+FOREIGN_USER_GROUP_MESSAGE = (
+    "Vous ne pouvez pas modifier l'appartenance à un groupe que vous n'administrez pas"
+)
+
 
 class UserService:
     @staticmethod
@@ -56,9 +60,12 @@ class UserService:
             user_group_ids = user.user_user_groups.values_list(
                 "user_group__id", flat=True
             )
+            # A subquery, not a join: a join returns the user once per shared group.
             return queryset.filter(
                 user_role=UserRole.REGULAR,
-                user_user_groups__user_group__id__in=user_group_ids,
+                id__in=UserUserGroup.objects.filter(
+                    user_group__id__in=user_group_ids
+                ).values("user_id"),
             )
 
         return queryset.none()
@@ -87,14 +94,20 @@ class UserService:
                 "Un administrateur peut seulement créer des utilisateurs de rôle normal"
             )
 
-        user = User.objects.create_user(
-            email=email,
-            password=password,
-            user_role=user_role,
-            is_staff=is_staff,
+        UserService._validate_is_staff_permissions(
+            current_is_staff=False,
+            new_is_staff=is_staff,
+            requesting_user=requesting_user,
         )
 
         with transaction.atomic():
+            user = User.objects.create_user(
+                email=email,
+                password=password,
+                user_role=user_role,
+                is_staff=is_staff,
+            )
+
             if user_user_groups:
                 UserService._update_user_groups(
                     user=user,
@@ -141,6 +154,13 @@ class UserService:
                     user=user, new_role=user_role, requesting_user=requesting_user
                 )
                 user.user_role = user_role
+
+            if "is_staff" in other_fields:
+                UserService._validate_is_staff_permissions(
+                    current_is_staff=user.is_staff,
+                    new_is_staff=other_fields["is_staff"],
+                    requesting_user=requesting_user,
+                )
 
             for field, value in other_fields.items():
                 setattr(user, field, value)
@@ -192,14 +212,58 @@ class UserService:
             )
 
     @staticmethod
+    def _validate_is_staff_permissions(
+        current_is_staff: bool, new_is_staff: bool, requesting_user: "User"
+    ) -> None:
+        # is_staff grants the statistics and the Django admin, it is not just a label.
+        changed = bool(new_is_staff) != bool(current_is_staff)
+        if changed and requesting_user.user_role != UserRole.SUPER_ADMIN:
+            raise PermissionDenied(
+                "Seul un super administrateur peut modifier le statut d'utilisateur interne"
+            )
+
+    @staticmethod
     def _update_user_groups(
         user: "User", user_user_groups: List[Dict[str, Any]], requesting_user: "User"
     ) -> None:
         user_user_groups_map = {ug["user_group_uuid"]: ug for ug in user_user_groups}
+        existing_user_user_groups = list(user.user_user_groups.all())
+
+        if requesting_user.user_role != UserRole.SUPER_ADMIN:
+            # As in get_filtered_users_queryset: an ADMIN administers their own groups.
+            administrable_group_ids = set(
+                requesting_user.user_user_groups.values_list(
+                    "user_group__id", flat=True
+                )
+            )
+            administrable_user_user_groups = []
+
+            for existing_ug in existing_user_user_groups:
+                if existing_ug.user_group_id in administrable_group_ids:
+                    administrable_user_user_groups.append(existing_ug)
+                    continue
+
+                # The form sends foreign memberships back as is; an absent one is kept.
+                requested_ug = user_user_groups_map.pop(
+                    existing_ug.user_group.uuid, None
+                )
+                if requested_ug is not None and set(
+                    requested_ug["user_group_rights"]
+                ) != set(existing_ug.user_group_rights):
+                    raise PermissionDenied(FOREIGN_USER_GROUP_MESSAGE)
+
+            existing_user_user_groups = administrable_user_user_groups
+
+            if (
+                UserGroup.objects.filter(uuid__in=user_user_groups_map.keys())
+                .exclude(id__in=administrable_group_ids)
+                .exists()
+            ):
+                raise PermissionDenied(FOREIGN_USER_GROUP_MESSAGE)
 
         updated_groups = []
 
-        for existing_ug in user.user_user_groups.all():
+        for existing_ug in existing_user_user_groups:
             if user_user_groups_map.get(existing_ug.user_group.uuid):
                 existing_ug.user_group_rights = user_user_groups_map[
                     existing_ug.user_group.uuid
