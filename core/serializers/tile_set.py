@@ -31,6 +31,7 @@ class TileSetMinimalSerializer(UuidTimestampedModelSerializerMixin):
             "min_zoom",
             "max_zoom",
             "monochrome",
+            "shown_in_layers_panel",
         ]
 
 
@@ -74,6 +75,7 @@ TILE_SET_INPUT_FIELDS = [
     "min_zoom",
     "max_zoom",
     "monochrome",
+    "shown_in_layers_panel",
 ]
 
 

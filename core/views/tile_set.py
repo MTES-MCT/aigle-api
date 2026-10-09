@@ -287,6 +287,7 @@ class TileSetViewSet(UserActionLogMixin, BaseViewSetMixin[TileSet]):
                     "min_zoom": 1,
                     "max_zoom": 22,
                     "monochrome": False,
+                    "shown_in_layers_panel": True,
                     **collectivity_uuids_payload(collectivity_uuids),
                 }
             )

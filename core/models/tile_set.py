@@ -52,6 +52,7 @@ class TileSet(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     last_import_ended_at = models.DateTimeField(null=True)
 
     monochrome = models.BooleanField(default=False)
+    shown_in_layers_panel = models.BooleanField(default=True)
 
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + [
