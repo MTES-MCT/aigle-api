@@ -84,6 +84,16 @@ class InferenceFilter:
     batch_id: str
 
 
+# A batch as deployed: its run's geozone and source imagery year come with it.
+DEPLOYMENT_BATCH_COLUMNS = [
+    "id",
+    "batch_name",
+    "created_at",
+    "batch_tiles_url",
+    "geozone_id",
+    "src_image_year",
+]
+
 # Columns read for the data-deployment listing.
 ZAE_LAYER_COLUMNS = [
     "id",
@@ -200,14 +210,6 @@ class DetectionsSchemaService:
         per-batch TileSet during deployment."""
         if not geozone_ids:
             return []
-        cols = [
-            "id",
-            "batch_name",
-            "created_at",
-            "batch_tiles_url",
-            "geozone_id",
-            "src_image_year",
-        ]
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT b.id, b.batch_name, b.created_at, b.batch_tiles_url, "
@@ -216,7 +218,23 @@ class DetectionsSchemaService:
                 "WHERE r.geozone_id = ANY(%s) ORDER BY b.created_at DESC NULLS LAST",
                 [list(geozone_ids)],
             )
-            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+            return [
+                dict(zip(DEPLOYMENT_BATCH_COLUMNS, row)) for row in cursor.fetchall()
+            ]
+
+    @staticmethod
+    def get_deployment_batch(batch_id: int) -> Optional[Dict[str, Any]]:
+        """One batch, shaped like get_batches_by_geozone, whatever the geozone of its run
+        (LEFT JOIN: none, or no run at all — then it has no src_image_year either)."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT b.id, b.batch_name, b.created_at, b.batch_tiles_url, "
+                f"r.geozone_id, r.src_image_year FROM {SCHEMA}.batch b "
+                f"LEFT JOIN {SCHEMA}.run r ON r.id = b.run_id WHERE b.id = %s",
+                [batch_id],
+            )
+            row = cursor.fetchone()
+        return dict(zip(DEPLOYMENT_BATCH_COLUMNS, row)) if row else None
 
     @staticmethod
     def get_batches(

@@ -1,5 +1,6 @@
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 
 from django.db import IntegrityError, transaction
 from django.db.models import Q
@@ -169,8 +170,6 @@ class DataDeploymentService:
         if geo_zone is None:
             raise ValueError(f"Geozone {geozone_id} not found")
 
-        department_code, geozone_code = DataDeploymentService._resolve_codes(geo_zone)
-
         batch = next(
             (
                 b
@@ -181,6 +180,28 @@ class DataDeploymentService:
         )
         if batch is None:
             raise ValueError(f"Batch {batch_id} not found for geozone {geozone_id}")
+
+        return DataDeploymentService._deploy_batch(geo_zone, batch)
+
+    @staticmethod
+    def run_batch_deployment_on_geozone(
+        geozone_uuid: UUID, batch_id: int
+    ) -> Dict[str, Any]:
+        """Same as run_batch_deployment, onto a collectivity picked by the admin instead
+        of the geozone of the batch's run: when the run has none, or to override it."""
+        geo_zone = GeoZone.objects.filter(uuid=geozone_uuid).first()
+        if geo_zone is None:
+            raise ValueError(f"Geozone {geozone_uuid} not found")
+
+        batch = DetectionsSchemaService.get_deployment_batch(batch_id)
+        if batch is None:
+            raise ValueError(f"Batch {batch_id} not found")
+
+        return DataDeploymentService._deploy_batch(geo_zone, batch)
+
+    @staticmethod
+    def _deploy_batch(geo_zone: GeoZone, batch: Dict[str, Any]) -> Dict[str, Any]:
+        department_code, geozone_code = DataDeploymentService._resolve_codes(geo_zone)
 
         try:
             with transaction.atomic():

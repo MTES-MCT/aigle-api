@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from django.core.exceptions import BadRequest
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view, permission_classes
@@ -19,6 +21,7 @@ BATCHES_URL = "data-deployment/batches/"
 ZAE_URL = "data-deployment/zae/"
 RUN_URL = "data-deployment/<int:geozone_id>/run/"
 BATCH_RUN_URL = "data-deployment/<int:geozone_id>/batch/<int:batch_id>/run/"
+BATCH_RUN_ON_GEOZONE_URL = "data-deployment/batch/<int:batch_id>/run/"
 ZAE_RUN_URL = "data-deployment/<int:geozone_id>/zae/<int:zae_id>/run/"
 
 
@@ -68,6 +71,13 @@ def _parse_int(value):
     try:
         return int(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _parse_uuid(value):
+    try:
+        return UUID(str(value))
+    except ValueError:
         return None
 
 
@@ -218,8 +228,8 @@ def endpoint(request):
 @permission_classes([SuperAdminRolePermission])
 def batches_endpoint(request):
     """Flat listing of every batch, searchable on batch name. Each row carries the
-    geozone of its run so it can be deployed straight from the list (a batch whose run
-    has no geozone has geozone_id null and isn't deployable)."""
+    geozone of its run so it can be deployed straight from the list (null when the run
+    has none, or one that doesn't exist here: the admin then picks the collectivity)."""
     limit, offset = _pagination(request)
     count, batches = DetectionsSchemaService.get_batches(
         q=request.GET.get("q") or None, limit=limit, offset=offset
@@ -236,7 +246,8 @@ def batches_endpoint(request):
         {
             **_serialize_batch(batch, deployment_by_batch[batch["id"]]),
             "uuid": str(batch["id"]),
-            "geozone_id": batch["geozone_id"],
+            # run.geozone_id is a bare id from the detections schema, it may match nothing
+            "geozone_id": batch["geozone_id"] if batch["geozone_id"] in names else None,
             "geozone_name": names.get(batch["geozone_id"]),
         }
         for batch in batches
@@ -318,6 +329,24 @@ def run_batch_endpoint(request, geozone_id, batch_id):
     try:
         result = DataDeploymentService.run_batch_deployment(
             geozone_id=geozone_id, batch_id=batch_id
+        )
+    except (ValueError, BadRequest) as error:
+        return Response({"detail": str(error)}, status=400)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([SuperAdminRolePermission])
+def run_batch_on_geozone_endpoint(request, batch_id):
+    """Deploy a single batch onto the collectivity given in the body (`geozoneUuid`)
+    instead of the geozone of its run: picked by the admin when the run has none, or to
+    override it."""
+    geozone_uuid = _parse_uuid(request.data.get("geozone_uuid"))
+    if geozone_uuid is None:
+        return Response({"detail": "A valid geozoneUuid is required"}, status=400)
+    try:
+        result = DataDeploymentService.run_batch_deployment_on_geozone(
+            geozone_uuid=geozone_uuid, batch_id=batch_id
         )
     except (ValueError, BadRequest) as error:
         return Response({"detail": str(error)}, status=400)

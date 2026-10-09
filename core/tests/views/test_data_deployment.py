@@ -35,6 +35,7 @@ BATCHES_ENDPOINT = "/api/utils/data-deployment/batches/"
 ZAE_ENDPOINT = "/api/utils/data-deployment/zae/"
 RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/run/"
 BATCH_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/batch/{batch_id}/run/"
+BATCH_RUN_ON_GEOZONE_ENDPOINT = "/api/utils/data-deployment/batch/{batch_id}/run/"
 ZAE_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/zae/{zae_id}/run/"
 RUN_COMMAND_PATH = "core.services.data_deployment.CommandAsyncService.run_command_async"
 
@@ -411,12 +412,21 @@ class DataDeploymentBatchesViewTests(BaseAPITestCase):
             self.client.get(BATCHES_ENDPOINT, {"q": "caravans"}).json()["count"], 0
         )
 
-    def test_batch_without_geozone_is_listed_but_not_deployable(self):
+    def test_batch_without_geozone_is_listed_without_one(self):
         _insert_batch(_insert_run(None), "orphan-batch")
 
         self.authenticate_user(create_super_admin())
         data = self.client.get(BATCHES_ENDPOINT).json()
         self.assertEqual(data["count"], 1)
+        self.assertIsNone(data["results"][0]["geozoneId"])
+        self.assertIsNone(data["results"][0]["geozoneName"])
+
+    def test_batch_with_unknown_geozone_is_listed_without_one(self):
+        # run.geozone_id is env-specific: a copied schema can point at no geozone here
+        _insert_batch(_insert_run(99999999), "dangling-batch")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(BATCHES_ENDPOINT).json()
         self.assertIsNone(data["results"][0]["geozoneId"])
         self.assertIsNone(data["results"][0]["geozoneName"])
 
@@ -1221,6 +1231,143 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
         self.assertIn("cannot be deployed", response.json()["detail"].lower())
         run_command.assert_not_called()
         self.assertFalse(TileSet.objects.exists())
+
+
+class DataDeploymentBatchRunOnGeozoneViewTests(BaseAPITestCase):
+    """POST data-deployment/batch/<batch_id>/run/ with `geozoneUuid` — deploy a single
+    batch onto a collectivity picked by the admin, whatever the geozone of its run."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        self.commune = create_montpellier_commune(department=self.department)
+        _provision_schema()
+
+    def _post(self, batch_id, geozone_uuid):
+        return self.client.post(
+            BATCH_RUN_ON_GEOZONE_ENDPOINT.format(batch_id=batch_id),
+            {"geozoneUuid": str(geozone_uuid)},
+            format="json",
+        )
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self._post(1, self.commune.uuid).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self._post(1, self.commune.uuid).status_code, 403)
+
+    def test_batch_without_geozone_deploys_onto_picked_geozone(self):
+        run_id = _insert_run(None, src_image_year=2023)
+        batch_id = _insert_batch(
+            run_id, "orphan", tiles_url="s3://aigle-tiles/aerial/2023_mtp"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self._post(batch_id, self.commune.uuid)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["tileSetsCreated"], ["Montpellier (34172) 2023"]
+        )
+        tile_set = TileSet.objects.get(name="Montpellier (34172) 2023")
+        self.assertEqual(
+            list(tile_set.geo_zones.values_list("id", flat=True)), [self.commune.id]
+        )
+
+        calls = [
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        ]
+        self.assertEqual(
+            calls,
+            [
+                ("create_tile", {"--geozone-uuid": str(self.commune.uuid)}),
+                (
+                    "import_detections",
+                    {
+                        "--tile-set-id": tile_set.id,
+                        "--batch-id": str(batch_id),
+                        "--activate-tile-set": True,
+                    },
+                ),
+                ("import_sitadel", {"--department-code": "34", "--persist-data": True}),
+            ],
+        )
+
+    def test_picked_geozone_overrides_the_run_geozone(self):
+        run_id = _insert_run(self.department.id, src_image_year=2024)
+        batch_id = _insert_batch(
+            run_id, "herault", tiles_url="s3://aigle-tiles/aerial/2024_herault"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid"):
+            response = self._post(batch_id, self.commune.uuid)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["tileSetsCreated"], ["Montpellier (34172) 2024"]
+        )
+        self.assertFalse(TileSet.objects.filter(name="Hérault (34) 2024").exists())
+
+    def test_invalid_geozone_uuid_returns_400(self):
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self.client.post(
+                BATCH_RUN_ON_GEOZONE_ENDPOINT.format(batch_id=1), {}, format="json"
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(self._post(1, "not-a-uuid").status_code, 400)
+        run_command.assert_not_called()
+
+    def test_nonexistent_geozone_returns_400(self):
+        batch_id = _insert_batch(
+            _insert_run(None), "orphan", tiles_url="s3://aigle-tiles/x/y"
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self._post(batch_id, "00000000-0000-0000-0000-000000000000")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.json()["detail"].lower())
+        run_command.assert_not_called()
+
+    def test_nonexistent_batch_returns_400(self):
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self._post(99999999, self.commune.uuid)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not found", response.json()["detail"].lower())
+        run_command.assert_not_called()
+
+    def test_region_is_not_deployable(self):
+        batch_id = _insert_batch(
+            _insert_run(None, src_image_year=2024),
+            "orphan",
+            tiles_url="s3://aigle-tiles/x/y",
+        )
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self._post(batch_id, self.region.uuid)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not deployable", response.json()["detail"])
+        run_command.assert_not_called()
+        self.assertFalse(TileSet.objects.exists())
+
+    def test_batch_without_run_cannot_be_deployed(self):
+        # no run: no source imagery year to date the TileSet with
+        batch_id = _insert_batch(None, "runless", tiles_url="s3://aigle-tiles/x/y")
+
+        self.authenticate_user(create_super_admin())
+        with patch(RUN_COMMAND_PATH) as run_command:
+            response = self._post(batch_id, self.commune.uuid)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("cannot be deployed", response.json()["detail"].lower())
+        run_command.assert_not_called()
 
 
 class DataDeploymentZaeRunViewTests(BaseAPITestCase):
