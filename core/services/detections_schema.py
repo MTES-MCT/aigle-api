@@ -92,6 +92,7 @@ DEPLOYMENT_BATCH_COLUMNS = [
     "batch_tiles_url",
     "geozone_id",
     "src_image_year",
+    "run_id",
 ]
 
 # Columns read for the data-deployment listing.
@@ -158,7 +159,7 @@ class DetectionsSchemaService:
         offset: int = 0,
     ) -> tuple[int, List[Dict[str, Any]]]:
         """Distinct geozones that have at least one run (one row per collectivity),
-        with the most recent run date. Optionally restricted to geozones owning a
+        with the most recent run date and the ids of their runs (newest first). Optionally restricted to geozones owning a
         batch matching the `q` (batch name) / `batch_created_at_min` filters."""
         where_sql, params = DetectionsSchemaService._run_geozones_where(
             q, batch_created_at_min
@@ -171,13 +172,15 @@ class DetectionsSchemaService:
             count = cursor.fetchone()[0]
 
             cursor.execute(
-                f"SELECT r.geozone_id, MAX(r.created_at) FROM {SCHEMA}.run r {where_sql} "
+                f"SELECT r.geozone_id, MAX(r.created_at), "
+                "ARRAY_AGG(r.id ORDER BY r.created_at DESC NULLS LAST, r.id DESC) "
+                f"FROM {SCHEMA}.run r {where_sql} "
                 "GROUP BY r.geozone_id "
                 "ORDER BY MAX(r.created_at) DESC NULLS LAST, r.geozone_id DESC "
                 "LIMIT %s OFFSET %s",
                 [*params, limit, offset],
             )
-            cols = ["geozone_id", "created_at"]
+            cols = ["geozone_id", "created_at", "run_ids"]
             rows = [dict(zip(cols, row)) for row in cursor.fetchall()]
         return count, rows
 
@@ -213,7 +216,7 @@ class DetectionsSchemaService:
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT b.id, b.batch_name, b.created_at, b.batch_tiles_url, "
-                f"r.geozone_id, r.src_image_year FROM {SCHEMA}.batch b "
+                f"r.geozone_id, r.src_image_year, b.run_id FROM {SCHEMA}.batch b "
                 f"JOIN {SCHEMA}.run r ON r.id = b.run_id "
                 "WHERE r.geozone_id = ANY(%s) ORDER BY b.created_at DESC NULLS LAST",
                 [list(geozone_ids)],
@@ -229,7 +232,7 @@ class DetectionsSchemaService:
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT b.id, b.batch_name, b.created_at, b.batch_tiles_url, "
-                f"r.geozone_id, r.src_image_year FROM {SCHEMA}.batch b "
+                f"r.geozone_id, r.src_image_year, b.run_id FROM {SCHEMA}.batch b "
                 f"LEFT JOIN {SCHEMA}.run r ON r.id = b.run_id WHERE b.id = %s",
                 [batch_id],
             )
@@ -246,14 +249,21 @@ class DetectionsSchemaService:
         where_sql, params = (
             ("WHERE b.batch_name ILIKE %s", [f"%{q}%"]) if q else ("", [])
         )
-        cols = ["id", "batch_name", "created_at", "batch_tiles_url", "geozone_id"]
+        cols = [
+            "id",
+            "batch_name",
+            "created_at",
+            "batch_tiles_url",
+            "geozone_id",
+            "run_id",
+        ]
         with connection.cursor() as cursor:
             cursor.execute(f"SELECT count(*) FROM {SCHEMA}.batch b {where_sql}", params)
             count = cursor.fetchone()[0]
 
             cursor.execute(
                 f"SELECT b.id, b.batch_name, b.created_at, b.batch_tiles_url, "
-                f"r.geozone_id FROM {SCHEMA}.batch b "
+                f"r.geozone_id, b.run_id FROM {SCHEMA}.batch b "
                 f"LEFT JOIN {SCHEMA}.run r ON r.id = b.run_id {where_sql} "
                 "ORDER BY b.created_at DESC NULLS LAST, b.id DESC LIMIT %s OFFSET %s",
                 [*params, limit, offset],

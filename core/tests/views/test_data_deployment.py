@@ -137,12 +137,12 @@ class DataDeploymentViewTests(BaseAPITestCase):
 
     def test_lists_geozone_with_batches_and_zae(self):
         run_id = _insert_run(self.department.id)
-        _insert_batch(
+        batch_id = _insert_batch(
             run_id,
             "batch-herault",
             tiles_url="s3://aigle-tiles/aerial/languedoc/2024_herault",
         )
-        _insert_zae("34", "zfee", "ZFEE Hérault")
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
         _insert_zae("30", "zi", "Other department")  # must not appear
 
         self.authenticate_user(create_super_admin())
@@ -154,8 +154,11 @@ class DataDeploymentViewTests(BaseAPITestCase):
         geozone = data["results"][0]
         self.assertEqual(geozone["uuid"], str(self.department.id))
         self.assertEqual(geozone["geozoneName"], "Hérault")
+        self.assertEqual(geozone["runIds"], [run_id])
 
         batch = geozone["batches"][0]
+        self.assertEqual(batch["id"], batch_id)
+        self.assertEqual(batch["runId"], run_id)
         self.assertEqual(batch["name"], "batch-herault")
         self.assertEqual(
             batch["tilesUrl"],
@@ -164,6 +167,7 @@ class DataDeploymentViewTests(BaseAPITestCase):
         self.assertEqual(batch["deployStatus"], "NOT_DEPLOYED")  # no detection imported
 
         self.assertEqual({z["name"] for z in geozone["zaeLayers"]}, {"ZFEE Hérault"})
+        self.assertEqual(geozone["zaeLayers"][0]["id"], zae_id)
         self.assertEqual(
             geozone["zaeLayers"][0]["typeName"], "Zones à fort enjeu environnemental"
         )
@@ -183,8 +187,10 @@ class DataDeploymentViewTests(BaseAPITestCase):
         self.assertEqual(data["count"], 1)  # one row per geozone, not per run
         geozone = data["results"][0]
         self.assertTrue(geozone["createdAt"].startswith("2024-06"))  # latest run
+        self.assertEqual(geozone["runIds"], [run_new, run_old])  # newest first
         self.assertEqual(
-            {b["name"] for b in geozone["batches"]}, {"batch-old", "batch-new"}
+            {(b["name"], b["runId"]) for b in geozone["batches"]},
+            {("batch-old", run_old), ("batch-new", run_new)},
         )
 
     def test_commune_run_resolves_zae_via_parent_department(self):
@@ -386,6 +392,7 @@ class DataDeploymentBatchesViewTests(BaseAPITestCase):
         by_name = {b["name"]: b for b in data["results"]}
         herault = by_name["batch-herault"]
         self.assertEqual(herault["uuid"], str(herault["id"]))
+        self.assertEqual(herault["runId"], run_dept)
         self.assertEqual(herault["geozoneId"], self.department.id)
         self.assertEqual(herault["geozoneName"], "Hérault")
         self.assertEqual(

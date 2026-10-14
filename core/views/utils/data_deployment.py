@@ -124,6 +124,7 @@ def _paginated(count, results):
 def _serialize_batch(batch, deploy_status):
     return {
         "id": batch["id"],
+        "run_id": batch["run_id"],
         "name": batch["batch_name"],
         "created_at": batch["created_at"],
         "tiles_url": batch_tiles_url_to_xyz(batch["batch_tiles_url"]),
@@ -210,6 +211,7 @@ def endpoint(request):
                 "uuid": str(geozone_id),
                 "geozone_name": names.get(geozone_id),
                 "created_at": geozone["created_at"],
+                "run_ids": geozone["run_ids"],
                 "batches": [
                     _serialize_batch(batch, deployment_by_batch[batch["id"]])
                     for batch in batches_by_geozone.get(geozone_id, [])
