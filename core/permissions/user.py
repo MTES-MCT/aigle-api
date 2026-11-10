@@ -1,7 +1,8 @@
 import logging
 from collections import defaultdict
 from typing import List, Optional, Tuple
-from core.constants.collectivity import COLLECTIVITY_LEVELS
+from core.constants.collectivity import COLLECTIVITY_LEVELS, COMMUNE_LOOKUP_BY_LEVEL
+from core.models.geo_commune import GeoCommune
 from core.models.geo_zone import GeoZone, GeoZoneType
 from core.models.object_type import ObjectType
 from core.models.object_type_category import ObjectTypeCategoryObjectTypeStatus
@@ -25,6 +26,18 @@ from django.core.exceptions import BadRequest
 from django.core.exceptions import PermissionDenied
 
 logger = logging.getLogger(__name__)
+
+
+def communes_reachable_from(zones: QuerySet[GeoZone]) -> QuerySet[GeoCommune]:
+    """Communes reachable from `zones` through the collectivity FKs: the communes
+    themselves, and those of the EPCIs, departments and regions among them.
+
+    Fails closed: with no zone every subquery is empty, so no commune matches."""
+    q = Q()
+    for level, lookup in COMMUNE_LOOKUP_BY_LEVEL.items():
+        q |= Q(**{f"{lookup}__in": zones.filter(geo_zone_type=level).values("id")})
+
+    return GeoCommune.objects.filter(q)
 
 
 class UserPermission(
@@ -82,13 +95,17 @@ class UserPermission(
 
         geo_zones_accessibles_qs = GeoZone.objects
 
-        # TODO: rework this to make user user has access to uuids
         if has_requested_uuids:
-            geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
+            requested_zones = geo_zones_accessibles_qs.filter(
                 uuid__in=[
                     uuid for uuids in requested_uuids.values() for uuid in (uuids or [])
                 ]
             )
+
+            if not self.is_unrestricted():
+                return self._clip_to_territory(requested_zones)
+
+            geo_zones_accessibles_qs = requested_zones
         elif self.scoped_user_group:
             geo_zones_accessibles_qs = geo_zones_accessibles_qs.filter(
                 user_groups=self.scoped_user_group
@@ -114,6 +131,67 @@ class UserPermission(
 
         if not self.is_unrestricted() and collectivity_filter.is_empty():
             raise BadRequest("User do not have access to any collectivity")
+
+        return collectivity_filter
+
+    def _clip_to_territory(
+        self, requested_zones: QuerySet[GeoZone]
+    ) -> CollectivityRepoFilter:
+        """The requested collectivities, cut down to the caller's territory.
+
+        A zone wholly inside the territory is kept at its own level (same SQL as
+        before); a zone straddling it is replaced by its communes inside. Without this,
+        any commune, department or region uuid could be passed to read data outside
+        the user's zones: the tile-set filter is no territorial bound.
+        """
+        accessible_commune_ids = set(
+            communes_reachable_from(self.accessible_geo_zones()).values_list(
+                "id", flat=True
+            )
+        )
+        requested = list(requested_zones.values_list("id", "geo_zone_type"))
+
+        ids_by_level = defaultdict(set)
+        clipped_commune_ids = set()
+
+        for level in COLLECTIVITY_LEVELS:
+            zone_ids = [
+                zone_id for zone_id, zone_type in requested if zone_type == level
+            ]
+            if not zone_ids:
+                continue
+
+            if level == GeoZoneType.COMMUNE:
+                ids_by_level[level].update(
+                    zone_id for zone_id in zone_ids if zone_id in accessible_commune_ids
+                )
+                continue
+
+            lookup = COMMUNE_LOOKUP_BY_LEVEL[level]
+            communes_by_zone = defaultdict(set)
+            for commune_id, zone_id in GeoCommune.objects.filter(
+                **{f"{lookup}__in": zone_ids}
+            ).values_list("id", lookup):
+                communes_by_zone[zone_id].add(commune_id)
+
+            for zone_id in zone_ids:
+                communes = communes_by_zone[zone_id]
+                if communes and communes <= accessible_commune_ids:
+                    ids_by_level[level].add(zone_id)
+                else:
+                    clipped_commune_ids |= communes & accessible_commune_ids
+
+        ids_by_level[GeoZoneType.COMMUNE] |= clipped_commune_ids
+
+        collectivity_filter = CollectivityRepoFilter(
+            **{
+                f"{level.lower()}_ids": sorted(ids_by_level[level]) or None
+                for level in COLLECTIVITY_LEVELS
+            }
+        )
+
+        if collectivity_filter.is_empty():
+            raise PermissionDenied("Vous n'avez pas accès aux collectivités demandées")
 
         return collectivity_filter
 

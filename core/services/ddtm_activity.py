@@ -35,6 +35,7 @@ from django.db.models import Count, F, Min
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 
+from core.constants.control_plan import CONTROL_PLAN_HISTORY_CHANGE_REASON
 from core.constants.statistics import (
     DDTM_ACTIVITY_MONTHS_PER_PERIOD,
     DDTM_ACTIVITY_PERIOD_COUNT,
@@ -67,7 +68,8 @@ _HISTORY_TABLE = DetectionData.history.model._meta.db_table
 # outside the window still counts as the "before" value). We cannot rely on
 # changed_fields: bulk writes (multi-edit, prior letter) skip the
 # pre_create_historical_record signal and leave it NULL. No-op saves and creations
-# ('+' rows have no predecessor) are excluded.
+# ('+' rows have no predecessor) are excluded, and so are the rows a control plan
+# switches in bulk (filtered last: they must still be the "before" of the next row).
 _CONTROL_STATUS_TRANSITIONS_SQL = f"""
     WITH relevant_ids AS (
         SELECT DISTINCT id
@@ -79,6 +81,7 @@ _CONTROL_STATUS_TRANSITIONS_SQL = f"""
                h.history_user_id,
                h.history_date,
                h.detection_control_status,
+               h.history_change_reason,
                LAG(h.detection_control_status) OVER (
                    PARTITION BY h.id
                    ORDER BY h.history_date, h.history_id
@@ -92,6 +95,7 @@ _CONTROL_STATUS_TRANSITIONS_SQL = f"""
       AND history_user_id = ANY(%(user_ids)s)
       AND previous_control_status IS NOT NULL
       AND previous_control_status <> detection_control_status
+      AND history_change_reason IS DISTINCT FROM %(control_plan_reason)s
 """
 
 
@@ -925,7 +929,11 @@ class DdtmActivityService:
         with connection.cursor() as cursor:
             cursor.execute(
                 _CONTROL_STATUS_TRANSITIONS_SQL,
-                {"since": since, "user_ids": list(user_ids)},
+                {
+                    "since": since,
+                    "user_ids": list(user_ids),
+                    "control_plan_reason": CONTROL_PLAN_HISTORY_CHANGE_REASON,
+                },
             )
             return cursor.fetchall()
 

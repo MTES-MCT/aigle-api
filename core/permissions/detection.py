@@ -4,7 +4,6 @@ from django.core.exceptions import PermissionDenied
 from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.db.models.lookups import IsNull
 
-from core.constants.collectivity import COMMUNE_LOOKUP_BY_LEVEL
 from core.constants.detection import DETECTION_EDIT_PERMISSION_DENIED_MESSAGE
 from core.models.detection import Detection
 from core.models.detection_object import DetectionObject
@@ -13,7 +12,7 @@ from core.models.geo_zone import GeoZone
 from core.models.user import User
 from core.models.user_group import UserGroup, UserGroupRight
 from core.permissions.base import BasePermission
-from core.permissions.user import UserPermission
+from core.permissions.user import UserPermission, communes_reachable_from
 
 
 class DetectionPermission(
@@ -47,17 +46,7 @@ class DetectionPermission(
     def _communes_from(zones: QuerySet) -> QuerySet[GeoCommune]:
         """Communes reachable from `zones` — the same clauses as
         DetectionRepository._filter_collectivities, anchored on GeoCommune."""
-        # Fail closed: with no zone every subquery is empty, so no commune matches —
-        # never all of them.
-        q = Q()
-        for level, lookup in COMMUNE_LOOKUP_BY_LEVEL.items():
-            q |= Q(
-                **{
-                    f"{lookup}__in": zones.filter(geo_zone_type=level).values("id"),
-                }
-            )
-
-        return GeoCommune.objects.filter(q)
+        return communes_reachable_from(zones)
 
     def _writable_communes(self) -> QuerySet[GeoCommune]:
         """Communes reachable from the zones the user holds WRITE on."""
@@ -111,6 +100,25 @@ class DetectionPermission(
             Q(**{f"{prefix}commune__isnull": True}) & legacy
         )
 
+    def writable_detections(
+        self, detections: QuerySet[Detection]
+    ) -> QuerySet[Detection]:
+        """The detections among `detections` the user may edit."""
+        if self.user_permission.is_unrestricted():
+            return detections
+
+        # Legacy rows whose commune was never resolved fall back to containment of
+        # their OWN geometry: a single zone must contain it, so this is only ever
+        # applied per row — never to a geometry merging several detections.
+        legacy_q = Q(detection_object__commune__isnull=True) & Exists(
+            self.user_permission.accessible_geo_zones(UserGroupRight.WRITE).filter(
+                geometry__contains=OuterRef("geometry")
+            )
+        )
+        return detections.filter(
+            Q(detection_object__commune__in=self._writable_communes()) | legacy_q
+        )
+
     def validate_detections_edit_permission(self, detections: List[Detection]) -> None:
         """All or nothing: every detection of the selection must pass."""
         if self.user_permission.is_unrestricted():
@@ -118,22 +126,11 @@ class DetectionPermission(
 
         detection_ids = {detection.id for detection in detections}
         if detection_ids:
-            # Legacy rows whose commune was never resolved fall back to containment of
-            # their OWN geometry: a single zone must contain it, so this is only ever
-            # applied per row — never to a geometry merging several detections.
-            legacy_q = Q(detection_object__commune__isnull=True) & Exists(
-                self.user_permission.accessible_geo_zones(UserGroupRight.WRITE).filter(
-                    geometry__contains=OuterRef("geometry")
-                )
-            )
             # Ids, not counts: a join can duplicate rows and inflate a count into a pass.
             writable_ids = set(
-                Detection.objects.filter(id__in=detection_ids)
-                .filter(
-                    Q(detection_object__commune__in=self._writable_communes())
-                    | legacy_q
-                )
-                .values_list("id", flat=True)
+                self.writable_detections(
+                    Detection.objects.filter(id__in=detection_ids)
+                ).values_list("id", flat=True)
             )
             if not (detection_ids - writable_ids):
                 return

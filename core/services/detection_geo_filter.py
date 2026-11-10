@@ -11,6 +11,10 @@ from core.repository.detection import (
     RepoFilterCustomZone,
     RepoFilterInterfaceDrawn,
 )
+from core.services.control_plan_filter import (
+    control_plan_q,
+    is_control_plan_filter_requested,
+)
 from core.utils.string import to_array
 
 
@@ -22,7 +26,25 @@ class DetectionGeoFilterService:
     def apply_filters(self, queryset: QuerySet, filter_params: dict) -> QuerySet:
         queryset = self._filter_by_object_types(queryset, filter_params)
         queryset = self._apply_geographic_filtering(queryset, filter_params)
+        queryset = self._apply_control_plan_filtering(queryset, filter_params)
         return self._apply_custom_zone_filtering(queryset, filter_params)
+
+    def _apply_control_plan_filtering(
+        self, queryset: QuerySet, filter_params: dict
+    ) -> QuerySet:
+        if not is_control_plan_filter_requested(filter_params):
+            return queryset
+
+        control_plan_filter = control_plan_q(
+            user=self.user,
+            scoped_user_group=self.scoped_user_group,
+            detection_object_prefix="detection_object__",
+            detection_prefix="",
+        )
+        if control_plan_filter is None:
+            return queryset
+
+        return queryset.filter(control_plan_filter)
 
     def _filter_by_object_types(
         self, queryset: QuerySet, filter_params: dict

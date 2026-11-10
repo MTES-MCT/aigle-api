@@ -181,3 +181,20 @@ class SupervisingGroupPermission(BasePermission):
                 user_group__geo_zones__geo_zone_type=GeoZoneType.EPCI
             ).exists()
         )
+
+
+class ControlPlanFeaturePermission(BasePermission):
+    """The control plan screens: internal users (is_staff), or members of a group
+    carrying the PLAN_DE_CONTROLE flag. Which groups, and the write right on each, are
+    checked by core.permissions.control_plan."""
+
+    message = "Le plan de contrôle n'est pas ouvert à vos groupes"
+
+    def has_permission(self, request, view):
+        from core.permissions.control_plan import ControlPlanPermission
+
+        user = request.user
+        if not user or user.is_anonymous or user.user_role == UserRole.DEACTIVATED:
+            return False
+
+        return ControlPlanPermission.from_request(request).has_access()

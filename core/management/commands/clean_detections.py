@@ -59,7 +59,8 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             )
             deleted_data = cursor.rowcount
 
-            # Both M2M junctions FK detection_object, so clear them before the objects.
+            # The M2M junctions and the control plan objects FK detection_object, so
+            # clear them before the objects.
             cursor.execute(
                 f"DELETE FROM core_detectionobject_geo_custom_zones "
                 f"WHERE detectionobject_id IN ({ORPHAN_DETECTION_OBJECTS})"
@@ -67,6 +68,10 @@ class Command(CommandRunTrackerMixin, BaseCommand):
             cursor.execute(
                 f"DELETE FROM core_detectionobject_geo_sub_custom_zones "
                 f"WHERE detectionobject_id IN ({ORPHAN_DETECTION_OBJECTS})"
+            )
+            cursor.execute(
+                f"DELETE FROM core_controlplanparcelobject "
+                f"WHERE detection_object_id IN ({ORPHAN_DETECTION_OBJECTS})"
             )
             cursor.execute(
                 f"DELETE FROM core_detectionobject WHERE id IN ({ORPHAN_DETECTION_OBJECTS})"

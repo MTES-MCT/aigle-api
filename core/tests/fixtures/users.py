@@ -4,8 +4,8 @@ from core.models import User, UserRole, UserGroup, UserUserGroup
 from core.models.user_group import UserGroupRight
 from rest_framework_api_key.models import APIKey
 
-# No feature flag exists for now: tests write this one straight to the database (the API
-# would refuse it) to exercise the flag plumbing.
+# Not a real feature flag: tests write it straight to the database (the API would refuse
+# it) to exercise the flag plumbing whatever flags exist.
 TEST_FEATURE_FLAG = "TEST_FLAG"
 
 

@@ -24,6 +24,13 @@ from .webinar import Webinar
 
 from .parcel import Parcel
 
+from .control_plan import (
+    ControlPlan,
+    ControlPlanParcel,
+    ControlPlanParcelObject,
+    ControlPlanWave,
+)
+
 from .analytic_log import AnalyticLog
 
 from .command_run import CommandRun

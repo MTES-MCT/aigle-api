@@ -66,6 +66,7 @@ class DetectionGeoFilter(FilterSet):
         choices=[(choice.value, choice.name) for choice in RepoFilterInterfaceDrawn],
         method="pass_",
     )
+    controlPlan = ChoiceFilter(choices=BOOLEAN_CHOICES, method="pass_")
 
     def pass_(self, queryset, name, value):  # noqa: ARG002
         return queryset

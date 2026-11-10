@@ -38,6 +38,10 @@ from core.repository.detection import (
     RepoFilterInterfaceDrawn,
 )
 from core.repository.tile_set import DEFAULT_VALUES
+from core.services.control_plan_filter import (
+    control_plan_q,
+    is_control_plan_filter_requested,
+)
 from core.serializers.detection import (
     DetectionListItemSerializer,
 )
@@ -187,6 +191,7 @@ class DetectionListFilter(FilterSet):
             "departmentsUuids",
             "regionsUuids",
             "parcelsUuids",
+            "controlPlan",
         ]
 
     objectTypesUuids = UuidInFilter(method="pass_")
@@ -210,6 +215,7 @@ class DetectionListFilter(FilterSet):
     regionsUuids = UuidInFilter(method="pass_")
 
     parcelsUuids = UuidInFilter(method="pass_")
+    controlPlan = ChoiceFilter(choices=BOOLEAN_CHOICES, method="pass_")
 
     ordering = OrderingFilter(
         fields=["score", "id", "parcel", "detectionControlStatus"],
@@ -303,6 +309,17 @@ class DetectionListFilter(FilterSet):
             filter_collectivities=collectivity_filter,
         )
         queryset = queryset.filter(detection_tilesets_filter)
+
+        if is_control_plan_filter_requested(self.data):
+            control_plan_filter = control_plan_q(
+                user=self.request.user,
+                scoped_user_group=user_permission.scoped_user_group,
+                detection_object_prefix="detection_object__",
+                detection_prefix="",
+            )
+            if control_plan_filter is not None:
+                queryset = queryset.filter(control_plan_filter)
+
         queryset = queryset.defer(
             "geometry",
             "tile__geometry",

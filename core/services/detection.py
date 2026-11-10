@@ -77,7 +77,7 @@ class DetectionService:
                 ]
             )
             .select_related("detection_data")
-            .order_by("-tile_set__date")
+            .order_by("-tile_set__date", "-id")
             .first()
         )
 

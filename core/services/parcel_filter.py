@@ -10,6 +10,10 @@ from core.permissions.tile_set import TileSetPermission
 from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.detection import RepoFilterCustomZone, RepoFilterInterfaceDrawn
 from core.repository.parcel import DetectionFilter, ParcelRepository
+from core.services.control_plan_filter import (
+    control_plan_q,
+    is_control_plan_filter_requested,
+)
 from core.utils.string import to_array, to_bool, to_enum_array
 
 
@@ -74,9 +78,30 @@ class ParcelFilterService:
 
         return self._apply_ordering(queryset, filter_params.get("ordering"))
 
+    def _with_control_plan_filter(self, filter_params: dict, additional_filter):
+        if not is_control_plan_filter_requested(filter_params):
+            return additional_filter
+
+        # Parcel-side lookups: additional_filter strips `detection_objects__` for the
+        # detection-object prefetch, so every lookup must start with it.
+        control_plan_filter = control_plan_q(
+            user=self.user,
+            scoped_user_group=self.scoped_user_group,
+            detection_object_prefix="detection_objects__",
+            detection_prefix="detection_objects__detections__",
+        )
+        if control_plan_filter is None:
+            return additional_filter
+        if additional_filter is None:
+            return control_plan_filter
+        return additional_filter & control_plan_filter
+
     def _build_detection_filter(
         self, filter_params: dict, additional_filter
     ) -> DetectionFilter:
+        additional_filter = self._with_control_plan_filter(
+            filter_params, additional_filter
+        )
         return DetectionFilter(
             filter_score=NumberRepoFilter(
                 lookup=RepoFilterLookup.GTE,

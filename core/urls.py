@@ -30,6 +30,11 @@ from core.views.statistics.deployed_data import (
     StatisticsDeployedDataView,
 )
 from core.views.tile_set import TileSetViewSet
+from core.views.control_plan import (
+    ControlPlanParcelViewSet,
+    ControlPlanViewSet,
+    ControlPlanWaveViewSet,
+)
 from core.views.user import UserViewSet
 from core.views.user_action_log import UserActionLogViewSet
 from core.views.webinar import WebinarViewSet
@@ -79,6 +84,13 @@ router.register(
     "user-action-log", UserActionLogViewSet, basename="UserActionLogViewSet"
 )
 router.register("help-center/webinar", WebinarViewSet, basename="WebinarViewSet")
+router.register("control-plan", ControlPlanViewSet, basename="ControlPlanViewSet")
+router.register(
+    "control-plan-wave", ControlPlanWaveViewSet, basename="ControlPlanWaveViewSet"
+)
+router.register(
+    "control-plan-parcel", ControlPlanParcelViewSet, basename="ControlPlanParcelViewSet"
+)
 
 urlpatterns = router.urls
 

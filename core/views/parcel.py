@@ -52,6 +52,7 @@ class ParcelFilter(FilterSet):
     prescripted = ChoiceFilter(choices=BOOLEAN_CHOICES, method="pass_")
     interfaceDrawn = ChoiceFilter(choices=INTERFACE_DRAWN_CHOICES, method="pass_")
     customZonesUuids = UuidInFilter(method="pass_")
+    controlPlan = ChoiceFilter(choices=BOOLEAN_CHOICES, method="pass_")
 
     communesUuids = UuidInFilter(method="pass_")
     epcisUuids = UuidInFilter(method="pass_")
