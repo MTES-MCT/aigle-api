@@ -32,6 +32,7 @@ from core.views.statistics.deployed_data import (
 from core.views.tile_set import TileSetViewSet
 from core.views.user import UserViewSet
 from core.views.user_action_log import UserActionLogViewSet
+from core.views.webinar import WebinarViewSet
 from rest_framework.routers import DefaultRouter
 from core.views.utils import urls as utils_urls
 from django.urls import path
@@ -77,6 +78,7 @@ router.register("run-command", CommandAsyncViewSet, basename="CommandAsyncViewSe
 router.register(
     "user-action-log", UserActionLogViewSet, basename="UserActionLogViewSet"
 )
+router.register("help-center/webinar", WebinarViewSet, basename="WebinarViewSet")
 
 urlpatterns = router.urls
 
