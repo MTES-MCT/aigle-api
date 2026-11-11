@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from django.contrib.gis.geos import GeometryCollection
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.db.models import Count, F, Max, QuerySet
+from django.db.models import Count, F, Max, Q, QuerySet
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
@@ -237,7 +237,12 @@ def resolve_criteria(
         exclude_authorized_parcels=criteria["exclude_authorized_parcels"],
         exclude_official_report_parcels=criteria["exclude_official_report_parcels"],
         min_objects_count=criteria["min_objects_count"],
-        ranking_criteria=list(criteria["ranking_criteria"]),
+        # a wave stored before a criterion was dropped may still name it
+        ranking_criteria=[
+            criterion
+            for criterion in criteria["ranking_criteria"]
+            if criterion in ControlPlanRankingCriterion.values
+        ],
     )
 
 
@@ -270,10 +275,6 @@ class _ParcelCandidate:
             for obj in self.objects.values()
             if obj.validation_status == DetectionValidationStatus.DETECTED_NOT_VERIFIED
         )
-
-    @property
-    def zone_priority(self) -> Optional[int]:
-        return min(self.zone_groups) if self.zone_groups else None
 
 
 def _collect_candidates(
@@ -428,17 +429,11 @@ def _rank(
     criteria: EligibilityCriteria,
 ) -> List[_ParcelCandidate]:
     """Lexicographic: the first criterion decides, the next ones break its ties."""
-    outside_selected_zones = len(criteria.zone_groups)
 
     def key(candidate: _ParcelCandidate):
         values = []
         for criterion in criteria.ranking_criteria:
-            if criterion == ControlPlanRankingCriterion.ZONE_PRIORITY:
-                zone_priority = candidate.zone_priority
-                values.append(
-                    outside_selected_zones if zone_priority is None else zone_priority
-                )
-            elif criterion == ControlPlanRankingCriterion.OBJECTS_COUNT:
+            if criterion == ControlPlanRankingCriterion.OBJECTS_COUNT:
                 values.append(-len(candidate.objects))
             elif criterion == ControlPlanRankingCriterion.NEW_OBJECTS_COUNT:
                 values.append(-candidate.new_objects_count)
@@ -528,12 +523,34 @@ def _apply_candidate(
     row.objects_count = len(candidate.objects)
     row.new_objects_count = candidate.new_objects_count
     row.unverified_objects_count = candidate.unverified_objects_count
-    row.zone_priority = candidate.zone_priority
     row.summary = _summary(candidate, object_types, zone_group_names)
 
 
 # Every write locks in the same order, plan then wave then rows, so two of them never
 # deadlock: one plan lock serializes all the writes of a plan.
+
+
+def _split_proposals(
+    wave: ControlPlanWave, queryset: Optional[QuerySet] = None
+) -> Tuple[QuerySet, QuerySet]:
+    """The proposed parcels of a draft and its waiting list: the first ones of the ranking,
+    as many as asked, plus those an agent pulled from the waiting list on top of them."""
+    proposals = (ControlPlanParcel.objects if queryset is None else queryset).filter(
+        wave=wave, control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED
+    )
+    ranks = list(
+        proposals.filter(added_by_agent=False)
+        .order_by("rank")
+        .values_list("rank", flat=True)[wave.parcels_count - 1 : wave.parcels_count]
+    )
+    if not ranks:
+        # fewer proposals than asked: all are proposed, none waits
+        return proposals, proposals.none()
+
+    return (
+        proposals.filter(Q(added_by_agent=True) | Q(rank__lte=ranks[0])),
+        proposals.filter(added_by_agent=False, rank__gt=ranks[0]),
+    )
 
 
 def _lock_active_plan(control_plan_id: int) -> ControlPlan:
@@ -650,10 +667,16 @@ class ControlPlanWaveService:
         )
 
         with _proposal_statement_timeout():
-            ControlPlanParcel.objects.filter(
+            proposals = ControlPlanParcel.objects.filter(
                 wave=wave,
                 control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED,
-            ).delete()
+            )
+            added_parcel_ids = set(
+                proposals.filter(added_by_agent=True).values_list(
+                    "parcel_id", flat=True
+                )
+            )
+            proposals.delete()
 
             excluded_rows = list(
                 ControlPlanParcel.objects.filter(
@@ -681,6 +704,18 @@ class ControlPlanWaveService:
                     + max(wave.parcels_count, MIN_WAITING_LIST_SIZE)
                 ]
             }
+            # the parcels an agent added stay added while eligible, unless the ranking
+            # now proposes them anyway
+            ranked_in_ids = {
+                candidate.parcel_id for candidate in proposable[: wave.parcels_count]
+            }
+            still_added_ids = {
+                candidate.parcel_id
+                for candidate in proposable
+                if candidate.parcel_id in added_parcel_ids
+                and candidate.parcel_id not in ranked_in_ids
+            }
+            stored_ids |= still_added_ids
 
             object_types = _object_types_of(
                 candidate
@@ -708,6 +743,7 @@ class ControlPlanWaveService:
                         num_parcel=info.num_parcel,
                         commune_id=info.commune_id,
                         control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED,
+                        added_by_agent=candidate.parcel_id in still_added_ids,
                     )
                     rows.append(row)
                 else:
@@ -729,7 +765,6 @@ class ControlPlanWaveService:
                     "objects_count",
                     "new_objects_count",
                     "unverified_objects_count",
-                    "zone_priority",
                     "summary",
                 ],
                 batch_size=500,
@@ -789,20 +824,19 @@ class ControlPlanWaveService:
                 ).values_list("objects_count", "unverified_objects_count")
             )
             waiting_count = 0
+            added_count = 0
         else:
-            proposals = ControlPlanParcel.objects.filter(
-                wave=wave, control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED
-            )
+            proposed, waiting = _split_proposals(wave)
             rows = list(
-                proposals.order_by("rank").values_list(
-                    "objects_count", "unverified_objects_count"
-                )[: wave.parcels_count]
+                proposed.values_list("objects_count", "unverified_objects_count")
             )
-            waiting_count = proposals.count() - len(rows)
+            waiting_count = waiting.count()
+            added_count = proposed.filter(added_by_agent=True).count()
 
         return {
             "proposed_count": len(rows),
             "waiting_count": waiting_count,
+            "added_count": added_count,
             "excluded_count": excluded_count,
             "objects_count": sum(objects for objects, _ in rows),
             "unverified_objects_count": sum(unverified for _, unverified in rows),
@@ -821,13 +855,9 @@ class ControlPlanWaveService:
             control_plan = wave.control_plan
             user_group = control_plan.user_group
 
+            proposed, _ = _split_proposals(wave)
             selected = list(
-                ControlPlanParcel.objects.filter(
-                    wave=wave,
-                    control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED,
-                )
-                .annotate(commune_name=F("commune__name"))
-                .order_by("rank")[: wave.parcels_count]
+                proposed.annotate(commune_name=F("commune__name")).order_by("rank")
             )
             criteria = resolve_criteria(
                 wave.criteria, user, request_scoped_user_group, user_group
@@ -936,7 +966,6 @@ class ControlPlanWaveService:
                     "objects_count",
                     "new_objects_count",
                     "unverified_objects_count",
-                    "zone_priority",
                     "summary",
                     "updated_at",
                 ],
@@ -972,18 +1001,6 @@ class ControlPlanWaveService:
 
 class ControlPlanParcelService:
     @staticmethod
-    def _proposal_threshold(wave: ControlPlanWave) -> Optional[int]:
-        """Rank of the last proposed parcel: the ones after it wait."""
-        ranks = list(
-            ControlPlanParcel.objects.filter(
-                wave=wave, control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED
-            )
-            .order_by("rank")
-            .values_list("rank", flat=True)[wave.parcels_count - 1 : wave.parcels_count]
-        )
-        return ranks[0] if ranks else None
-
-    @staticmethod
     def list_section(
         control_plan: ControlPlan,
         section: str,
@@ -1005,20 +1022,10 @@ class ControlPlanParcelService:
             if draft is None:
                 return queryset.none()
 
-            queryset = queryset.filter(
-                wave=draft, control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED
+            proposed, waiting = _split_proposals(draft, queryset)
+            return (
+                proposed if section == ControlPlanParcelSection.PROPOSED else waiting
             ).order_by("rank")
-            threshold = ControlPlanParcelService._proposal_threshold(draft)
-            if threshold is None:
-                # fewer proposals than asked: all are proposed, none waits
-                return (
-                    queryset
-                    if section == ControlPlanParcelSection.PROPOSED
-                    else queryset.none()
-                )
-            if section == ControlPlanParcelSection.PROPOSED:
-                return queryset.filter(rank__lte=threshold)
-            return queryset.filter(rank__gt=threshold)
 
         if section == ControlPlanParcelSection.PLANNED:
             queryset = queryset.filter(
@@ -1068,9 +1075,57 @@ class ControlPlanParcelService:
                 raise Conflict("Seule une parcelle proposée peut être écartée")
 
             plan_parcel.control_plan_parcel_status = ControlPlanParcelStatus.EXCLUDED
+            # restored, it goes back to its rank
+            plan_parcel.added_by_agent = False
             plan_parcel.status_changed_by = user
             plan_parcel.status_changed_at = timezone.now()
             plan_parcel.save()
+
+        return plan_parcel
+
+    @staticmethod
+    def _lock_proposal_row(plan_parcel: ControlPlanParcel, message: str):
+        if plan_parcel.wave_id is None:
+            raise Conflict(message)
+        wave = _lock_draft_wave(plan_parcel.wave_id)
+        return wave, ControlPlanParcel.objects.select_for_update().get(
+            pk=plan_parcel.pk
+        )
+
+    @staticmethod
+    def include(plan_parcel: ControlPlanParcel) -> ControlPlanParcel:
+        """Pulls a parcel of the waiting list into the proposal, on top of the count asked."""
+        message = "Seule une parcelle de la liste d'attente peut être ajoutée au plan"
+        with transaction.atomic():
+            wave, plan_parcel = ControlPlanParcelService._lock_proposal_row(
+                plan_parcel, message
+            )
+            _, waiting = _split_proposals(wave)
+            if not waiting.filter(pk=plan_parcel.pk).exists():
+                raise Conflict(message)
+
+            plan_parcel.added_by_agent = True
+            plan_parcel.save(update_fields=["added_by_agent", "updated_at"])
+
+        return plan_parcel
+
+    @staticmethod
+    def put_back(plan_parcel: ControlPlanParcel) -> ControlPlanParcel:
+        """Undoes `include`: the parcel goes back to its rank."""
+        message = "Seule une parcelle ajoutée au plan peut être remise en attente"
+        with transaction.atomic():
+            _, plan_parcel = ControlPlanParcelService._lock_proposal_row(
+                plan_parcel, message
+            )
+            if (
+                plan_parcel.control_plan_parcel_status
+                != ControlPlanParcelStatus.PROPOSED
+                or not plan_parcel.added_by_agent
+            ):
+                raise Conflict(message)
+
+            plan_parcel.added_by_agent = False
+            plan_parcel.save(update_fields=["added_by_agent", "updated_at"])
 
         return plan_parcel
 
@@ -1220,7 +1275,8 @@ class ControlPlanParcelService:
 
     @staticmethod
     def preview(plan_parcel: ControlPlanParcel, user: User) -> dict:
-        """The parcel and its objects on the imagery, as the group sees them."""
+        """The parcel and its objects on the imagery, as the group sees them: each year
+        shows the objects as detected on it, not today's outlines."""
         from core.permissions.tile_set import TileSetPermission
         from core.serializers.tile_set import TileSetMinimalSerializer
 
@@ -1242,18 +1298,49 @@ class ControlPlanParcelService:
         if parcel_geometry is None:
             return empty
 
-        detections = list(
-            visible_current_detections(user, user_group)
+        current = [
+            detection
+            for detection in visible_current_detections(user, user_group)
             .filter(detection_object__parcel_id=plan_parcel.parcel_id)
             .select_related("detection_object__object_type", "detection_data")
             .order_by("id")
-        )
-        geometries = [parcel_geometry] + [
-            detection.geometry for detection in detections
+            if detection.detection_data is not None
         ]
         tile_set_previews = TileSetPermission(
             user=user, scoped_user_group=user_group
         ).get_previews(filter_tile_set_intersects_geometry=parcel_geometry)
+
+        shown_tile_set_ids = [
+            preview["tile_set"].id
+            for preview in tile_set_previews
+            if preview["preview"]
+        ]
+        detections_by_tile_set = defaultdict(list)
+        for detection in (
+            Detection.objects.filter(
+                detection_object_id__in=[
+                    detection.detection_object_id for detection in current
+                ],
+                tile_set_id__in=shown_tile_set_ids,
+            )
+            .select_related("detection_object__object_type")
+            .order_by("id")
+        ):
+            detections_by_tile_set[detection.tile_set_id].append(detection)
+
+        geometries = [parcel_geometry] + [
+            detection.geometry
+            for detections in detections_by_tile_set.values()
+            for detection in detections
+        ]
+
+        def serialize_object(detection: Detection) -> dict:
+            return {
+                "uuid": str(detection.detection_object.uuid),
+                "object_type_name": detection.detection_object.object_type.name,
+                "object_type_color": detection.detection_object.object_type.color,
+                "geometry": json.loads(detection.geometry.geojson),
+            }
 
         return {
             "parcel_geometry": json.loads(parcel_geometry.geojson),
@@ -1262,20 +1349,20 @@ class ControlPlanParcelService:
             ),
             "detection_objects": [
                 {
-                    "uuid": str(detection.detection_object.uuid),
-                    "object_type_name": detection.detection_object.object_type.name,
-                    "object_type_color": detection.detection_object.object_type.color,
-                    "geometry": json.loads(detection.geometry.geojson),
+                    **serialize_object(detection),
                     "detection_control_status": detection.detection_data.detection_control_status,
                     "detection_validation_status": detection.detection_data.detection_validation_status,
                 }
-                for detection in detections
-                if detection.detection_data is not None
+                for detection in current
             ],
             "tile_set_previews": [
                 {
                     "tile_set": TileSetMinimalSerializer(preview["tile_set"]).data,
                     "preview": preview["preview"],
+                    "detection_objects": [
+                        serialize_object(detection)
+                        for detection in detections_by_tile_set[preview["tile_set"].id]
+                    ],
                 }
                 for preview in tile_set_previews
             ],
@@ -1511,7 +1598,19 @@ class ControlPlanService:
                 zone_groups.values(), key=lambda zone_group: zone_group["name"].lower()
             ),
             "default_perimeter": ControlPlanService.default_perimeter(user_group),
+            "single_commune": ControlPlanService.single_commune(user_group),
         }
+
+    @staticmethod
+    def single_commune(user_group: UserGroup) -> Optional[dict]:
+        """The only commune of a group's territory: its plan has no perimeter to choose."""
+        communes = list(
+            territory_communes(user_group).values_list("uuid", "name", "iso_code")[:2]
+        )
+        if len(communes) != 1:
+            return None
+        uuid, name, code = communes[0]
+        return {"uuid": uuid, "name": name, "code": code}
 
     @staticmethod
     def default_perimeter(user_group: UserGroup) -> dict:

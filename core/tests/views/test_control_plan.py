@@ -1,11 +1,13 @@
 from datetime import date, timedelta
 from unittest import mock
 
+from django.contrib.gis.geos import Point
 from django.core.management import call_command
 from django.db import OperationalError, connection
 from django.utils import timezone
 
 from core.constants.control_plan import CONTROL_PLAN_HISTORY_CHANGE_REASON
+from core.constants.geo import SRID
 from core.models.control_plan import (
     ControlPlan,
     ControlPlanParcel,
@@ -531,18 +533,36 @@ class ControlPlanRankingTests(ControlPlanTestCase):
     def _order(self, rows):
         return [row["idParcellaire"] for row in rows]
 
-    def test_zone_priority_first(self):
-        rows = self._ranked()
+    def test_the_zones_filter_but_never_rank(self):
+        rows = self._ranked(
+            customZoneGroups=[[str(self.zone_b.uuid)], [str(self.zone_a.uuid)]]
+        )
 
         self.assertEqual(
             self._order(rows),
             [
-                self.parcel_a.id_parcellaire,
                 self.parcel_c.id_parcellaire,
                 self.parcel_b.id_parcellaire,
+                self.parcel_a.id_parcellaire,
             ],
         )
         self.assertEqual([row["rank"] for row in rows], [1, 2, 3])
+
+    def test_the_dropped_zone_priority_is_refused_but_ignored_once_stored(self):
+        plan = self.create_plan()
+        response = self.create_wave(
+            plan["uuid"], rankingCriteria=["ZONE_PRIORITY", "OBJECTS_COUNT"]
+        )
+        self.assertEqual(response.status_code, 400)
+
+        response = self.create_wave(plan["uuid"])
+        self.assertEqual(response.status_code, 201, response.content)
+        wave = ControlPlanWave.objects.get(uuid=response.json()["uuid"])
+        wave.criteria["ranking_criteria"] = ["ZONE_PRIORITY", "OBJECTS_COUNT"]
+        wave.save()
+
+        response = self.client.post(f"{WAVE_URL}{wave.uuid}/validate/")
+        self.assertEqual(response.status_code, 200, response.content)
 
     def test_objects_count_first(self):
         rows = self._ranked(rankingCriteria=["OBJECTS_COUNT"])
@@ -557,7 +577,7 @@ class ControlPlanRankingTests(ControlPlanTestCase):
         )
 
     def test_new_objects_first(self):
-        rows = self._ranked(rankingCriteria=["NEW_OBJECTS_COUNT", "ZONE_PRIORITY"])
+        rows = self._ranked(rankingCriteria=["NEW_OBJECTS_COUNT"])
 
         self.assertEqual(self._order(rows)[0], self.parcel_b.id_parcellaire)
         self.assertEqual(rows[0]["newObjectsCount"], 2)
@@ -579,10 +599,12 @@ class ControlPlanRankingTests(ControlPlanTestCase):
     def test_the_ranking_is_explained(self):
         rows = self._ranked()
 
-        first = rows[0]
+        first = next(
+            row for row in rows if row["idParcellaire"] == self.parcel_a.id_parcellaire
+        )
         self.assertEqual(first["objectsCount"], 1)
         self.assertEqual(first["newObjectsCount"], 0)
-        self.assertEqual(first["zonePriority"], 0)
+        self.assertFalse(first["addedByAgent"])
         self.assertEqual(first["zoneNames"], ["Zones agricoles plan"])
         self.assertEqual(
             first["objectTypes"],
@@ -620,6 +642,7 @@ class ControlPlanAdjustmentTests(ControlPlanTestCase):
             {
                 "proposedCount": 1,
                 "waitingCount": 2,
+                "addedCount": 0,
                 "excludedCount": 0,
                 "objectsCount": 3,
                 "unverifiedObjectsCount": 0,
@@ -737,6 +760,119 @@ class ControlPlanAdjustmentTests(ControlPlanTestCase):
         response = self.client.post(f"{PARCEL_URL}{first['uuid']}/exclude/")
 
         self.assertEqual(response.status_code, 403)
+
+    def _include_last(self):
+        last = self.section(self.plan["uuid"], "WAITING")[-1]
+        response = self.client.post(f"{PARCEL_URL}{last['uuid']}/include/")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.json()["addedByAgent"])
+        return last
+
+    def _proposal(self):
+        return self.client.get(f"{WAVE_URL}{self.wave['uuid']}/").json()["proposal"]
+
+    def test_a_waiting_parcel_is_added_on_top_of_the_count(self):
+        self._include_last()
+
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"]),
+            [self.parcels[0].id_parcellaire, self.parcels[2].id_parcellaire],
+        )
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"], "WAITING"),
+            [self.parcels[1].id_parcellaire],
+        )
+        proposal = self._proposal()
+        self.assertEqual(
+            (
+                proposal["proposedCount"],
+                proposal["waitingCount"],
+                proposal["addedCount"],
+            ),
+            (2, 1, 1),
+        )
+
+        # an exclusion still brings the next waiting parcel in, the addition stays
+        first = self.section(self.plan["uuid"], "PROPOSED")[0]
+        self.client.post(f"{PARCEL_URL}{first['uuid']}/exclude/")
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"]),
+            [self.parcels[1].id_parcellaire, self.parcels[2].id_parcellaire],
+        )
+
+    def test_an_added_parcel_is_put_back_at_its_rank(self):
+        last = self._include_last()
+
+        response = self.client.post(f"{PARCEL_URL}{last['uuid']}/put-back/")
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertFalse(response.json()["addedByAgent"])
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"], "WAITING"),
+            [self.parcels[1].id_parcellaire, self.parcels[2].id_parcellaire],
+        )
+
+    def test_an_excluded_addition_is_restored_to_the_waiting_list(self):
+        last = self._include_last()
+        self.client.post(f"{PARCEL_URL}{last['uuid']}/exclude/")
+
+        response = self.client.post(f"{PARCEL_URL}{last['uuid']}/restore/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"]),
+            [self.parcels[0].id_parcellaire],
+        )
+
+    def test_only_a_waiting_parcel_is_added_and_only_an_addition_put_back(self):
+        first = self.section(self.plan["uuid"], "PROPOSED")[0]
+        waiting = self.section(self.plan["uuid"], "WAITING")[0]
+
+        self.assertEqual(
+            self.client.post(f"{PARCEL_URL}{first['uuid']}/include/").status_code, 409
+        )
+        self.assertEqual(
+            self.client.post(f"{PARCEL_URL}{waiting['uuid']}/put-back/").status_code,
+            409,
+        )
+
+    def test_a_reader_cannot_add(self):
+        waiting = self.section(self.plan["uuid"], "WAITING")[0]
+        self.authenticate_user(self.reader)
+
+        response = self.client.post(f"{PARCEL_URL}{waiting['uuid']}/include/")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_a_recomputation_keeps_the_additions(self):
+        self._include_last()
+
+        response = self.client.patch(
+            f"{WAVE_URL}{self.wave['uuid']}/",
+            {
+                "parcelsCount": 1,
+                "criteria": self.criteria(rankingCriteria=["OBJECTS_COUNT"]),
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"]),
+            [self.parcels[0].id_parcellaire, self.parcels[2].id_parcellaire],
+        )
+
+    def test_validation_plans_the_additions(self):
+        self._include_last()
+
+        response = self.client.post(f"{WAVE_URL}{self.wave['uuid']}/validate/")
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["plannedParcelsCount"], 2)
+        self.assertEqual(
+            self.proposed_parcel_ids(self.plan["uuid"], "PLANNED"),
+            [self.parcels[0].id_parcellaire, self.parcels[2].id_parcellaire],
+        )
 
 
 class ControlPlanEligibleCountTests(ControlPlanTestCase):
@@ -912,7 +1048,10 @@ class ControlPlanValidationTests(ControlPlanTestCase):
         with mock.patch(
             "core.services.control_plan.invalidate_count_caches"
         ) as invalidate, self.captureOnCommitCallbacks(execute=True):
-            plan, result = self.plan_and_validate(parcels_count=1)
+            # same counts: the cadastral order puts `parcel` first
+            plan, result = self.plan_and_validate(
+                parcels_count=1, rankingCriteria=["OBJECTS_COUNT"]
+            )
 
         self.assertEqual(
             result,
@@ -1202,6 +1341,37 @@ class ControlPlanFollowUpTests(ControlPlanTestCase):
         )
         self.assertTrue(preview["tileSetPreviews"])
 
+    def test_each_preview_year_shows_its_own_detections(self):
+        self.ts_2021.geo_zones.add(self.montpellier)
+        self.ts_2024.geo_zones.add(self.montpellier)
+        parcel = self.make_parcel()
+        x, y = parcel.geometry.centroid.coords
+        self.make_object(
+            parcel,
+            detections=[
+                {"tile_set": self.ts_2021, "geometry": Point(x, y, srid=SRID)},
+                {"tile_set": self.ts_2024, "geometry": Point(x + 0.0001, y, srid=SRID)},
+            ],
+        )
+        # a second wave of the plan proposes it
+        wave = self.create_wave(self.plan["uuid"])
+        self.assertEqual(wave.status_code, 201, wave.content)
+        row = self.section(self.plan["uuid"], "PROPOSED")[0]
+
+        preview = self.client.get(f"{PARCEL_URL}{row['uuid']}/preview/").json()
+
+        by_year = {
+            tile_set_preview["tileSet"]["name"]: [
+                obj["geometry"]["coordinates"]
+                for obj in tile_set_preview["detectionObjects"]
+            ]
+            for tile_set_preview in preview["tileSetPreviews"]
+        }
+        ((x_2021, _),) = by_year[self.ts_2021.name]
+        ((x_2024, _),) = by_year[self.ts_2024.name]
+        self.assertAlmostEqual(x_2021, x)
+        self.assertAlmostEqual(x_2024, x + 0.0001)
+
     def test_a_deleted_parcel_keeps_its_line_in_the_plan(self):
         self.parcel.delete()
 
@@ -1286,6 +1456,25 @@ class ControlPlanOptionsTests(ControlPlanTestCase):
         self.assertEqual(
             response.json()["defaultPerimeter"], {"communes": [], "epcis": []}
         )
+        self.assertIsNone(response.json()["singleCommune"])
+
+    def test_the_single_commune_of_a_group(self):
+        commune_group = create_user_group(
+            name="Commune plan", geo_zones=[self.montpellier]
+        )
+        communes_group = create_user_group(
+            name="Communes plan", geo_zones=[self.montpellier, self.beziers]
+        )
+
+        self.assertEqual(
+            ControlPlanService.single_commune(commune_group),
+            {
+                "uuid": self.montpellier.uuid,
+                "name": self.montpellier.name,
+                "code": self.montpellier.iso_code,
+            },
+        )
+        self.assertIsNone(ControlPlanService.single_commune(communes_group))
 
     def test_default_perimeter_of_a_collectivity(self):
         epci = create_montpellier_mediterranee_epci(department=self.herault)

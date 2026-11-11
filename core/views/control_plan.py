@@ -352,6 +352,16 @@ class ControlPlanParcelViewSet(ControlPlanViewSetMixin):
         return Response(self.get_serializer(plan_parcel).data)
 
     @action(methods=["post"], detail=True)
+    def include(self, request, uuid=None):
+        plan_parcel = ControlPlanParcelService.include(self._get_editable_parcel())
+        return Response(self.get_serializer(plan_parcel).data)
+
+    @action(methods=["post"], detail=True, url_path="put-back")
+    def put_back(self, request, uuid=None):
+        plan_parcel = ControlPlanParcelService.put_back(self._get_editable_parcel())
+        return Response(self.get_serializer(plan_parcel).data)
+
+    @action(methods=["post"], detail=True)
     def restore(self, request, uuid=None):
         ControlPlanParcelService.restore(self._get_editable_parcel(), user=request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)

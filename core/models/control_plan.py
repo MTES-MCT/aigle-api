@@ -148,7 +148,8 @@ class ControlPlanParcel(TimestampedModelMixin, UuidModelMixin):
     objects_count = models.PositiveIntegerField(default=0)
     new_objects_count = models.PositiveIntegerField(default=0)
     unverified_objects_count = models.PositiveIntegerField(default=0)
-    zone_priority = models.PositiveIntegerField(null=True)
+    # pulled from the waiting list by an agent: proposed beyond the count asked for
+    added_by_agent = models.BooleanField(default=False)
     # {"zone_names": [...], "object_types": [{uuid, name, color, count}], "detection_object_uuids": [...]}
     summary = models.JSONField(default=dict)
     status_changed_by = models.ForeignKey(

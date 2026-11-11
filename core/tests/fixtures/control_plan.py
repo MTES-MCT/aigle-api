@@ -117,7 +117,7 @@ class ControlPlanTestCase(BaseAPITestCase):
         commune=None,
     ):
         """An object and its detections, each described by a dict: tile_set,
-        validation, control, score, prescription, source, official_report_date."""
+        validation, control, score, prescription, source, official_report_date, geometry."""
         commune = commune or (parcel.commune if parcel else self.montpellier)
         detection_object = create_detection_object(
             object_type=object_type or self.cabane, parcel=parcel, commune=commune
@@ -144,7 +144,7 @@ class ControlPlanTestCase(BaseAPITestCase):
                 create_detection(
                     detection_object=detection_object,
                     tile_set=spec.get("tile_set", self.ts_2024),
-                    geometry=Point(anchor.x, anchor.y, srid=SRID),
+                    geometry=spec.get("geometry", Point(anchor.x, anchor.y, srid=SRID)),
                     score=spec.get("score", 0.9),
                     detection_source=spec.get("source", DetectionSource.ANALYSIS),
                     detection_data=detection_data,
@@ -158,7 +158,7 @@ class ControlPlanTestCase(BaseAPITestCase):
         return {
             "objectTypesUuids": [str(self.cabane.uuid), str(self.piscine.uuid)],
             "customZoneGroups": [[str(self.zone_a.uuid)], [str(self.zone_b.uuid)]],
-            "rankingCriteria": ["ZONE_PRIORITY", "OBJECTS_COUNT", "NEW_OBJECTS_COUNT"],
+            "rankingCriteria": ["OBJECTS_COUNT", "NEW_OBJECTS_COUNT"],
             **overrides,
         }
 

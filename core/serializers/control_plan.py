@@ -40,7 +40,6 @@ class ControlPlanCriteriaSerializer(serializers.Serializer):
         default=lambda: list(SELECTABLE_VALIDATION_STATUSES),
     )
     include_prescribed = serializers.BooleanField(default=False)
-    # zone groups by priority, the first one first
     custom_zone_groups = serializers.ListField(
         child=serializers.ListField(child=serializers.UUIDField(), min_length=1),
         min_length=1,
@@ -241,7 +240,7 @@ class ControlPlanParcelSerializer(serializers.ModelSerializer):
             "objects_count",
             "new_objects_count",
             "unverified_objects_count",
-            "zone_priority",
+            "added_by_agent",
             "zone_names",
             "object_types",
             "detection_object_uuids",
