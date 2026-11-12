@@ -28,9 +28,22 @@ jobs:
         env:
           SCW_HOST: ${{ secrets.SCW_HOST }}
           SCW_USER: ${{ secrets.SCW_USER }}
+          # bastion@<gateway IP>:61000; SCW_HOST is then the server's .internal name
+          SCW_BASTION: ${{ secrets.SCW_BASTION }}
+          # known_hosts lines of the bastion and of the server
+          SCW_KNOWN_HOSTS: ${{ secrets.SCW_KNOWN_HOSTS }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          ssh -o StrictHostKeyChecking=no $SCW_USER@$SCW_HOST BRANCH="$BRANCH" bash -s << 'EOF'
+          # The workflow file is read from main for both environments (workflow_run):
+          # each environment switches to the bastion when its SCW_BASTION secret is set.
+          if [ -n "$SCW_BASTION" ]; then
+            echo "$SCW_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+            SSH_OPTS="-J $SCW_BASTION"
+          else
+            SSH_OPTS="-o StrictHostKeyChecking=no"
+          fi
+
+          ssh $SSH_OPTS $SCW_USER@$SCW_HOST BRANCH="$BRANCH" bash -s << 'EOF'
             set -e
 
             cd /home/ubuntu/aigle-api
@@ -59,9 +72,6 @@ jobs:
             sudo systemctl daemon-reload
             sudo systemctl enable celery
             sudo systemctl enable gunicorn_aigle
-
-            # Email port
-            sudo ufw allow "$EMAIL_PORT"
 
             # Python deps + migrations (additive migrations only — see CLAUDE.md)
             source venv/bin/activate
