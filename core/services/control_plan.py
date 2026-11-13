@@ -3,6 +3,7 @@ proposal → adjustments → validation that sets the objects « À contrôler �
 up as the controls go on."""
 
 import json
+import bisect
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from core.constants.control_plan import (
     CONTROL_PLAN_HISTORY_CHANGE_REASON,
     DEFAULT_SCORE_MIN,
     MIN_WAITING_LIST_SIZE,
+    PARCEL_AREA_CLASSES,
     PROPOSAL_STATEMENT_TIMEOUT_MS,
     ControlPlanFollowUpStatus,
     ControlPlanParcelSection,
@@ -191,6 +193,30 @@ def _resolve_zone_groups(
     return [[zone_ids[uuid] for uuid in group if uuid in zone_ids] for group in groups]
 
 
+def _object_type_ranks(
+    object_type_uuids: List[str],
+    allowed: Dict[str, Tuple[int, ObjectTypeCategoryObjectTypeStatus]],
+) -> Dict[int, int]:
+    """The criteria list the types by priority; the form shows the « Autres » ones as a
+    single type, so they all take the rank of the first of them."""
+    ranks = {}
+    next_rank = 0
+    other_rank = None
+    for uuid in object_type_uuids:
+        object_type_id, object_type_status = allowed[uuid]
+        if object_type_id in ranks:
+            continue
+        if object_type_status == ObjectTypeCategoryObjectTypeStatus.OTHER_CATEGORY:
+            if other_rank is None:
+                other_rank = next_rank
+                next_rank += 1
+            ranks[object_type_id] = other_rank
+        else:
+            ranks[object_type_id] = next_rank
+            next_rank += 1
+    return ranks
+
+
 def resolve_criteria(
     criteria: dict,
     user: User,
@@ -203,17 +229,16 @@ def resolve_criteria(
     commune_ids = _resolve_perimeter(criteria, user_group, errors)
     zone_groups = _resolve_zone_groups(criteria, user_group, errors)
 
-    allowed_uuids = {
-        str(object_type.uuid)
-        for object_type, _ in plan_object_types(
+    allowed = {
+        str(object_type.uuid): (object_type.id, object_type_status)
+        for object_type, object_type_status in plan_object_types(
             user, request_scoped_user_group, user_group
         )
     }
     object_type_uuids = [
-        str(uuid)
-        for uuid in criteria["object_types_uuids"]
-        if str(uuid) in allowed_uuids
+        str(uuid) for uuid in criteria["object_types_uuids"] if str(uuid) in allowed
     ]
+    object_type_ranks = _object_type_ranks(object_type_uuids, allowed)
     if not object_type_uuids:
         errors["object_types_uuids"] = [
             "Aucun des types d'objets choisis n'est ouvert au groupe"
@@ -230,6 +255,7 @@ def resolve_criteria(
     return EligibilityCriteria(
         commune_ids=commune_ids,
         object_type_uuids=object_type_uuids,
+        object_type_ranks=object_type_ranks,
         score_min=criteria["score_min"],
         validation_statuses=validation_statuses,
         include_prescribed=criteria["include_prescribed"],
@@ -367,6 +393,7 @@ class _ParcelInfo:
     num_parcel: int
     commune_id: Optional[int]
     commune_name: Optional[str]
+    contenance: int
 
 
 def _parcel_infos(parcel_ids) -> Dict[int, _ParcelInfo]:
@@ -383,6 +410,7 @@ def _parcel_infos(parcel_ids) -> Dict[int, _ParcelInfo]:
             "num_parcel",
             "commune_id",
             "commune__name",
+            "contenance",
         ):
             infos[row[0]] = _ParcelInfo(*row[1:])
     return infos
@@ -431,14 +459,23 @@ def _rank(
     """Lexicographic: the first criterion decides, the next ones break its ties."""
 
     def key(candidate: _ParcelCandidate):
+        info = infos[candidate.parcel_id]
         values = []
         for criterion in criteria.ranking_criteria:
             if criterion == ControlPlanRankingCriterion.OBJECTS_COUNT:
                 values.append(-len(candidate.objects))
             elif criterion == ControlPlanRankingCriterion.NEW_OBJECTS_COUNT:
                 values.append(-candidate.new_objects_count)
+            elif criterion == ControlPlanRankingCriterion.OBJECT_TYPE_PRIORITY:
+                values.append(
+                    min(
+                        criteria.object_type_ranks[obj.object_type_id]
+                        for obj in candidate.objects.values()
+                    )
+                )
+            elif criterion == ControlPlanRankingCriterion.SMALL_PARCELS:
+                values.append(bisect.bisect_right(PARCEL_AREA_CLASSES, info.contenance))
 
-        info = infos[candidate.parcel_id]
         # the cadastral order breaks the remaining ties, the id makes it total
         values.extend(
             [

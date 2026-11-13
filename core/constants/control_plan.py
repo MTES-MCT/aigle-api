@@ -51,6 +51,18 @@ PROPOSAL_STATEMENT_TIMEOUT_MS = 20000
 class ControlPlanRankingCriterion(models.TextChoices):
     OBJECTS_COUNT = "OBJECTS_COUNT", "OBJECTS_COUNT"
     NEW_OBJECTS_COUNT = "NEW_OBJECTS_COUNT", "NEW_OBJECTS_COUNT"
+    OBJECT_TYPE_PRIORITY = "OBJECT_TYPE_PRIORITY", "OBJECT_TYPE_PRIORITY"
+    SMALL_PARCELS = "SMALL_PARCELS", "SMALL_PARCELS"
+
+
+DEFAULT_RANKING_CRITERIA = [
+    ControlPlanRankingCriterion.OBJECTS_COUNT,
+    ControlPlanRankingCriterion.NEW_OBJECTS_COUNT,
+]
+
+# « Petites parcelles » ranks by size class (m², upper bounds), not by the exact area: two
+# parcels rarely share one, so an exact area would leave nothing for the next criteria.
+PARCEL_AREA_CLASSES = [1000, 2500, 5000, 10000]
 
 
 class ControlPlanFollowUpStatus(models.TextChoices):

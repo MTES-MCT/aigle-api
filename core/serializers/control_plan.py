@@ -2,6 +2,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from core.constants.control_plan import (
+    DEFAULT_RANKING_CRITERIA,
     DEFAULT_SCORE_MIN,
     MAX_PARCELS_COUNT,
     SELECTABLE_VALIDATION_STATUSES,
@@ -28,6 +29,7 @@ class ControlPlanCriteriaSerializer(serializers.Serializer):
     # perimeter inside the group territory; both empty: the whole territory
     communes_uuids = serializers.ListField(child=serializers.UUIDField(), default=list)
     epcis_uuids = serializers.ListField(child=serializers.UUIDField(), default=list)
+    # by priority, for the OBJECT_TYPE_PRIORITY ranking
     object_types_uuids = serializers.ListField(
         child=serializers.UUIDField(), min_length=1
     )
@@ -50,7 +52,7 @@ class ControlPlanCriteriaSerializer(serializers.Serializer):
     # the active ranking criteria, by importance
     ranking_criteria = serializers.ListField(
         child=serializers.ChoiceField(choices=ControlPlanRankingCriterion.choices),
-        default=lambda: list(ControlPlanRankingCriterion.values),
+        default=lambda: list(DEFAULT_RANKING_CRITERIA),
     )
 
     def validate_validation_statuses(self, value):
@@ -237,6 +239,7 @@ class ControlPlanParcelSerializer(serializers.ModelSerializer):
             "section",
             "num_parcel",
             "commune",
+            "contenance",
             "objects_count",
             "new_objects_count",
             "unverified_objects_count",
@@ -250,6 +253,7 @@ class ControlPlanParcelSerializer(serializers.ModelSerializer):
 
     wave_number = serializers.IntegerField(source="wave.number", default=None)
     parcel_uuid = serializers.UUIDField(source="parcel.uuid", default=None)
+    contenance = serializers.IntegerField(source="parcel.contenance", default=None)
     commune = serializers.SerializerMethodField()
     zone_names = serializers.SerializerMethodField()
     object_types = serializers.SerializerMethodField()

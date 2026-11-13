@@ -23,6 +23,10 @@ from core.models.detection_data import (
     DetectionValidationStatus,
 )
 from core.models.geo_custom_zone import GeoCustomZone, GeoCustomZoneStatus
+from core.models.object_type_category import (
+    ObjectTypeCategoryObjectType,
+    ObjectTypeCategoryObjectTypeStatus,
+)
 from core.models.tile_set import TileSetStatus, TileSetType
 from core.models.user import UserRole
 from core.models.user_action_log import UserActionLog
@@ -38,6 +42,7 @@ from core.tests.fixtures.control_plan import (
 )
 from core.services.control_plan import ControlPlanService
 from core.tests.fixtures.detection_data import (
+    create_object_type,
     create_object_type_with_category,
     create_tile_set,
 )
@@ -581,6 +586,95 @@ class ControlPlanRankingTests(ControlPlanTestCase):
 
         self.assertEqual(self._order(rows)[0], self.parcel_b.id_parcellaire)
         self.assertEqual(rows[0]["newObjectsCount"], 2)
+
+    def test_object_type_priority_first(self):
+        rows = self._ranked(
+            objectTypesUuids=[str(self.piscine.uuid), str(self.cabane.uuid)],
+            rankingCriteria=["OBJECT_TYPE_PRIORITY", "OBJECTS_COUNT"],
+        )
+
+        # b alone holds the first type; a and c tie on the second, the count decides
+        self.assertEqual(
+            self._order(rows),
+            [
+                self.parcel_b.id_parcellaire,
+                self.parcel_c.id_parcellaire,
+                self.parcel_a.id_parcellaire,
+            ],
+        )
+
+    def test_the_other_object_types_share_one_priority(self):
+        other_1 = create_object_type(name="Autre plan 1")
+        other_2 = create_object_type(name="Autre plan 2")
+        for object_type in (other_1, other_2):
+            ObjectTypeCategoryObjectType.objects.create(
+                object_type_category=self.category,
+                object_type=object_type,
+                object_type_category_object_type_status=ObjectTypeCategoryObjectTypeStatus.OTHER_CATEGORY,
+            )
+        parcel_d = self.make_parcel()
+        self.make_object(parcel_d, object_type=other_2)
+        parcel_e = self.make_parcel()
+        self.make_object(parcel_e, object_type=other_1)
+
+        rows = self._ranked(
+            objectTypesUuids=[
+                str(other_1.uuid),
+                str(self.cabane.uuid),
+                str(other_2.uuid),
+            ],
+            rankingCriteria=["OBJECT_TYPE_PRIORITY"],
+        )
+
+        self.assertEqual(
+            self._order(rows),
+            [
+                parcel_d.id_parcellaire,
+                parcel_e.id_parcellaire,
+                self.parcel_a.id_parcellaire,
+                self.parcel_b.id_parcellaire,
+                self.parcel_c.id_parcellaire,
+            ],
+        )
+
+    def test_small_parcels_first_by_size_class(self):
+        for parcel, contenance in (
+            (self.parcel_a, 20000),
+            (self.parcel_b, 3000),
+            (self.parcel_c, 4000),
+        ):
+            parcel.contenance = contenance
+            parcel.save()
+
+        rows = self._ranked(rankingCriteria=["SMALL_PARCELS", "OBJECTS_COUNT"])
+
+        # b and c share the 2 500 - 5 000 m² class: the count decides
+        self.assertEqual(
+            self._order(rows),
+            [
+                self.parcel_c.id_parcellaire,
+                self.parcel_b.id_parcellaire,
+                self.parcel_a.id_parcellaire,
+            ],
+        )
+        self.assertEqual([row["contenance"] for row in rows], [4000, 3000, 20000])
+
+    def test_the_new_criteria_are_off_by_default(self):
+        plan = self.create_plan()
+        criteria = self.criteria()
+        del criteria["rankingCriteria"]
+
+        response = self.client.post(
+            WAVE_URL,
+            {"controlPlanUuid": plan["uuid"], "parcelsCount": 10, "criteria": criteria},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(
+            response.json()["criteria"]["rankingCriteria"],
+            ["OBJECTS_COUNT", "NEW_OBJECTS_COUNT"],
+        )
 
     def test_without_ranking_criteria_the_cadastral_order_decides(self):
         rows = self._ranked(rankingCriteria=[])

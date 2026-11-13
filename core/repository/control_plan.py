@@ -9,7 +9,7 @@ so an object can have two « last » detections there.
 """
 
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from django.db.models import Exists, OuterRef, Q, QuerySet
 
@@ -57,6 +57,8 @@ class EligibilityCriteria:
     # perimeter inside the territory; None for the whole territory
     commune_ids: Optional[List[int]]
     object_type_uuids: List[str]
+    # ObjectType id → priority (0 first); the « Autres » types share one
+    object_type_ranks: Dict[int, int]
     score_min: float
     validation_statuses: List[str]
     include_prescribed: bool
