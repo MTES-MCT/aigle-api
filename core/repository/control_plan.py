@@ -137,16 +137,16 @@ def visible_current_detections(
     return current_detections(queryset)
 
 
-def in_zones_or_drawn(queryset: QuerySet, zone_ids: List[int]) -> QuerySet:
-    """In one of the zones, or drawn by an agent: the map's default (« ALL »)."""
-    in_zones = Exists(
-        DetectionObject.geo_custom_zones.through.objects.filter(
-            detectionobject_id=OuterRef("detection_object_id"),
-            geocustomzone_id__in=zone_ids,
+def in_zones(queryset: QuerySet, zone_ids) -> QuerySet:
+    """In one of the zones à enjeux: the plan ignores everything outside them, the objects
+    drawn by an agent included."""
+    return queryset.filter(
+        Exists(
+            DetectionObject.geo_custom_zones.through.objects.filter(
+                detectionobject_id=OuterRef("detection_object_id"),
+                geocustomzone_id__in=zone_ids,
+            )
         )
-    )
-    return queryset.annotate(in_selected_zones=in_zones).filter(
-        Q(in_selected_zones=True) | Q(detection_source=DetectionSource.INTERFACE_DRAWN)
     )
 
 
@@ -200,7 +200,7 @@ def eligible_detections(
         detection_data__detection_control_status=DetectionControlStatus.NOT_CONTROLLED,
     )
     queryset = score_at_least(queryset, criteria.score_min)
-    queryset = in_zones_or_drawn(queryset, criteria.zone_ids)
+    queryset = in_zones(queryset, criteria.zone_ids)
 
     if not criteria.include_prescribed:
         queryset = exclude_prescribed(queryset)

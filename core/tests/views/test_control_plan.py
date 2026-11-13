@@ -358,7 +358,9 @@ class ControlPlanEligibilityTests(ControlPlanTestCase):
 
         self.assertEqual(self._proposed(), {drawn.id_parcellaire})
 
-    def test_zones_selection_with_drawn_objects_outside_them(self):
+    def test_only_the_objects_in_the_selected_zones_even_drawn_ones(self):
+        in_a = self.make_parcel()
+        self.make_object(in_a)
         in_b = self.make_parcel()
         self.make_object(in_b, zones=("b",))
         outside = self.make_parcel()
@@ -372,7 +374,7 @@ class ControlPlanEligibilityTests(ControlPlanTestCase):
 
         self.assertEqual(
             self._proposed(customZoneGroups=[[str(self.zone_a.uuid)]]),
-            {drawn_outside.id_parcellaire},
+            {in_a.id_parcellaire},
         )
 
     def test_object_types(self):
@@ -1435,6 +1437,42 @@ class ControlPlanFollowUpTests(ControlPlanTestCase):
         )
         self.assertTrue(preview["tileSetPreviews"])
 
+    def test_the_preview_draws_only_the_objects_of_the_row(self):
+        self.ts_2024.geo_zones.add(self.montpellier)
+        # on the planned parcel, after the validation: a type the plan left out, an object
+        # outside the zones
+        self.make_object(self.parcel, object_type=self.piscine)
+        self.make_object(self.parcel, zones=())
+        row = self.section(self.plan["uuid"], "PLANNED")[0]
+
+        preview = self.client.get(f"{PARCEL_URL}{row['uuid']}/preview/").json()
+
+        listed = set(row["detectionObjectUuids"])
+        self.assertEqual(len(listed), 1)
+        self.assertEqual({obj["uuid"] for obj in preview["detectionObjects"]}, listed)
+        for tile_set_preview in preview["tileSetPreviews"]:
+            self.assertLessEqual(
+                {obj["uuid"] for obj in tile_set_preview["detectionObjects"]}, listed
+            )
+
+    def test_out_of_plan_ignores_the_objects_outside_the_zones(self):
+        drawn_outside = self.make_parcel()
+        self.make_object(
+            drawn_outside,
+            zones=(),
+            detections=[
+                {
+                    "control": DetectionControlStatus.TO_CONTROL,
+                    "source": DetectionSource.INTERFACE_DRAWN,
+                }
+            ],
+        )
+
+        response = self.client.get(f"{PLAN_URL}{self.plan['uuid']}/out-of-plan/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"], [])
+
     def test_each_preview_year_shows_its_own_detections(self):
         self.ts_2021.geo_zones.add(self.montpellier)
         self.ts_2024.geo_zones.add(self.montpellier)
@@ -1648,6 +1686,27 @@ class ControlPlanOptionsTests(ControlPlanTestCase):
                 "objectsWithoutParcelCount": 1,
             },
         )
+
+    def test_prerequisites_count_only_the_objects_in_the_zones(self):
+        self.make_object(
+            self.make_parcel(),
+            zones=(),
+            detections=[
+                {
+                    "validation": DetectionValidationStatus.DETECTED_NOT_VERIFIED,
+                    "source": DetectionSource.INTERFACE_DRAWN,
+                }
+            ],
+        )
+        self.make_object(None, commune=self.montpellier, zones=())
+        self.authenticate_user(self.writer)
+
+        response = self.client.get(
+            f"{PLAN_URL}prerequisites/", {"userGroupUuid": str(self.group.uuid)}
+        )
+
+        self.assertEqual(response.json()["unverifiedObjectsCount"], 0)
+        self.assertEqual(response.json()["objectsWithoutParcelCount"], 0)
 
     def test_prerequisites_of_a_group_without_active_zones(self):
         self.zone_a.geo_custom_zone_status = GeoCustomZoneStatus.INACTIVE

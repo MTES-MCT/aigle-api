@@ -529,27 +529,6 @@ class ParcelRepository(
                         geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids
                     )
 
-                elif (
-                    filter_detection.filter_custom_zone.interface_drawn
-                    == RepoFilterInterfaceDrawn.ONLY_INTERFACE_DRAWN
-                ):
-                    q &= Q(
-                        geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids,
-                        detections__detection_source__in=[
-                            DetectionSource.INTERFACE_DRAWN,
-                            DetectionSource.INTERFACE_FORCED_VISIBLE,
-                        ],
-                    )
-
-                elif (
-                    filter_detection.filter_custom_zone.interface_drawn
-                    == RepoFilterInterfaceDrawn.ONLY_NON_INTERFACE_DRAWN
-                ):
-                    q &= Q(
-                        geo_custom_zones__uuid__in=filter_detection.filter_custom_zone.custom_zone_uuids,
-                        detections__detection_source=DetectionSource.ANALYSIS,
-                    )
-
                 elif filter_detection.filter_custom_zone.interface_drawn in [
                     RepoFilterInterfaceDrawn.INSIDE_SELECTED_ZONES,
                     RepoFilterInterfaceDrawn.NONE,

@@ -11,6 +11,8 @@ from core.models.control_plan import (
     ControlPlanStatus,
 )
 from core.models.detection_data import DetectionControlStatus
+from core.models.detection_object import DetectionObject
+from core.models.geo_custom_zone import GeoCustomZone
 from core.permissions.control_plan import ControlPlanPermission
 
 CONTROL_PLAN_PARAM = "controlPlan"
@@ -27,7 +29,8 @@ def control_plan_q(
     detection_prefix: str,
 ) -> Optional[Q]:
     """Detections on a parcel planned in an active plan of the caller's groups, or that
-    are « À contrôler » themselves (the parcels set to control outside the plan).
+    are « À contrôler » themselves (the parcels set to control outside the plan), in one
+    of these groups' zones à enjeux: the plan ignores everything outside them.
 
     `detection_object_prefix` / `detection_prefix` lead from the filtered model to the
     detection object and to the detection, as in TileSetPermission._get_last_detections_filters.
@@ -46,8 +49,17 @@ def control_plan_q(
         parcel_id__isnull=False,
     ).values("parcel_id")
 
-    return Q(**{f"{detection_object_prefix}parcel_id__in": planned_parcel_ids}) | Q(
-        **{
-            f"{detection_prefix}detection_data__detection_control_status": DetectionControlStatus.TO_CONTROL
-        }
-    )
+    in_zones_object_ids = DetectionObject.geo_custom_zones.through.objects.filter(
+        geocustomzone_id__in=GeoCustomZone.objects.active()
+        .filter(user_groups_custom_geo_zones__in=accessible_groups)
+        .values("id")
+    ).values("detectionobject_id")
+
+    return (
+        Q(**{f"{detection_object_prefix}parcel_id__in": planned_parcel_ids})
+        | Q(
+            **{
+                f"{detection_prefix}detection_data__detection_control_status": DetectionControlStatus.TO_CONTROL
+            }
+        )
+    ) & Q(**{f"{detection_object_prefix}id__in": in_zones_object_ids})

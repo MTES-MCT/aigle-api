@@ -60,7 +60,7 @@ from core.repository.control_plan import (
     eligible_detections,
     exclude_prescribed,
     follow_up_annotations,
-    in_zones_or_drawn,
+    in_zones,
     is_new_object,
     parcels_with_authorization,
     parcels_with_official_report,
@@ -1312,8 +1312,9 @@ class ControlPlanParcelService:
 
     @staticmethod
     def preview(plan_parcel: ControlPlanParcel, user: User) -> dict:
-        """The parcel and its objects on the imagery, as the group sees them: each year
-        shows the objects as detected on it, not today's outlines."""
+        """The parcel and the objects its row lists, on the imagery, as the group sees them:
+        each year shows the objects as detected on it, not today's outlines. The other
+        objects of the parcel (another type, outside the zones…) are not drawn."""
         from core.permissions.tile_set import TileSetPermission
         from core.serializers.tile_set import TileSetMinimalSerializer
 
@@ -1338,7 +1339,12 @@ class ControlPlanParcelService:
         current = [
             detection
             for detection in visible_current_detections(user, user_group)
-            .filter(detection_object__parcel_id=plan_parcel.parcel_id)
+            .filter(
+                detection_object__parcel_id=plan_parcel.parcel_id,
+                detection_object__uuid__in=(plan_parcel.summary or {}).get(
+                    "detection_object_uuids", []
+                ),
+            )
             .select_related("detection_object__object_type", "detection_data")
             .order_by("id")
             if detection.detection_data is not None
@@ -1571,7 +1577,7 @@ class ControlPlanService:
         )
         detections = score_at_least(detections, DEFAULT_SCORE_MIN)
         zone_ids = list(group_zones(user_group).values_list("id", flat=True))
-        detections = in_zones_or_drawn(detections, zone_ids)
+        detections = in_zones(detections, zone_ids)
         detections = exclude_prescribed(detections)
 
         return {
@@ -1698,7 +1704,8 @@ class ControlPlanService:
             queryset=Parcel.objects.all(),
             filter_params={
                 "customZonesUuids": ",".join(zone_uuids),
-                "interfaceDrawn": "ALL",
+                # the objects drawn by an agent outside the zones are left out too
+                "interfaceDrawn": "INSIDE_SELECTED_ZONES",
                 "detectionControlStatuses": DetectionControlStatus.TO_CONTROL,
                 "detectionValidationStatuses": ",".join(
                     [

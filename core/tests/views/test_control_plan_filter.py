@@ -1,6 +1,7 @@
 """`controlPlan=true` on the map, the detection list and the parcel table: the parcels of
 the plan, plus the objects set « À contrôler » outside it."""
 
+from core.models.detection import DetectionSource
 from core.models.detection_data import DetectionControlStatus
 from core.tests.fixtures.control_plan import PLAN_URL, ControlPlanTestCase
 from core.tests.fixtures.users import (
@@ -105,6 +106,32 @@ class ControlPlanFilterTests(ControlPlanTestCase):
             "/api/parcel/overview/", {**self.params, "controlPlan": "true"}
         )
         self.assertEqual(response.data["total"], 2)
+
+    def test_the_objects_outside_the_zones_are_left_out(self):
+        # drawn by an agent: the map's own zone filter (« ALL ») would keep them
+        _, (drawn_planned,) = self.make_object(
+            self.planned_parcel,
+            zones=(),
+            detections=[{"source": DetectionSource.INTERFACE_DRAWN}],
+        )
+        _, (drawn_to_control,) = self.make_object(
+            self.make_parcel(),
+            zones=(),
+            detections=[
+                {
+                    "source": DetectionSource.INTERFACE_DRAWN,
+                    "control": DetectionControlStatus.TO_CONTROL,
+                }
+            ],
+        )
+        self.authenticate_user(self.writer)
+
+        everything = self._detection_uuids("/api/detection-list/")
+        self.assertLessEqual(self._uuids(drawn_planned, drawn_to_control), everything)
+        self.assertEqual(
+            self._detection_uuids("/api/detection-list/", controlPlan="true"),
+            self._uuids(self.planned, self.planned_neighbour, self.by_hand),
+        )
 
     def test_a_closed_plan_no_longer_counts(self):
         self.authenticate_user(self.writer)
