@@ -1,8 +1,8 @@
 """Tests for the data-deployment endpoints (utils/data-deployment/).
 
-Three listings — runs (one row per geozone/collectivity, not per run), batches
-(flat, one row per batch) and zae (grouped by department) — plus the POST run
-endpoints. They read the external `detections` schema (run / batch / zae_layer)
+Four listings — runs (one row per geozone/collectivity, not per run), batches
+(flat, one row per batch), zae (grouped by department) and plans — plus the POST run
+endpoints. They read the external `detections` schema (plan / run / batch / zae_layer)
 which doesn't exist in the test database, so each test provisions those tables
 (DDL is rolled back with the surrounding test transaction).
 """
@@ -37,6 +37,8 @@ RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/run/"
 BATCH_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/batch/{batch_id}/run/"
 BATCH_RUN_ON_GEOZONE_ENDPOINT = "/api/utils/data-deployment/batch/{batch_id}/run/"
 ZAE_RUN_ENDPOINT = "/api/utils/data-deployment/{geozone_id}/zae/{zae_id}/run/"
+PLANS_ENDPOINT = "/api/utils/data-deployment/plans/"
+PLAN_RUN_ENDPOINT = "/api/utils/data-deployment/plan/{plan_id}/run/"
 RUN_COMMAND_PATH = "core.services.data_deployment.CommandAsyncService.run_command_async"
 
 
@@ -46,13 +48,30 @@ def _provision_schema():
         cursor.execute("DROP TABLE IF EXISTS detections.batch")
         cursor.execute("DROP TABLE IF EXISTS detections.run")
         cursor.execute("DROP TABLE IF EXISTS detections.zae_layer")
+        cursor.execute("DROP TABLE IF EXISTS detections.plan")
+        cursor.execute(
+            """
+            CREATE TABLE detections.plan (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                geozone_insee_code varchar NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                plan_status varchar NULL,
+                plan_mode varchar NULL,
+                plan_type varchar NULL
+            )
+            """
+        )
         cursor.execute(
             """
             CREATE TABLE detections.run (
                 id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                run_name varchar NULL,
+                run_type varchar NULL,
+                status varchar NULL,
                 geozone_id bigint NULL,
                 created_at timestamptz NULL,
-                src_image_year bigint NULL
+                src_image_year bigint NULL,
+                plan_id bigint NULL
             )
             """
         )
@@ -81,12 +100,35 @@ def _provision_schema():
         )
 
 
-def _insert_run(geozone_id, created_at="2024-01-01T00:00:00Z", src_image_year=2024):
+def _insert_run(
+    geozone_id,
+    created_at="2024-01-01T00:00:00Z",
+    src_image_year=2024,
+    plan_id=None,
+    run_name=None,
+):
     with connection.cursor() as cursor:
         cursor.execute(
-            "INSERT INTO detections.run (geozone_id, created_at, src_image_year) "
-            "VALUES (%s, %s, %s) RETURNING id",
-            [geozone_id, created_at, src_image_year],
+            "INSERT INTO detections.run (geozone_id, created_at, src_image_year, "
+            "plan_id, run_name, run_type, status) "
+            "VALUES (%s, %s, %s, %s, %s, 'Detection', 'done') RETURNING id",
+            [geozone_id, created_at, src_image_year, plan_id, run_name],
+        )
+        return cursor.fetchone()[0]
+
+
+def _insert_plan(
+    geozone_insee_code,
+    created_at="2024-01-01T00:00:00Z",
+    plan_status="done",
+    plan_type="detection",
+):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO detections.plan (geozone_insee_code, created_at, "
+            "plan_status, plan_mode, plan_type) "
+            "VALUES (%s, %s, %s, 'deploy', %s) RETURNING id",
+            [geozone_insee_code, created_at, plan_status, plan_type],
         )
         return cursor.fetchone()[0]
 
@@ -216,19 +258,68 @@ class DataDeploymentViewTests(BaseAPITestCase):
 
     def test_q_filters_geozones_by_batch_tiles_url(self):
         run_dept = _insert_run(self.department.id)
-        # "herault" appears only in the tiles url, not the batch name
+        # "languedoc" appears only in the tiles url, not the batch or geozone names
         _insert_batch(
-            run_dept, "batch-a", tiles_url="s3://aigle-tiles/aerial/2024_herault"
+            run_dept, "batch-a", tiles_url="s3://aigle-tiles/aerial/languedoc/2024"
         )
         run_commune = _insert_run(self.commune.id)
         _insert_batch(
-            run_commune, "batch-b", tiles_url="s3://aigle-tiles/aerial/2024_gard"
+            run_commune, "batch-b", tiles_url="s3://aigle-tiles/aerial/provence/2024"
         )
 
         self.authenticate_user(create_super_admin())
-        data = self.client.get(ENDPOINT, {"q": "herault"}).json()
+        data = self.client.get(ENDPOINT, {"q": "languedoc"}).json()
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["results"][0]["uuid"], str(self.department.id))
+
+    def test_q_matches_geozone_name_code_and_department(self):
+        gard = create_gard_department(region=self.region)
+        _insert_batch(_insert_run(self.commune.id), "batch-a")
+        _insert_batch(_insert_run(gard.id), "batch-b")
+
+        self.authenticate_user(create_super_admin())
+        for q, expected in (
+            ("montpellier", {self.commune.id}),  # geozone name, case-insensitive
+            ("Hérault", {self.commune.id}),  # department name, accents ignored
+            ("34172", {self.commune.id}),  # commune iso code
+            ("341", {self.commune.id}),  # code prefix
+            ("34", {self.commune.id}),  # department code
+            ("30", {gard.id}),
+            ("gard", {gard.id}),
+        ):
+            data = self.client.get(ENDPOINT, {"q": q}).json()
+            self.assertEqual({int(r["uuid"]) for r in data["results"]}, expected, q)
+
+    def test_q_matches_run_batch_and_plan_ids(self):
+        plan_id = _insert_plan("34")
+        run_dept = _insert_run(self.department.id, plan_id=plan_id)
+        _insert_batch(run_dept, "batch-a")
+        run_commune = _insert_run(self.commune.id)
+        batch_commune = _insert_batch(run_commune, "batch-b")
+
+        self.authenticate_user(create_super_admin())
+        for q, expected in (
+            (run_dept, self.department.id),
+            (batch_commune, self.commune.id),
+            (plan_id, self.department.id),
+        ):
+            # ids collide across tables in this tiny fixture: only check inclusion
+            uuids = {
+                int(r["uuid"])
+                for r in self.client.get(ENDPOINT, {"q": str(q)}).json()["results"]
+            }
+            self.assertIn(expected, uuids, q)
+
+    def test_q_by_batch_name_keeps_the_date_on_the_same_batch(self):
+        run_id = _insert_run(self.department.id)
+        _insert_batch(run_id, "pools", created_at="2023-01-01T00:00:00Z")
+        _insert_batch(run_id, "other", created_at="2024-06-01T00:00:00Z")
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(
+            ENDPOINT, {"q": "pools", "batchCreatedAtMin": "2024-01-01"}
+        ).json()
+        self.assertEqual(data["count"], 0)
 
     def test_batch_created_at_min_filters_geozones(self):
         run_old = _insert_run(self.department.id)
@@ -419,6 +510,28 @@ class DataDeploymentBatchesViewTests(BaseAPITestCase):
             self.client.get(BATCHES_ENDPOINT, {"q": "caravans"}).json()["count"], 0
         )
 
+    def test_q_matches_ids_and_the_geozone_of_the_run(self):
+        run_dept = _insert_run(self.department.id)
+        batch_dept = _insert_batch(run_dept, "batch-a")
+        run_commune = _insert_run(self.commune.id)
+        _insert_batch(run_commune, "batch-b")
+        _insert_batch(_insert_run(None), "orphan")
+
+        self.authenticate_user(create_super_admin())
+
+        def names(q):
+            return {
+                b["name"]
+                for b in self.client.get(BATCHES_ENDPOINT, {"q": q}).json()["results"]
+            }
+
+        self.assertEqual(names("Montpellier"), {"batch-b"})
+        self.assertEqual(names("herault"), {"batch-a", "batch-b"})  # department
+        self.assertEqual(names("34"), {"batch-a", "batch-b"})  # department code
+        self.assertEqual(names("34172"), {"batch-b"})  # commune code
+        self.assertIn("batch-a", names(str(batch_dept)))
+        self.assertIn("batch-b", names(str(run_commune)))
+
     def test_batch_without_geozone_is_listed_without_one(self):
         _insert_batch(_insert_run(None), "orphan-batch")
 
@@ -532,6 +645,35 @@ class DataDeploymentZaeViewTests(BaseAPITestCase):
         self.assertEqual(
             [z["name"] for z in group["zaeLayers"]], ["Cabanisation Hérault"]
         )
+
+    def test_q_matching_the_department_keeps_all_its_layers(self):
+        _insert_zae("34", "zfee", "Zone A")
+        _insert_zae("34", "zrf", "Zone B")
+        _insert_zae("30", "zi", "Zone Gard")
+
+        self.authenticate_user(create_super_admin())
+        for q in ("Hérault", "herault", "34"):
+            data = self.client.get(ZAE_ENDPOINT, {"q": q}).json()
+            self.assertEqual(data["count"], 1, q)
+            self.assertEqual(len(data["results"][0]["zaeLayers"]), 2, q)
+
+    def test_q_matches_layer_id_and_type_label(self):
+        zae_id = _insert_zae("34", "zfee", "Zone A")
+        _insert_zae("34", "zrf", "Zone B")
+        _insert_zae("30", "zi", "Zone C")
+
+        self.authenticate_user(create_super_admin())
+
+        def names(q):
+            return {
+                z["name"]
+                for group in self.client.get(ZAE_ENDPOINT, {"q": q}).json()["results"]
+                for z in group["zaeLayers"]
+            }
+
+        self.assertIn("Zone A", names(str(zae_id)))
+        self.assertEqual(names("inondables"), {"Zone C"})
+        self.assertEqual(names("zrf"), {"Zone B"})
 
     def test_deployment_status(self):
         _insert_zae("34", "zfee", "Deployed zone")
@@ -1479,3 +1621,264 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("not found", response.json()["detail"].lower())
         run_command.assert_not_called()
+
+
+class DataDeploymentPlansViewTests(BaseAPITestCase):
+    """GET data-deployment/plans/ — one row per detections.plan, with its runs, their
+    batches and the zae layers of its department, resolved onto an app geozone."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)  # insee 34
+        self.commune = create_montpellier_commune(department=self.department)
+        _provision_schema()
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self.client.get(PLANS_ENDPOINT).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self.client.get(PLANS_ENDPOINT).status_code, 403)
+
+    def test_lists_plan_with_runs_batches_and_zae(self):
+        plan_id = _insert_plan("34172")
+        run_id = _insert_run(self.commune.id, plan_id=plan_id, run_name="mtp_2024")
+        batch_id = _insert_batch(
+            run_id, "batch-mtp", tiles_url="s3://aigle-tiles/aerial/2024_mtp"
+        )
+        _insert_batch(_insert_run(self.commune.id), "not-in-plan")
+        zae_id = _insert_zae("34", "zfee", "ZFEE Hérault")
+
+        self.authenticate_user(create_super_admin())
+        response = self.client.get(PLANS_ENDPOINT)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["count"], 1)
+
+        plan = data["results"][0]
+        self.assertEqual(plan["uuid"], str(plan_id))
+        self.assertEqual(plan["id"], plan_id)
+        self.assertEqual(plan["geozoneCode"], "34172")
+        self.assertEqual(plan["status"], "done")
+        self.assertEqual(plan["mode"], "deploy")
+        self.assertEqual(plan["type"], "detection")
+        self.assertEqual(plan["geozoneId"], self.commune.id)
+        self.assertEqual(plan["geozoneName"], "Montpellier")
+        self.assertEqual(plan["geozoneType"], "COMMUNE")
+        self.assertEqual(plan["departmentCode"], "34")
+        self.assertEqual(plan["departmentName"], "Hérault")
+        self.assertEqual(
+            plan["runs"],
+            [
+                {
+                    "id": run_id,
+                    "name": "mtp_2024",
+                    "type": "Detection",
+                    "status": "done",
+                    "year": 2024,
+                    "createdAt": plan["runs"][0]["createdAt"],
+                }
+            ],
+        )
+        # only the batches of the plan's runs
+        self.assertEqual([b["id"] for b in plan["batches"]], [batch_id])
+        self.assertEqual([z["id"] for z in plan["zaeLayers"]], [zae_id])
+        self.assertEqual(plan["deployStatus"], "NOT_DEPLOYED")
+
+    def test_plan_without_runs_resolves_its_geozone_by_code(self):
+        _insert_plan("34", plan_status="pending")
+        _insert_plan("243400017")  # an EPCI code
+        epci = create_montpellier_mediterranee_epci(department=self.department)
+
+        self.authenticate_user(create_super_admin())
+        by_code = {
+            p["geozoneCode"]: p
+            for p in self.client.get(PLANS_ENDPOINT).json()["results"]
+        }
+        self.assertEqual(by_code["34"]["geozoneId"], self.department.id)
+        self.assertEqual(by_code["34"]["runs"], [])
+        self.assertEqual(by_code["34"]["deployStatus"], "NO_BATCH")
+        self.assertEqual(by_code["243400017"]["geozoneId"], epci.id)
+        self.assertEqual(by_code["243400017"]["departmentCode"], "34")
+
+    def test_plan_with_unknown_code_has_no_geozone(self):
+        _insert_plan("360001")  # a detections-only zone (bassin versant)
+
+        self.authenticate_user(create_super_admin())
+        plan = self.client.get(PLANS_ENDPOINT).json()["results"][0]
+        self.assertIsNone(plan["geozoneId"])
+        self.assertIsNone(plan["geozoneName"])
+        self.assertEqual(plan["zaeLayers"], [])
+
+    def test_deploy_status_aggregates_the_batches(self):
+        plan_id = _insert_plan("34172")
+        run_id = _insert_run(self.commune.id, plan_id=plan_id)
+        _insert_batch(run_id, "not-deployed")
+        deployed = _insert_batch(run_id, "deployed")
+        create_detection(
+            batch_id=str(deployed),
+            tile_set=create_tile_set(
+                name="ts-deployed", last_import_ended_at=timezone.now()
+            ),
+        )
+
+        self.authenticate_user(create_super_admin())
+        plan = self.client.get(PLANS_ENDPOINT).json()["results"][0]
+        self.assertEqual(plan["deployStatus"], "PARTIALLY_DEPLOYED")
+
+    def test_q_search(self):
+        create_gard_department(region=self.region)
+        mtp_plan = _insert_plan("34172")
+        mtp_run = _insert_run(self.commune.id, plan_id=mtp_plan, run_name="mtp_run")
+        mtp_batch = _insert_batch(mtp_run, "mtp-batch")
+        gard_plan = _insert_plan("30", plan_type="segmentation")
+        bassin_plan = _insert_plan("360001")
+
+        self.authenticate_user(create_super_admin())
+
+        def plan_ids(q):
+            return {
+                p["id"]
+                for p in self.client.get(PLANS_ENDPOINT, {"q": q}).json()["results"]
+            }
+
+        self.assertEqual(plan_ids("Montpellier"), {mtp_plan})
+        self.assertEqual(plan_ids("herault"), {mtp_plan})  # department name
+        self.assertEqual(plan_ids("gard"), {gard_plan})  # resolved by code, no run
+        self.assertEqual(plan_ids("34172"), {mtp_plan})
+        self.assertEqual(plan_ids("3600"), {bassin_plan})  # code prefix
+        self.assertEqual(plan_ids("segmentation"), {gard_plan})
+        self.assertEqual(plan_ids("mtp_run"), {mtp_plan})
+        self.assertEqual(plan_ids("mtp-batch"), {mtp_plan})
+        self.assertIn(mtp_plan, plan_ids(str(mtp_plan)))
+        self.assertIn(mtp_plan, plan_ids(str(mtp_run)))
+        self.assertIn(mtp_plan, plan_ids(str(mtp_batch)))
+        self.assertEqual(plan_ids("nothing-matches"), set())
+        self.assertEqual(len(plan_ids("")), 3)
+
+    def test_pagination(self):
+        for code in ("34", "30", "11"):
+            _insert_plan(code)
+
+        self.authenticate_user(create_super_admin())
+        data = self.client.get(PLANS_ENDPOINT, {"limit": 2, "offset": 2}).json()
+        self.assertEqual(data["count"], 3)
+        self.assertEqual(len(data["results"]), 1)
+
+
+class DataDeploymentPlanRunViewTests(BaseAPITestCase):
+    """POST data-deployment/plan/<plan_id>/run/ — deploys the plan's batches onto its
+    geozone, like the geozone deploy."""
+
+    def setUp(self):
+        super().setUp()
+        self.region = create_occitanie_region()
+        self.department = create_herault_department(region=self.region)
+        self.commune = create_montpellier_commune(department=self.department)
+        ObjectTypeCategory.objects.create(name="Cabanisation")
+        _provision_schema()
+
+    def _url(self, plan_id):
+        return PLAN_RUN_ENDPOINT.format(plan_id=plan_id)
+
+    def _post(self, plan_id, body=None):
+        with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
+            response = self.client.post(self._url(plan_id), body or {}, format="json")
+        calls = [
+            (c.kwargs["command_name"], c.kwargs["parameters"])
+            for c in run_command.call_args_list
+        ]
+        return response, calls
+
+    def test_unauthenticated_returns_401(self):
+        self.assertEqual(self.client.post(self._url(1)).status_code, 401)
+
+    def test_regular_user_returns_403(self):
+        self.authenticate_user(create_regular_user())
+        self.assertEqual(self.client.post(self._url(1)).status_code, 403)
+
+    def test_deploys_only_the_plan_batches_onto_its_geozone(self):
+        plan_id = _insert_plan("34172")
+        run_id = _insert_run(self.commune.id, plan_id=plan_id, src_image_year=2024)
+        batch_id = _insert_batch(run_id, "plan", tiles_url="s3://aigle-tiles/x/2024")
+        other_run = _insert_run(self.commune.id, src_image_year=2023)
+        _insert_batch(other_run, "other", tiles_url="s3://aigle-tiles/x/2023")
+        _insert_zae("34", "zfee", "ZFEE")
+
+        self.authenticate_user(create_super_admin())
+        response, calls = self._post(plan_id)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["planId"], plan_id)
+        self.assertEqual(data["geozoneName"], "Montpellier")
+        self.assertEqual(data["tileSetsCreated"], ["Montpellier (34172) 2024"])
+        self.assertEqual(data["userGroupName"], "Cabanisation Montpellier (34172)")
+        self.assertEqual(
+            [name for name, _ in calls],
+            [
+                "import_custom_zones",
+                "create_tile",
+                "import_parcels",
+                "import_detections",
+                "import_sitadel",
+            ],
+        )
+        self.assertEqual(dict(calls)["import_detections"]["--batch-id"], str(batch_id))
+
+    def test_batch_and_zae_selection(self):
+        plan_id = _insert_plan("34172")
+        run_a = _insert_run(self.commune.id, plan_id=plan_id, src_image_year=2023)
+        _insert_batch(run_a, "a", tiles_url="s3://aigle-tiles/x/2023")
+        run_b = _insert_run(self.commune.id, plan_id=plan_id, src_image_year=2024)
+        keep = _insert_batch(run_b, "b", tiles_url="s3://aigle-tiles/x/2024")
+        outsider = _insert_batch(
+            _insert_run(self.commune.id, src_image_year=2022),
+            "outsider",
+            tiles_url="s3://aigle-tiles/x/2022",
+        )
+        zae_id = _insert_zae("34", "zfee", "ZFEE")
+
+        self.authenticate_user(create_super_admin())
+        response, calls = self._post(
+            plan_id,
+            {
+                "batchIds": [keep, outsider],  # outsider isn't the plan's: ignored
+                "zaeLayerIds": [zae_id],
+                "overrideCustomZones": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [p["--batch-id"] for name, p in calls if name == "import_detections"],
+            [str(keep)],
+        )
+        self.assertEqual(
+            dict(calls)["import_custom_zones"], {"--ids": [zae_id], "--override": True}
+        )
+
+    def test_plan_resolved_by_code_deploys_onto_that_geozone(self):
+        plan_id = _insert_plan("34")
+
+        self.authenticate_user(create_super_admin())
+        response, _ = self._post(plan_id)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["geozoneName"], "Hérault")
+        self.assertEqual(response.json()["tileSetsCreated"], [])
+
+    def test_nonexistent_plan_returns_400(self):
+        self.authenticate_user(create_super_admin())
+        response, calls = self._post(999999)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(calls, [])
+
+    def test_plan_without_geozone_returns_400(self):
+        plan_id = _insert_plan("360001")
+
+        self.authenticate_user(create_super_admin())
+        response, calls = self._post(plan_id)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("360001", response.json()["detail"])
+        self.assertEqual(calls, [])

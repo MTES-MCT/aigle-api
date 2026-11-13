@@ -91,6 +91,100 @@ class DataDeploymentService:
         if geo_zone is None:
             raise ValueError(f"Geozone {geozone_id} not found")
 
+        batches = DetectionsSchemaService.get_batches_by_geozone([geozone_id])
+        if batch_ids is not None:
+            wanted = set(batch_ids)
+            batches = [batch for batch in batches if batch["id"] in wanted]
+
+        return DataDeploymentService._deploy_geozone(
+            geo_zone, batches, zae_layer_ids, override_custom_zones
+        )
+
+    @staticmethod
+    def run_plan_deployment(
+        plan_id: int,
+        batch_ids: Optional[List[int]] = None,
+        zae_layer_ids: Optional[List[int]] = None,
+        override_custom_zones: bool = False,
+    ) -> Dict[str, Any]:
+        """Deploy a plan: same as run_deployment, onto the plan's geozone (see
+        resolve_plan_geozone_ids) with the batches of the plan's runs only. batch_ids
+        is intersected with them; zae layers are the geozone's department's."""
+        plan = DetectionsSchemaService.get_plan(plan_id)
+        if plan is None:
+            raise ValueError(f"Plan {plan_id} not found")
+
+        runs = DetectionsSchemaService.get_runs_by_plan([plan_id])
+        geozone_id = DataDeploymentService.resolve_plan_geozone_ids([plan], runs)[
+            plan_id
+        ]
+        if geozone_id is None:
+            raise ValueError(
+                f"Plan {plan_id}: no collectivity found for code "
+                f'"{plan["geozone_insee_code"]}"'
+            )
+        geo_zone = GeoZone.objects.get(id=geozone_id)
+
+        batches = DetectionsSchemaService.get_batches_by_plan([plan_id])
+        if batch_ids is not None:
+            wanted = set(batch_ids)
+            batches = [batch for batch in batches if batch["id"] in wanted]
+
+        return {
+            "plan_id": plan_id,
+            **DataDeploymentService._deploy_geozone(
+                geo_zone, batches, zae_layer_ids, override_custom_zones
+            ),
+        }
+
+    @staticmethod
+    def resolve_plan_geozone_ids(
+        plans: List[Dict[str, Any]], runs: List[Dict[str, Any]]
+    ) -> Dict[int, Optional[int]]:
+        """The app geozone of each plan: the geozone of its newest run when it exists
+        here (the one its batches are deployed through), else the geozone whose own code
+        is the plan's geozone_insee_code (commune iso / epci siren / department insee:
+        their lengths never collide), else None — e.g. a zone that only exists in the
+        detections schema (data_geozone), or a plan whose runs aren't created yet in an
+        environment the code isn't imported in."""
+        run_geozone_by_plan: Dict[int, int] = {}
+        for run in runs:  # newest first
+            if run["geozone_id"] is not None:
+                run_geozone_by_plan.setdefault(run["plan_id"], run["geozone_id"])
+        existing = set(
+            GeoZone.objects.filter(id__in=run_geozone_by_plan.values()).values_list(
+                "id", flat=True
+            )
+        )
+
+        codes = {plan["geozone_insee_code"] for plan in plans} - {None, ""}
+        geozone_id_by_code: Dict[str, int] = {}
+        for model, field in (
+            (GeoDepartment, "insee_code"),
+            (GeoEpci, "siren_code"),
+            (GeoCommune, "iso_code"),
+        ):
+            geozone_id_by_code.update(
+                model.objects.filter(**{f"{field}__in": codes}).values_list(field, "id")
+            )
+
+        resolved: Dict[int, Optional[int]] = {}
+        for plan in plans:
+            run_geozone_id = run_geozone_by_plan.get(plan["id"])
+            resolved[plan["id"]] = (
+                run_geozone_id
+                if run_geozone_id in existing
+                else geozone_id_by_code.get(plan["geozone_insee_code"])
+            )
+        return resolved
+
+    @staticmethod
+    def _deploy_geozone(
+        geo_zone: GeoZone,
+        batches: List[Dict[str, Any]],
+        zae_layer_ids: Optional[List[int]],
+        override_custom_zones: bool,
+    ) -> Dict[str, Any]:
         # department_code scopes the dept-wide import commands; geozone_code (the zone's
         # own unique insee/iso/siren code) disambiguates the globally-unique TileSet /
         # UserGroup names — commune names repeat across departments in France.
@@ -109,11 +203,6 @@ class DataDeploymentService:
             raise ValueError(
                 f'ObjectTypeCategory "{CABANISATION_CATEGORY_NAME}" not found'
             )
-
-        batches = DetectionsSchemaService.get_batches_by_geozone([geozone_id])
-        if batch_ids is not None:
-            wanted = set(batch_ids)
-            batches = [batch for batch in batches if batch["id"] in wanted]
 
         # Inline writes are atomic; commands are queued only after they commit, so a
         # rollback can't leave detached Celery tasks pointing at missing TileSets.

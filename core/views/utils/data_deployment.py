@@ -23,6 +23,8 @@ RUN_URL = "data-deployment/<int:geozone_id>/run/"
 BATCH_RUN_URL = "data-deployment/<int:geozone_id>/batch/<int:batch_id>/run/"
 BATCH_RUN_ON_GEOZONE_URL = "data-deployment/batch/<int:batch_id>/run/"
 ZAE_RUN_URL = "data-deployment/<int:geozone_id>/zae/<int:zae_id>/run/"
+PLANS_URL = "data-deployment/plans/"
+PLAN_RUN_URL = "data-deployment/plan/<int:plan_id>/run/"
 
 
 def _department_code_by_geozone(geozone_ids):
@@ -168,6 +170,119 @@ def _serialize_zae(zae, deployed_zae_layers):
             else "NOT_DEPLOYED"
         ),
     }
+
+
+def _plan_deploy_status(batch_statuses):
+    """A plan's status, from its batches': NO_BATCH (runs not computed yet), else
+    DEPLOYMENT_RUNNING as soon as one is, DEPLOYED / NOT_DEPLOYED when all of them are,
+    PARTIALLY_DEPLOYED in between."""
+    statuses = set(batch_statuses)
+    if not statuses:
+        return "NO_BATCH"
+    if "DEPLOYMENT_RUNNING" in statuses:
+        return "DEPLOYMENT_RUNNING"
+    if len(statuses) == 1:
+        return statuses.pop()
+    return "PARTIALLY_DEPLOYED"
+
+
+def _serialize_plan_run(run):
+    return {
+        "id": run["id"],
+        "name": run["run_name"],
+        "type": run["run_type"],
+        "status": run["status"],
+        "year": run["src_image_year"],
+        "created_at": run["created_at"],
+    }
+
+
+@api_view(["GET"])
+@permission_classes([SuperAdminRolePermission])
+def plans_endpoint(request):
+    """Plans (detections.plan, one per collectivity to process), searchable on ids,
+    codes and names (see DetectionsSchemaService.get_plans). Each carries its runs, the
+    batches they produced and the zae layers of its department, to be deployed together
+    onto the plan's geozone (null when it isn't in the app: not deployable)."""
+    limit, offset = _pagination(request)
+    count, plans = DetectionsSchemaService.get_plans(
+        q=request.GET.get("q") or None, limit=limit, offset=offset
+    )
+    plan_ids = [plan["id"] for plan in plans]
+
+    runs = DetectionsSchemaService.get_runs_by_plan(plan_ids)
+    runs_by_plan = {}
+    for run in runs:
+        runs_by_plan.setdefault(run["plan_id"], []).append(run)
+
+    batches = DetectionsSchemaService.get_batches_by_plan(plan_ids)
+    deployment_by_batch = _deployment_status_by_batch([b["id"] for b in batches])
+    batches_by_plan = {}
+    for batch in batches:
+        batches_by_plan.setdefault(batch["plan_id"], []).append(batch)
+
+    geozone_id_by_plan = DataDeploymentService.resolve_plan_geozone_ids(plans, runs)
+    geozone_ids = [gid for gid in geozone_id_by_plan.values() if gid is not None]
+    geozones = {
+        row["id"]: row
+        for row in GeoZone.objects.filter(id__in=geozone_ids).values(
+            "id", "name", "geo_zone_type"
+        )
+    }
+    dept_codes = _department_code_by_geozone(geozone_ids)
+    dept_names = dict(
+        GeoDepartment.objects.filter(
+            insee_code__in=set(dept_codes.values())
+        ).values_list("insee_code", "name")
+    )
+
+    zae_by_dept = {}
+    for zae in DetectionsSchemaService.get_zae_layers(
+        list({code for code in dept_codes.values() if code})
+    ):
+        zae_by_dept.setdefault(zae["department_code"], []).append(zae)
+    deployed_zae_layers = _deployed_zae_layers(
+        [zae for zaes in zae_by_dept.values() for zae in zaes]
+    )
+
+    results = []
+    for plan in plans:
+        geozone_id = geozone_id_by_plan[plan["id"]]
+        geozone = geozones.get(geozone_id) or {}
+        dept_code = dept_codes.get(geozone_id)
+        plan_batches = [
+            _serialize_batch(batch, deployment_by_batch[batch["id"]])
+            for batch in batches_by_plan.get(plan["id"], [])
+        ]
+        results.append(
+            {
+                "uuid": str(plan["id"]),
+                "id": plan["id"],
+                "created_at": plan["created_at"],
+                "geozone_code": plan["geozone_insee_code"],
+                "status": plan["plan_status"],
+                "mode": plan["plan_mode"],
+                "type": plan["plan_type"],
+                "geozone_id": geozone_id,
+                "geozone_name": geozone.get("name"),
+                "geozone_type": geozone.get("geo_zone_type"),
+                "department_code": dept_code,
+                "department_name": dept_names.get(dept_code),
+                "runs": [
+                    _serialize_plan_run(run) for run in runs_by_plan.get(plan["id"], [])
+                ],
+                "batches": plan_batches,
+                "zae_layers": [
+                    _serialize_zae(zae, deployed_zae_layers)
+                    for zae in zae_by_dept.get(dept_code, [])
+                ],
+                "deploy_status": _plan_deploy_status(
+                    batch["deploy_status"] for batch in plan_batches
+                ),
+            }
+        )
+
+    return _paginated(count, results)
 
 
 @api_view(["GET"])
@@ -366,6 +481,25 @@ def run_zae_endpoint(request, geozone_id, zae_id):
         result = DataDeploymentService.run_zae_deployment(
             geozone_id=geozone_id,
             zae_id=zae_id,
+            override_custom_zones=_parse_bool(
+                request.data.get("override_custom_zones")
+            ),
+        )
+    except (ValueError, BadRequest) as error:
+        return Response({"detail": str(error)}, status=400)
+    return Response(result)
+
+
+@api_view(["POST"])
+@permission_classes([SuperAdminRolePermission])
+def run_plan_endpoint(request, plan_id):
+    """Deploy a plan onto its geozone: like run_endpoint, with the batches of the plan's
+    runs only. Same optional body (`batchIds`, `zaeLayerIds`, `overrideCustomZones`)."""
+    try:
+        result = DataDeploymentService.run_plan_deployment(
+            plan_id=plan_id,
+            batch_ids=_parse_id_list(request.data.get("batch_ids")),
+            zae_layer_ids=_parse_id_list(request.data.get("zae_layer_ids")),
             override_custom_zones=_parse_bool(
                 request.data.get("override_custom_zones")
             ),
