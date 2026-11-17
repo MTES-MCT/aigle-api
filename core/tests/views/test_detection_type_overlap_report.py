@@ -162,3 +162,58 @@ class DetectionTypeOverlapReportViewSetTests(BaseAPITestCase):
         self.authenticate_user(self.super_admin)
         response = self.client.delete(self._detail_url(self.herault_report.uuid))
         self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def _names(self, **params):
+        response = self._list(**params)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return [result["geoZone"]["name"] for result in response.json()["results"]]
+
+    def _set_counts(self, report, detections, overlapping, prescribable):
+        report.detections_count = detections
+        report.overlapping_count = overlapping
+        report.overlapping_prescribable_count = prescribable
+        report.save()
+
+    def test_ordering_by_rates(self):
+        aude = GeoDepartment.objects.create(
+            name="Aude",
+            insee_code="11",
+            surface_km2=1,
+            region=self.herault.region,
+        )
+        self._set_counts(self.herault_report, 1000, 100, 10)  # 10 %, 1 %
+        self._set_counts(self.gard_report, 100, 5, 5)  # 5 %, 5 %
+        # no detection: rates sort as 0, not NULL first
+        self._set_counts(self._report(aude, days_ago=2), 0, 0, 0)
+        self.authenticate_user(self.super_admin)
+
+        self.assertEqual(
+            self._names(ordering="-overlappingRate"), ["Hérault", "Gard", "Aude"]
+        )
+        self.assertEqual(
+            self._names(ordering="overlappingRate"), ["Aude", "Gard", "Hérault"]
+        )
+        self.assertEqual(
+            self._names(ordering="-overlappingPrescribableRate"),
+            ["Gard", "Hérault", "Aude"],
+        )
+        self.assertEqual(
+            self._names(ordering="-detectionsCount"), ["Hérault", "Gard", "Aude"]
+        )
+
+    def test_ordering_by_year_and_name(self):
+        newer = create_tile_set(name="Gard (30) 2025", date=datetime.date(2025, 1, 1))
+        self.gard_report.tile_sets.add(newer)
+        self.authenticate_user(self.super_admin)
+
+        self.assertEqual(self._names(ordering="-year"), ["Gard", "Hérault"])
+        self.assertEqual(self._names(ordering="year"), ["Hérault", "Gard"])
+        self.assertEqual(self._names(ordering="geoZoneName"), ["Gard", "Hérault"])
+        self.assertEqual(self._names(ordering="-geoZoneName"), ["Hérault", "Gard"])
+
+    def test_ordering_empty_or_invalid(self):
+        self.authenticate_user(self.super_admin)
+        # the admin table sends an empty ordering when no column is sorted
+        self.assertEqual(self._names(ordering=""), ["Gard", "Hérault"])
+        response = self._list(ordering="uuid")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
