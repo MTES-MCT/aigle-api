@@ -65,13 +65,21 @@ def _queue_detection_imports(
     ]
 
 
+def _queue_overlap_report(geo_zone: GeoZone) -> Dict[str, str]:
+    """Queued after the imports it reads: the detections (merged, linked to their zones
+    à enjeux, tile set made visible by import_detections) and the zones à enjeux."""
+    return _run_command(
+        "compute_detection_type_overlaps", {"--geozone-uuid": str(geo_zone.uuid)}
+    )
+
+
 class DataDeploymentService:
     """Deploys a geozone's detections-schema data into the app.
 
     Two steps run inline (TileSets + UserGroup); the heavy imports are queued on
     the `sequential_commands` Celery queue, which has concurrency 1, so they run
     strictly in enqueue order — custom zones, tiles, parcels, detections (one per
-    batch), then sitadel.
+    batch), the detection type overlap report, then sitadel.
     """
 
     @staticmethod
@@ -251,8 +259,8 @@ class DataDeploymentService:
     def run_batch_deployment(geozone_id: int, batch_id: int) -> Dict[str, Any]:
         """Deploy a single batch (a new imagery millesime) onto an already-deployed
         geozone: create the batch's TileSet, (re)create the geozone's tiles, queue its
-        detections import, then refresh sitadel for the department (building permits gain
-        new millesimes too). create_tile is idempotent, so re-running is safe. The other
+        detections import and the geozone's overlap report, then refresh sitadel for the
+        department (building permits gain new millesimes too). create_tile is idempotent, so re-running is safe. The other
         department-wide steps (custom zones, parcels, user group) are year-independent and
         already done by the initial geozone deploy."""
         geo_zone = GeoZone.objects.filter(id=geozone_id).first()
@@ -313,6 +321,7 @@ class DataDeploymentService:
             _run_command("create_tile", {"--geozone-uuid": str(geo_zone.uuid)})
         ]
         queued_commands += _queue_detection_imports(batch_tile_sets)
+        queued_commands.append(_queue_overlap_report(geo_zone))
         # --persist-data is mandatory: without it import_sitadel is a dry run.
         queued_commands.append(
             _run_command(
@@ -332,8 +341,9 @@ class DataDeploymentService:
         geozone_id: int, zae_id: int, override_custom_zones: bool = False
     ) -> Dict[str, Any]:
         """Deploy a single zae layer (zone à enjeux) for an already-deployed geozone:
-        import just that source row as a GeoCustomZone (import_custom_zones --ids). The
-        command resolves the department itself from the row's department_code.
+        import just that source row as a GeoCustomZone (import_custom_zones --ids), then
+        recompute the geozone's overlap report, whose zones à enjeux figures it changes.
+        The command resolves the department itself from the row's department_code.
 
         override_custom_zones replaces the custom zone the layer conflicts with (same
         source row, or same department/category pair) instead of failing the import's
@@ -362,7 +372,10 @@ class DataDeploymentService:
         return {
             "geozone_name": geo_zone.name,
             "zae_layer_name": zae["layer_name"],
-            "queued_commands": [_run_command("import_custom_zones", parameters)],
+            "queued_commands": [
+                _run_command("import_custom_zones", parameters),
+                _queue_overlap_report(geo_zone),
+            ],
         }
 
     @staticmethod
@@ -575,6 +588,7 @@ class DataDeploymentService:
             _run_command("import_parcels", {"--department-code": department_code})
         )
         queued += _queue_detection_imports(batch_tile_sets)
+        queued.append(_queue_overlap_report(geo_zone))
         # --persist-data is mandatory: without it import_sitadel is a dry run.
         queued.append(
             _run_command(

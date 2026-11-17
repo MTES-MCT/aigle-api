@@ -35,4 +35,9 @@ from .analytic_log import AnalyticLog
 
 from .command_run import CommandRun
 
+from .detection_type_overlap_report import (
+    DetectionTypeOverlapReport,
+    DetectionTypeOverlapReportObjectType,
+)
+
 from .user_action_log import UserActionLog, UserActionLogAction

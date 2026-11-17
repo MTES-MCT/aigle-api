@@ -747,7 +747,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
         data = response.json()
         self.assertEqual(data["tileSetsCreated"], ["Hérault (34) 2024"])
         self.assertEqual(data["userGroupName"], "Cabanisation Hérault (34)")
-        self.assertEqual(len(data["queuedCommands"]), 5)
+        self.assertEqual(len(data["queuedCommands"]), 6)
 
         # TileSet: one per batch, BACKGROUND, xyz, dated to src_image_year, zoom 15-19,
         # born DEACTIVATED so users don't see it until its import finishes
@@ -784,6 +784,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
                 "create_tile",
                 "import_parcels",
                 "import_detections",
+                "compute_detection_type_overlaps",
                 "import_sitadel",
             ],
         )
@@ -801,6 +802,10 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
                 # the tile set was created by this deploy, so its import reveals it
                 "--activate-tile-set": True,
             },
+        )
+        self.assertEqual(
+            params["compute_detection_type_overlaps"],
+            {"--geozone-uuid": str(self.department.uuid)},
         )
         self.assertEqual(
             params["import_sitadel"],
@@ -1246,6 +1251,7 @@ class DataDeploymentRunViewTests(BaseAPITestCase):
                 "--activate-tile-set",
             },
             "import_sitadel": {"--department-code", "--persist-data"},
+            "compute_detection_type_overlaps": {"--geozone-uuid"},
         }
         for command, flags in expected_flags.items():
             known = set(COMMANDS_AND_PARAMETERS_MAP[command])
@@ -1299,7 +1305,7 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["tileSetsCreated"], ["Hérault (34) 2025"])
-        self.assertEqual(len(data["queuedCommands"]), 3)
+        self.assertEqual(len(data["queuedCommands"]), 4)
 
         tile_set = TileSet.objects.get(name="Hérault (34) 2025")
         self.assertEqual(tile_set.tile_set_type, TileSetType.BACKGROUND)
@@ -1310,8 +1316,8 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
         # no user group is created/touched for a single-batch deploy
         self.assertFalse(UserGroup.objects.exists())
 
-        # tiles (idempotent), then the batch's detections, then a department-wide
-        # sitadel refresh (new permits)
+        # tiles (idempotent), then the batch's detections and the geozone's overlap
+        # report, then a department-wide sitadel refresh (new permits)
         calls = [
             (c.kwargs["command_name"], c.kwargs["parameters"])
             for c in run_command.call_args_list
@@ -1330,6 +1336,10 @@ class DataDeploymentBatchRunViewTests(BaseAPITestCase):
                         "--batch-id": str(batch_id),
                         "--activate-tile-set": True,
                     },
+                ),
+                (
+                    "compute_detection_type_overlaps",
+                    {"--geozone-uuid": str(self.department.uuid)},
                 ),
                 (
                     "import_sitadel",
@@ -1442,6 +1452,10 @@ class DataDeploymentBatchRunOnGeozoneViewTests(BaseAPITestCase):
                         "--activate-tile-set": True,
                     },
                 ),
+                (
+                    "compute_detection_type_overlaps",
+                    {"--geozone-uuid": str(self.commune.uuid)},
+                ),
                 ("import_sitadel", {"--department-code": "34", "--persist-data": True}),
             ],
         )
@@ -1552,13 +1566,23 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["zaeLayerName"], "ZFEE Hérault")
-        self.assertEqual(len(data["queuedCommands"]), 1)
+        self.assertEqual(len(data["queuedCommands"]), 2)
 
+        # its zones à enjeux figures change: the geozone's overlap report is recomputed
         calls = [
             (c.kwargs["command_name"], c.kwargs["parameters"])
             for c in run_command.call_args_list
         ]
-        self.assertEqual(calls, [("import_custom_zones", {"--ids": zae_id})])
+        self.assertEqual(
+            calls,
+            [
+                ("import_custom_zones", {"--ids": zae_id}),
+                (
+                    "compute_detection_type_overlaps",
+                    {"--geozone-uuid": str(self.department.uuid)},
+                ),
+            ],
+        )
 
     def test_zae_run_with_override_passes_the_flag(self):
         # the only way to redeploy an already-deployed layer: replace the custom zone
@@ -1575,7 +1599,7 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            run_command.call_args.kwargs["parameters"],
+            run_command.call_args_list[0].kwargs["parameters"],
             {"--ids": zae_id, "--override": True},
         )
 
@@ -1591,7 +1615,9 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(run_command.call_args.kwargs["parameters"], {"--ids": zae_id})
+        self.assertEqual(
+            run_command.call_args_list[0].kwargs["parameters"], {"--ids": zae_id}
+        )
 
     def test_zae_run_via_commune_resolves_parent_department(self):
         # the zae belongs to the parent department; deploying through the commune works
@@ -1601,7 +1627,9 @@ class DataDeploymentZaeRunViewTests(BaseAPITestCase):
         with patch(RUN_COMMAND_PATH, return_value="task-uuid") as run_command:
             response = self.client.post(self._url(self.commune.id, zae_id))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(run_command.call_args.kwargs["parameters"], {"--ids": zae_id})
+        self.assertEqual(
+            run_command.call_args_list[0].kwargs["parameters"], {"--ids": zae_id}
+        )
 
     def test_zae_run_layer_in_other_department_returns_400(self):
         # a zae of department 30 is out of scope for the Hérault (34) geozone
@@ -1822,10 +1850,15 @@ class DataDeploymentPlanRunViewTests(BaseAPITestCase):
                 "create_tile",
                 "import_parcels",
                 "import_detections",
+                "compute_detection_type_overlaps",
                 "import_sitadel",
             ],
         )
         self.assertEqual(dict(calls)["import_detections"]["--batch-id"], str(batch_id))
+        self.assertEqual(
+            dict(calls)["compute_detection_type_overlaps"],
+            {"--geozone-uuid": str(self.commune.uuid)},
+        )
 
     def test_batch_and_zae_selection(self):
         plan_id = _insert_plan("34172")

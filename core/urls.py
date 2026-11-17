@@ -2,6 +2,9 @@ from core.views.detection import DetectionGeoViewSet
 from core.views.detection.detection_list import DetectionListViewSet
 from core.views.detection_data import DetectionDataViewSet
 from core.views.detection_object import DetectionObjectViewSet
+from core.views.detection_type_overlap_report import (
+    DetectionTypeOverlapReportViewSet,
+)
 from core.views.external_api import (
     ExternalAPITestView,
     ExternalAPIUpdateControlStatusView,
@@ -79,6 +82,11 @@ router.register(
     "detection-object", DetectionObjectViewSet, basename="DetectionObjectViewSet"
 )
 router.register("detection-data", DetectionDataViewSet, basename="DetectionDataViewSet")
+router.register(
+    "detection-type-overlap-report",
+    DetectionTypeOverlapReportViewSet,
+    basename="DetectionTypeOverlapReportViewSet",
+)
 router.register("run-command", CommandAsyncViewSet, basename="CommandAsyncViewSet")
 router.register(
     "user-action-log", UserActionLogViewSet, basename="UserActionLogViewSet"
