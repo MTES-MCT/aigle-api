@@ -1099,7 +1099,7 @@ class ControlPlanEligibleCountTests(ControlPlanTestCase):
 
         self.assertEqual(response.status_code, 503)
 
-    def test_a_super_admin_count_is_not_logged(self):
+    def test_super_admin_plan_actions_are_not_logged(self):
         super_admin = create_user(
             email="plan-count-super@test.com", user_role=UserRole.SUPER_ADMIN
         )
@@ -1112,16 +1112,13 @@ class ControlPlanEligibleCountTests(ControlPlanTestCase):
             format="json",
             **scope,
         )
-
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.json()["eligibleParcelsCount"], 4)
+
+        response = self.client.post(f"{PLAN_URL}{self.plan['uuid']}/close/", **scope)
+        self.assertEqual(response.status_code, 200, response.content)
+
         self.assertFalse(UserActionLog.objects.exists())
-        # the plan writes still are
-        self.client.post(f"{PLAN_URL}{self.plan['uuid']}/close/", **scope)
-        self.assertEqual(
-            list(UserActionLog.objects.values_list("route", flat=True)),
-            [f"{PLAN_URL}{self.plan['uuid']}/close/"],
-        )
 
 
 class ControlPlanValidationTests(ControlPlanTestCase):

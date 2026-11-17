@@ -37,7 +37,6 @@ from core.services.control_plan import (
     ControlPlanWaveService,
 )
 from core.utils.permissions import ControlPlanFeaturePermission
-from core.utils.user_action_log import UserActionLogMixin
 
 
 class ControlPlanPagination(LimitOffsetPagination):
@@ -45,7 +44,7 @@ class ControlPlanPagination(LimitOffsetPagination):
     max_limit = 200
 
 
-class ControlPlanViewSetMixin(UserActionLogMixin, viewsets.GenericViewSet):
+class ControlPlanViewSetMixin(viewsets.GenericViewSet):
     """Plain GenericViewSet: the BaseViewSetMixin `/count/` route would skip the
     scoping of filter_queryset, and its default writes are not ours."""
 
@@ -95,12 +94,6 @@ class ControlPlanViewSet(ControlPlanViewSetMixin):
             self.control_plan_permission.plans()
             .select_related("user_group")
             .order_by("-start_date", "-created_at")
-        )
-
-    def _should_log_user_action(self, request, response) -> bool:
-        # a read, sent as a POST for its criteria body
-        return self.action != "eligible_count" and super()._should_log_user_action(
-            request, response
         )
 
     def list(self, request):
