@@ -11,6 +11,7 @@ from core.models.user import User, UserRole
 from core.utils.logs_helpers import log_command_event
 
 DEFAULT_INACTIVITY_DAYS = 365
+MIN_ACCOUNT_AGE_DAYS = 365
 HISTORY_CHANGE_REASON = "INACTIVITY"
 
 
@@ -24,13 +25,15 @@ class Command(CommandRunTrackerMixin, BaseCommand):
     `last_login` ne suffit pas : il n'est mis à jour qu'à l'obtention d'un JWT, et la
     rotation des refresh tokens garde un utilisateur assidu connecté sans jamais repasser
     par le login. La connexion retenue est donc aussi le log USER_ACCESS, écrit à chaque
-    chargement de l'app. Un compte créé dans la période n'est pas touché, et les
+    chargement de l'app. Un compte créé il y a moins d'un an (ou dans la période, si
+    elle est plus longue) n'est pas touché, même sans aucune connexion, et les
     SUPER_ADMIN sont exclus pour ne pas verrouiller l'équipe plateforme.
     """
 
     help = (
         "Désactive les utilisateurs sans connexion depuis --days jours "
-        f"({DEFAULT_INACTIVITY_DAYS} par défaut, SUPER_ADMIN exclus)"
+        f"({DEFAULT_INACTIVITY_DAYS} par défaut, SUPER_ADMIN et comptes de moins "
+        "d'un an exclus)"
     )
 
     def add_arguments(self, parser):
@@ -53,8 +56,10 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         if days < 1:
             raise CommandError("--days doit être supérieur ou égal à 1")
 
-        cutoff = timezone.now() - timedelta(days=days)
-        users = list(get_inactive_users(cutoff))
+        now = timezone.now()
+        cutoff = now - timedelta(days=days)
+        created_before = min(cutoff, now - timedelta(days=MIN_ACCOUNT_AGE_DAYS))
+        users = list(get_inactive_users(cutoff, created_before))
 
         prefix = "[dry-run] " if dry_run else ""
         for user in users:
@@ -72,7 +77,7 @@ class Command(CommandRunTrackerMixin, BaseCommand):
         )
 
 
-def get_inactive_users(cutoff):
+def get_inactive_users(cutoff, created_before):
     recent_access = AnalyticLog.objects.filter(
         user=OuterRef("pk"),
         analytic_log_type=AnalyticLogType.USER_ACCESS,
@@ -80,7 +85,7 @@ def get_inactive_users(cutoff):
     )
 
     return (
-        User.objects.filter(deleted=False, created_at__lt=cutoff)
+        User.objects.filter(deleted=False, created_at__lt=created_before)
         .exclude(user_role__in=[UserRole.DEACTIVATED, UserRole.SUPER_ADMIN])
         .filter(Q(last_login__isnull=True) | Q(last_login__lt=cutoff))
         .exclude(Exists(recent_access))

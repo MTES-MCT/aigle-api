@@ -10,11 +10,11 @@ from core.tests.base import BaseTestCase
 from core.tests.fixtures.users import create_super_admin, create_user
 
 
-def create_old_user(email, last_login=None, **kwargs):
+def create_old_user(email, last_login=None, age_days=800, **kwargs):
     user = create_user(email=email, **kwargs)
     # created_at is auto_now_add: backdate through a queryset update.
     User.objects.filter(pk=user.pk).update(
-        created_at=timezone.now() - timedelta(days=800), last_login=last_login
+        created_at=timezone.now() - timedelta(days=age_days), last_login=last_login
     )
     return user
 
@@ -71,9 +71,23 @@ class DeactivateInactiveUsersCommandTests(BaseTestCase):
         self.assertEqual(role(user), UserRole.REGULAR)
 
     def test_keeps_account_created_within_the_period(self):
-        user = create_user(email="new@test.com")
+        user = create_old_user("new@test.com", age_days=7)
 
         call_command("deactivate_inactive_users")
+
+        self.assertEqual(role(user), UserRole.REGULAR)
+
+    def test_keeps_account_under_a_year_old_with_a_shorter_period(self):
+        user = create_old_user("recent@test.com", age_days=180)
+
+        call_command("deactivate_inactive_users", days=30)
+
+        self.assertEqual(role(user), UserRole.REGULAR)
+
+    def test_keeps_account_created_within_a_longer_period(self):
+        user = create_old_user("year@test.com", age_days=400)
+
+        call_command("deactivate_inactive_users", days=500)
 
         self.assertEqual(role(user), UserRole.REGULAR)
 
