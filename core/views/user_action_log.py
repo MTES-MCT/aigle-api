@@ -28,4 +28,6 @@ class UserActionLogViewSet(ReadOnlyModelViewSet):
     def get_serializer_context(self):
         return {"request": self.request}
 
-    queryset = UserActionLog.objects.select_related("user").order_by("-created_at")
+    queryset = UserActionLog.objects.select_related("user").order_by(
+        "-created_at", "-id"
+    )

@@ -94,7 +94,7 @@ class CommandAsyncService:
         statuses: Optional[List[str]] = None,
         q: Optional[str] = None,
     ) -> Tuple[List[CommandRun], int]:
-        queryset = CommandRun.objects.all().order_by("-created_at")
+        queryset = CommandRun.objects.all().order_by("-created_at", "-id")
 
         if statuses:
             queryset = queryset.filter(status__in=statuses)

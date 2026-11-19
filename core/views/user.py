@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.db.models import Prefetch
-from django_filters import CharFilter, FilterSet, OrderingFilter
+from django_filters import CharFilter, FilterSet
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -32,7 +32,7 @@ from core.utils.bulk_csv import (
     parse_csv,
     write_csv,
 )
-from core.utils.filters import ChoiceInFilter, UuidInFilter
+from core.utils.filters import ChoiceInFilter, StableOrderingFilter, UuidInFilter
 from core.utils.permissions import (
     MODIFY_ACTIONS,
     READ_ACTIONS,
@@ -61,7 +61,7 @@ class UserFilter(FilterSet):
     user_group_uuids = UuidInFilter(
         field_name="user_user_groups__user_group__uuid", distinct=True
     )
-    ordering = OrderingFilter(fields=("email", "created_at", "updated_at"))
+    ordering = StableOrderingFilter(fields=("email", "created_at", "updated_at"))
 
     class Meta:
         model = UserModel

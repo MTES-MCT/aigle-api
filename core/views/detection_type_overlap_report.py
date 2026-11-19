@@ -1,6 +1,6 @@
 from django.db.models import F, FloatField, OuterRef, Prefetch, Subquery, Value
 from django.db.models.functions import Cast, Greatest
-from django_filters import CharFilter, FilterSet, OrderingFilter, UUIDFilter
+from django_filters import CharFilter, FilterSet, UUIDFilter
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from core.models.detection_type_overlap_report import (
@@ -11,6 +11,7 @@ from core.models.tile_set import TileSet
 from core.serializers.detection_type_overlap_report import (
     DetectionTypeOverlapReportSerializer,
 )
+from core.utils.filters import StableOrderingFilter
 from core.utils.permissions import SuperAdminRolePermission
 from core.utils.string import normalize
 
@@ -18,13 +19,6 @@ from core.utils.string import normalize
 def overlap_rate(count_field: str):
     # 0 detections gives 0 rather than NULL, which a descending sort would put first
     return Cast(count_field, FloatField()) / Greatest(F("detections_count"), Value(1))
-
-
-class StableOrderingFilter(OrderingFilter):
-    def filter(self, qs, value):
-        qs = super().filter(qs, value)
-        # equal values (many 0 % rates) must not swap rows between pages
-        return qs.order_by(*qs.query.order_by, "id") if value else qs
 
 
 class DetectionTypeOverlapReportFilter(FilterSet):

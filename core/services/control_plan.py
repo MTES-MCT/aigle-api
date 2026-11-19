@@ -1062,7 +1062,7 @@ class ControlPlanParcelService:
             proposed, waiting = _split_proposals(draft, queryset)
             return (
                 proposed if section == ControlPlanParcelSection.PROPOSED else waiting
-            ).order_by("rank")
+            ).order_by("rank", "id")
 
         if section == ControlPlanParcelSection.PLANNED:
             queryset = queryset.filter(
@@ -1074,10 +1074,11 @@ class ControlPlanParcelService:
                 queryset = queryset.filter(has_to_control=False, has_controlled=True)
             elif follow_up_status == ControlPlanFollowUpStatus.RELEASED:
                 queryset = queryset.filter(has_to_control=False, has_controlled=False)
-            return queryset.order_by("wave__number", "rank")
+            return queryset.order_by("wave__number", "rank", "id")
 
+        # ranks restart with each wave and a bulk exclusion shares one timestamp
         return queryset.filter(control_plan_parcel_status=section).order_by(
-            "-status_changed_at", "rank"
+            "-status_changed_at", "rank", "id"
         )
 
     @staticmethod

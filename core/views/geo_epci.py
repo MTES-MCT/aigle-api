@@ -74,7 +74,7 @@ class GeoEpciFilter(FilterSet):
                 Q(name_normalized__icontains=value_normalized)
                 | Q(siren_code__icontains=value_normalized)
             )
-            .order_by("-match_score", Length("name"))
+            .order_by("-match_score", Length("name"), "name", "id")
             .distinct()
         )
 
@@ -91,4 +91,4 @@ class GeoEpciViewSet(BaseViewSetMixin[GeoEpci]):
 
     def get_queryset(self):
         # Ordered by name, not by code: a SIREN number carries no meaning for a reader.
-        return GeoEpci.objects.order_by("name")
+        return GeoEpci.objects.order_by("name", "siren_code")

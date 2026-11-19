@@ -70,7 +70,7 @@ class GeoDepartmentFilter(FilterSet):
                 Q(name_normalized__icontains=value_normalized)
                 | Q(insee_code__icontains=value_normalized)
             )
-            .order_by("-match_score", Length("name"))
+            .order_by("-match_score", Length("name"), "name", "id")
             .distinct()
         )
 

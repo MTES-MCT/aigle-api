@@ -10,6 +10,8 @@ TILE_SETS_ORDER_BYS = [
         When(tile_set_type=TileSetType.BACKGROUND, then=Value(2)),
     ),
     "-date",
+    # unique: tile sets of one type and year (department mosaics) would swap between pages
+    "name",
 ]
 
 GEO_CUSTOM_ZONES_ORDER_BYS = [
@@ -18,4 +20,6 @@ GEO_CUSTOM_ZONES_ORDER_BYS = [
         When(geo_custom_zone_status=GeoCustomZoneStatus.INACTIVE, then=Value(1)),
     ),
     "name",
+    # a zone name is not unique
+    "id",
 ]

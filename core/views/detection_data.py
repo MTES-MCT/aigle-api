@@ -19,7 +19,7 @@ class DetectionDataViewSet(BaseViewSetMixin[DetectionData]):
         return DetectionDataSerializer
 
     def get_queryset(self):
-        queryset = DetectionData.objects.order_by("-user_last_update")
+        queryset = DetectionData.objects.order_by("-user_last_update", "-id")
 
         # Le queryset n'était pas borné : statuts de contrôle, dates de PV et références
         # d'autorisation de n'importe quelle détection étaient lisibles par tout compte

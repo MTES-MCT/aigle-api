@@ -135,10 +135,11 @@ class ParcelFilterService:
         )
 
     def _apply_ordering(self, queryset: QuerySet, ordering: Optional[str]) -> QuerySet:
-        if not ordering:
-            return queryset
+        order_bys = []
 
-        if "parcel" in ordering:
+        if not ordering:
+            pass
+        elif "parcel" in ordering:
             distincts = ["section", "num_parcel"]
 
             if ordering.startswith("-"):
@@ -151,7 +152,6 @@ class ParcelFilterService:
                 order_bys = ["-detections_count"]
             else:
                 order_bys = ["detections_count"]
-        else:
-            return queryset
 
-        return queryset.order_by(*order_bys)
+        # always ordered, on a unique key last: the list is paginated with limit/offset
+        return queryset.order_by(*order_bys, "id")

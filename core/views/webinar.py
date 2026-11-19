@@ -32,5 +32,5 @@ class WebinarViewSet(UserActionLogMixin, BaseViewSetMixin[Webinar]):
 
     def get_queryset(self):
         return Webinar.objects.filter(deleted=False).order_by(
-            "-date", "-start_time", "-created_at"
+            "-date", "-start_time", "-created_at", "-id"
         )

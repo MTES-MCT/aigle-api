@@ -1,3 +1,4 @@
+import datetime
 import uuid
 
 from django.urls import reverse
@@ -26,6 +27,24 @@ class TileSetViewSetTests(BaseAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsInstance(response.data, list)
         self.assertGreaterEqual(len(response.data), 2)
+
+    def test_list_pages_tile_sets_of_same_type_and_date_once(self):
+        # inserted out of name order: only the name tiebreaker gives a stable order
+        for name in ["Mosaïque C", "Mosaïque A", "Mosaïque B"]:
+            create_tile_set(name=name, date=datetime.date(2024, 1, 1))
+        self.authenticate_user(self.super_admin)
+        url = reverse("TileSetViewSet-list")
+
+        names = []
+        for offset in range(3):
+            response = self.client.get(
+                url, {"q": "Mosaïque", "limit": 1, "offset": offset}
+            )
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.data["count"], 3)
+            names += [tile_set["name"] for tile_set in response.data["results"]]
+
+        self.assertEqual(names, ["Mosaïque A", "Mosaïque B", "Mosaïque C"])
 
     def test_list_unauthenticated(self):
         url = reverse("TileSetViewSet-list")
