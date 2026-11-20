@@ -162,15 +162,21 @@ class ControlPlanTestCase(BaseAPITestCase):
             **overrides,
         }
 
-    def create_plan(self, user=None, user_group=None):
+    def create_plan(
+        self,
+        user=None,
+        user_group=None,
+        name="Plan de contrôle 2026",
+        end_date="2026-12-31",
+    ):
         self.authenticate_user(user or self.writer)
         response = self.client.post(
             PLAN_URL,
             {
                 "userGroupUuid": str((user_group or self.group).uuid),
-                "name": "Plan de contrôle 2026",
+                "name": name,
                 "startDate": "2026-01-01",
-                "endDate": "2026-12-31",
+                **({"endDate": end_date} if end_date else {}),
             },
             format="json",
         )
@@ -199,8 +205,10 @@ class ControlPlanTestCase(BaseAPITestCase):
     def proposed_parcel_ids(self, plan_uuid, section="PROPOSED"):
         return [row["idParcellaire"] for row in self.section(plan_uuid, section)]
 
-    def plan_and_validate(self, parcels_count=10, **criteria):
-        plan = self.create_plan()
+    def plan_and_validate(
+        self, parcels_count=10, name="Plan de contrôle 2026", **criteria
+    ):
+        plan = self.create_plan(name=name)
         wave = self.create_wave(plan["uuid"], parcels_count=parcels_count, **criteria)
         self.assertEqual(wave.status_code, 201, wave.content)
         response = self.client.post(f"{WAVE_URL}{wave.json()['uuid']}/validate/")

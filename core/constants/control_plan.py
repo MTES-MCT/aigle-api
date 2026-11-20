@@ -53,6 +53,7 @@ class ControlPlanRankingCriterion(models.TextChoices):
     NEW_OBJECTS_COUNT = "NEW_OBJECTS_COUNT", "NEW_OBJECTS_COUNT"
     OBJECT_TYPE_PRIORITY = "OBJECT_TYPE_PRIORITY", "OBJECT_TYPE_PRIORITY"
     SMALL_PARCELS = "SMALL_PARCELS", "SMALL_PARCELS"
+    PRESCRIPTION_SOON = "PRESCRIPTION_SOON", "PRESCRIPTION_SOON"
 
 
 DEFAULT_RANKING_CRITERIA = [
@@ -63,6 +64,12 @@ DEFAULT_RANKING_CRITERIA = [
 # « Petites parcelles » ranks by size class (m², upper bounds), not by the exact area: two
 # parcels rarely share one, so an exact area would leave nothing for the next criteria.
 PARCEL_AREA_CLASSES = [1000, 2500, 5000, 10000]
+
+# « Prescription proche »: an object's construction is dated from the first millésime it
+# shows on (the latest it can have been built: its prescription may come earlier), and
+# only when an older millésime saw the place without it. Ranked first: those whose
+# prescription falls within this many years from today.
+PRESCRIPTION_SOON_YEARS = 2
 
 
 class ControlPlanFollowUpStatus(models.TextChoices):

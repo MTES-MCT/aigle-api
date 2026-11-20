@@ -11,6 +11,7 @@ from core.repository.base import NumberRepoFilter, RepoFilterLookup
 from core.repository.detection import RepoFilterCustomZone, RepoFilterInterfaceDrawn
 from core.repository.parcel import DetectionFilter, ParcelRepository
 from core.services.control_plan_filter import (
+    CONTROL_PLAN_UUID_PARAM,
     control_plan_q,
     is_control_plan_filter_requested,
 )
@@ -89,6 +90,7 @@ class ParcelFilterService:
             scoped_user_group=self.scoped_user_group,
             detection_object_prefix="detection_objects__",
             detection_prefix="detection_objects__detections__",
+            control_plan_uuid=filter_params.get(CONTROL_PLAN_UUID_PARAM),
         )
         if control_plan_filter is None:
             return additional_filter

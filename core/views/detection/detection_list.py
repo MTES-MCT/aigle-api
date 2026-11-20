@@ -39,6 +39,7 @@ from core.repository.detection import (
 )
 from core.repository.tile_set import DEFAULT_VALUES
 from core.services.control_plan_filter import (
+    CONTROL_PLAN_UUID_PARAM,
     control_plan_q,
     is_control_plan_filter_requested,
 )
@@ -316,6 +317,7 @@ class DetectionListFilter(FilterSet):
                 scoped_user_group=user_permission.scoped_user_group,
                 detection_object_prefix="detection_object__",
                 detection_prefix="",
+                control_plan_uuid=self.data.get(CONTROL_PLAN_UUID_PARAM),
             )
             if control_plan_filter is not None:
                 queryset = queryset.filter(control_plan_filter)

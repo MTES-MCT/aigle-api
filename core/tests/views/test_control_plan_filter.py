@@ -1,5 +1,6 @@
 """`controlPlan=true` on the map, the detection list and the parcel table: the parcels of
-the plan, plus the objects set « À contrôler » outside it."""
+the plans, plus the objects set « À contrôler » outside them; `controlPlanUuid` keeps the
+parcels of one plan."""
 
 from core.models.detection import DetectionSource
 from core.models.detection_data import DetectionControlStatus
@@ -155,3 +156,65 @@ class ControlPlanFilterTests(ControlPlanTestCase):
             self._detection_uuids("/api/detection-list/", controlPlan="true"),
             self._detection_uuids("/api/detection-list/"),
         )
+
+    def test_one_plan_only(self):
+        self.authenticate_user(self.writer)
+        # the only pool no plan holds yet
+        other_parcel = self.make_parcel()
+        _, (other_planned,) = self.make_object(other_parcel, object_type=self.piscine)
+        other_plan, _ = self.plan_and_validate(
+            name="Coup de poing", objectTypesUuids=[str(self.piscine.uuid)]
+        )
+
+        self.assertEqual(
+            self._detection_uuids(
+                "/api/detection-list/",
+                controlPlan="true",
+                controlPlanUuid=self.plan["uuid"],
+            ),
+            self._uuids(self.planned, self.planned_neighbour),
+        )
+        self.assertEqual(
+            self._detection_uuids(
+                "/api/detection-list/",
+                controlPlan="true",
+                controlPlanUuid=other_plan["uuid"],
+            ),
+            self._uuids(other_planned),
+        )
+        # without it, every plan of the group and the objects to control outside them
+        self.assertEqual(
+            self._detection_uuids("/api/detection-list/", controlPlan="true"),
+            self._uuids(
+                self.planned, self.planned_neighbour, other_planned, self.by_hand
+            ),
+        )
+
+        response = self.client.get(
+            "/api/parcel/overview/",
+            {
+                **self.params,
+                "controlPlan": "true",
+                "controlPlanUuid": self.plan["uuid"],
+            },
+        )
+        self.assertEqual(response.data["total"], 1)
+
+    def test_a_closed_unknown_or_malformed_plan_shows_nothing(self):
+        self.authenticate_user(self.writer)
+        closed_plan, _ = self.plan_and_validate(name="Clos")
+        self.client.post(f"{PLAN_URL}{closed_plan['uuid']}/close/")
+
+        for plan_uuid in (
+            closed_plan["uuid"],
+            "00000000-0000-0000-0000-000000000000",
+            "pas-un-uuid",
+        ):
+            self.assertEqual(
+                self._detection_uuids(
+                    "/api/detection-list/",
+                    controlPlan="true",
+                    controlPlanUuid=plan_uuid,
+                ),
+                set(),
+            )

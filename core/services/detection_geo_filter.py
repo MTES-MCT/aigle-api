@@ -12,6 +12,7 @@ from core.repository.detection import (
     RepoFilterInterfaceDrawn,
 )
 from core.services.control_plan_filter import (
+    CONTROL_PLAN_UUID_PARAM,
     control_plan_q,
     is_control_plan_filter_requested,
 )
@@ -40,6 +41,7 @@ class DetectionGeoFilterService:
             scoped_user_group=self.scoped_user_group,
             detection_object_prefix="detection_object__",
             detection_prefix="",
+            control_plan_uuid=filter_params.get(CONTROL_PLAN_UUID_PARAM),
         )
         if control_plan_filter is None:
             return queryset

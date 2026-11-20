@@ -18,14 +18,17 @@ class ControlPlanStatus(models.TextChoices):
 
 
 class ControlPlan(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
-    """The control plan of a user group over a period, shared by its members."""
+    """A control plan of a user group, shared by its members. A group may run several at
+    once (a yearly plan, a short operation, a zone under watch...); a parcel is planned
+    by one active plan of the group at a time."""
 
     name = models.CharField(max_length=DEFAULT_MAX_LENGTH)
     user_group = models.ForeignKey(
         UserGroup, related_name="control_plans", on_delete=models.CASCADE
     )
     start_date = models.DateField()
-    end_date = models.DateField()
+    # none for a follow-up with no end
+    end_date = models.DateField(null=True)
     control_plan_status = models.CharField(
         max_length=DEFAULT_MAX_LENGTH,
         choices=ControlPlanStatus.choices,
@@ -42,15 +45,9 @@ class ControlPlan(TimestampedModelMixin, UuidModelMixin, DeletableModelMixin):
     class Meta:
         indexes = UuidModelMixin.Meta.indexes + []
         constraints = [
-            models.UniqueConstraint(
-                fields=["user_group"],
-                condition=models.Q(
-                    control_plan_status=ControlPlanStatus.ACTIVE, deleted=False
-                ),
-                name="control_plan_one_active_per_group",
-            ),
             models.CheckConstraint(
-                check=models.Q(end_date__gte=models.F("start_date")),
+                check=models.Q(end_date__isnull=True)
+                | models.Q(end_date__gte=models.F("start_date")),
                 name="control_plan_end_after_start",
             ),
         ]

@@ -30,6 +30,7 @@ from core.serializers.control_plan import (
     ControlPlanWaveInputSerializer,
     ControlPlanWaveSerializer,
     ControlPlanWaveUpdateSerializer,
+    out_of_plan_detection_objects,
 )
 from core.services.control_plan import (
     ControlPlanParcelService,
@@ -127,7 +128,7 @@ class ControlPlanViewSet(ControlPlanViewSetMixin):
             user_group=user_group,
             name=data["name"],
             start_date=data["start_date"],
-            end_date=data["end_date"],
+            end_date=data.get("end_date"),
             user=request.user,
         )
 
@@ -223,9 +224,21 @@ class ControlPlanViewSet(ControlPlanViewSetMixin):
 
         paginator = ControlPlanPagination()
         page = paginator.paginate_queryset(queryset, request, view=self)
+        origins = ControlPlanService.out_of_plan_origins(
+            control_plan,
+            {
+                parcel.id: [
+                    detection_object.id
+                    for detection_object in out_of_plan_detection_objects(parcel)
+                ]
+                for parcel in page
+            },
+        )
         return paginator.get_paginated_response(
             ControlPlanOutOfPlanParcelSerializer(
-                page, many=True, context=self.get_serializer_context()
+                page,
+                many=True,
+                context={**self.get_serializer_context(), "origins": origins},
             ).data
         )
 

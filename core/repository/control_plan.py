@@ -9,9 +9,10 @@ so an object can have two « last » detections there.
 """
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from django.db.models import Exists, OuterRef, Q, QuerySet
+from django.db.models import Exists, OuterRef, Q, QuerySet, Subquery
 
 from core.constants.control_plan import (
     CLOSED_VALIDATION_STATUSES,
@@ -25,6 +26,7 @@ from core.models.control_plan import (
     ControlPlanParcel,
     ControlPlanParcelObject,
     ControlPlanParcelStatus,
+    ControlPlanStatus,
 )
 from core.models.detection import Detection, DetectionSource
 from core.models.detection_authorization import DetectionAuthorization
@@ -35,7 +37,7 @@ from core.models.detection_data import (
 from core.models.detection_object import DetectionObject
 from core.models.geo_commune import GeoCommune
 from core.models.geo_zone import GeoZone
-from core.models.tile_set import TileSetStatus, TileSetType
+from core.models.tile_set import TileSet, TileSetStatus, TileSetType
 from core.models.user import User
 from core.models.user_group import UserGroup
 from core.permissions.user import communes_reachable_from
@@ -102,6 +104,49 @@ def is_new_object() -> Exists:
     return ~Exists(older)
 
 
+def first_seen_date() -> Subquery:
+    """On a detection: the date of the oldest tile set its object shows on."""
+    return Subquery(
+        Detection.objects.filter(
+            detection_object_id=OuterRef("detection_object_id"),
+            tile_set__tile_set_type__in=CURRENT_DETECTION_TILE_SET_TYPES,
+        )
+        .exclude(tile_set__tile_set_status__in=EXCLUDED_TILE_SET_STATUSES)
+        .order_by("tile_set__date")
+        .values("tile_set__date")[:1]
+    )
+
+
+def first_millesime_dates(commune_ids: Iterable[int]) -> Dict[int, date]:
+    """Per commune: the date of the oldest BACKGROUND tile set covering it that the
+    detection ran on (it holds detections). An object already on it may be far older:
+    when it was built is unknown."""
+    detected_tile_sets = (
+        TileSet.objects.filter(tile_set_type=TileSetType.BACKGROUND)
+        .exclude(tile_set_status__in=EXCLUDED_TILE_SET_STATUSES)
+        .filter(Exists(Detection.objects.filter(tile_set_id=OuterRef("pk"))))
+    )
+    zone_dates: Dict[int, date] = {}
+    for zone_id, tile_set_date in TileSet.geo_zones.through.objects.filter(
+        tileset_id__in=detected_tile_sets.values("id")
+    ).values_list("geozone_id", "tileset__date"):
+        if zone_id not in zone_dates or tile_set_date < zone_dates[zone_id]:
+            zone_dates[zone_id] = tile_set_date
+
+    dates = {}
+    for chunk in _chunks(commune_ids):
+        # a tile set may be attached to the commune or to any collectivity above it
+        for zone_ids in GeoCommune.objects.filter(id__in=chunk).values_list(
+            "id", "epci_id", "department_id", "department__region_id"
+        ):
+            found = [
+                zone_dates[zone_id] for zone_id in zone_ids if zone_id in zone_dates
+            ]
+            if found:
+                dates[zone_ids[0]] = min(found)
+    return dates
+
+
 def territory_communes(user_group: UserGroup) -> QuerySet[GeoCommune]:
     return communes_reachable_from(GeoZone.objects.filter(user_groups=user_group))
 
@@ -166,17 +211,28 @@ def exclude_prescribed(queryset: QuerySet) -> QuerySet:
 def parcels_taken_by_plan(
     control_plan: ControlPlan, ranked_draft_id: Optional[int] = None
 ) -> QuerySet:
-    """Parcels a new computation must skip: planned, excluded or removed ones. The
+    """Parcels a new computation must skip: planned, excluded or removed ones, and those
+    another active plan of the group planned (a parcel follows one plan at a time). The
     exclusions of `ranked_draft_id` are ranked anyway, to keep their place in it."""
-    taken = ControlPlanParcel.objects.filter(
-        control_plan=control_plan, parcel_id__isnull=False
-    ).exclude(control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED)
+    own = ControlPlanParcel.objects.filter(control_plan=control_plan).exclude(
+        control_plan_parcel_status=ControlPlanParcelStatus.PROPOSED
+    )
     if ranked_draft_id is not None:
-        taken = taken.exclude(
+        own = own.exclude(
             wave_id=ranked_draft_id,
             control_plan_parcel_status=ControlPlanParcelStatus.EXCLUDED,
         )
-    return taken.values("parcel_id")
+    other_plans = ControlPlanParcel.objects.filter(
+        control_plan__user_group_id=control_plan.user_group_id,
+        control_plan__control_plan_status=ControlPlanStatus.ACTIVE,
+        control_plan__deleted=False,
+        control_plan_parcel_status=ControlPlanParcelStatus.PLANNED,
+    ).exclude(control_plan=control_plan)
+
+    return ControlPlanParcel.objects.filter(
+        Q(id__in=own.values("id")) | Q(id__in=other_plans.values("id")),
+        parcel_id__isnull=False,
+    ).values("parcel_id")
 
 
 def eligible_detections(

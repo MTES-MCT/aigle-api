@@ -7,10 +7,12 @@ import bisect
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Dict, List, Optional, Set, Tuple
 
+from dateutil.relativedelta import relativedelta
 from django.contrib.gis.geos import GeometryCollection
-from django.db import IntegrityError, OperationalError, connection, transaction
+from django.db import OperationalError, connection, transaction
 from django.db.models import Count, F, Max, Q, QuerySet
 from django.utils import timezone
 from rest_framework import status
@@ -22,6 +24,7 @@ from core.constants.control_plan import (
     DEFAULT_SCORE_MIN,
     MIN_WAITING_LIST_SIZE,
     PARCEL_AREA_CLASSES,
+    PRESCRIPTION_SOON_YEARS,
     PROPOSAL_STATEMENT_TIMEOUT_MS,
     ControlPlanFollowUpStatus,
     ControlPlanParcelSection,
@@ -59,6 +62,8 @@ from core.repository.control_plan import (
     current_detections,
     eligible_detections,
     exclude_prescribed,
+    first_millesime_dates,
+    first_seen_date,
     follow_up_annotations,
     in_zones,
     is_new_object,
@@ -88,6 +93,13 @@ DETECTION_DATA_SWITCHED_FIELDS = [
 CLOSED_PLAN_MESSAGE = "Ce plan de contrôle est clôturé"
 NOT_A_DRAFT_MESSAGE = "Cette vague a déjà été validée"
 DROPPED_DRAFT_MESSAGE = "Cette proposition a été abandonnée entre-temps"
+
+OUT_OF_PLAN_ORIGINS_ORDER = {
+    "PLAN": 0,
+    "CLOSED_PLAN": 1,
+    "OTHER_GROUP_PLAN": 2,
+    "NONE": 3,
+}
 
 
 class ProposalTimeout(APIException):
@@ -282,6 +294,8 @@ class _CandidateObject:
     detection_data_id: int
     validation_status: str
     is_new: bool
+    # within PRESCRIPTION_SOON_YEARS from today, only computed for that ranking criterion
+    prescription_date: Optional[date] = None
 
 
 @dataclass
@@ -289,6 +303,16 @@ class _ParcelCandidate:
     parcel_id: int
     objects: Dict[int, _CandidateObject] = field(default_factory=dict)
     zone_groups: Set[int] = field(default_factory=set)
+
+    @property
+    def prescription_date(self) -> Optional[date]:
+        """The nearest estimated prescription among its objects."""
+        dates = [
+            obj.prescription_date
+            for obj in self.objects.values()
+            if obj.prescription_date is not None
+        ]
+        return min(dates) if dates else None
 
     @property
     def new_objects_count(self) -> int:
@@ -319,7 +343,11 @@ def _collect_candidates(
         parcel_ids=parcel_ids,
         ranked_draft_id=ranked_draft_id,
     )
-    rows = detections.annotate(is_new=is_new_object()).values_list(
+    with_prescription = (
+        ControlPlanRankingCriterion.PRESCRIPTION_SOON in criteria.ranking_criteria
+    )
+    detections = detections.annotate(is_new=is_new_object())
+    fields = [
         "detection_object__parcel_id",
         "detection_object_id",
         "detection_object__uuid",
@@ -327,30 +355,48 @@ def _collect_candidates(
         "detection_data_id",
         "detection_data__detection_validation_status",
         "is_new",
-    )
+    ]
+    if with_prescription:
+        detections = detections.annotate(first_seen=first_seen_date())
+        fields += [
+            "detection_object__parcel__commune_id",
+            "detection_object__object_type__prescription_duration_years",
+            "first_seen",
+        ]
 
     candidates: Dict[int, _ParcelCandidate] = {}
-    for (
-        parcel_id,
-        object_id,
-        object_uuid,
-        object_type_id,
-        detection_data_id,
-        validation_status,
-        is_new,
-    ) in rows.iterator(chunk_size=5000):
-        candidates.setdefault(parcel_id, _ParcelCandidate(parcel_id)).objects[
-            object_id
-        ] = _CandidateObject(
+    # (object, commune, first seen, prescription duration) of the prescriptible objects
+    prescriptible = []
+    for row in detections.values_list(*fields).iterator(chunk_size=5000):
+        (
+            parcel_id,
+            object_id,
+            object_uuid,
+            object_type_id,
+            detection_data_id,
+            validation_status,
+            is_new,
+        ) = row[:7]
+        obj = _CandidateObject(
             uuid=str(object_uuid),
             object_type_id=object_type_id,
             detection_data_id=detection_data_id,
             validation_status=validation_status,
             is_new=is_new,
         )
+        candidates.setdefault(parcel_id, _ParcelCandidate(parcel_id)).objects[
+            object_id
+        ] = obj
+        if with_prescription:
+            commune_id, duration_years, first_seen = row[7:]
+            if duration_years and first_seen and commune_id:
+                prescriptible.append((obj, commune_id, first_seen, duration_years))
 
     if not candidates:
         return {}
+
+    if prescriptible:
+        _set_prescription_dates(prescriptible)
 
     group_by_zone = {
         zone_id: index
@@ -383,6 +429,24 @@ def _collect_candidates(
         if parcel_id not in excluded
         and len(candidate.objects) >= criteria.min_objects_count
     }
+
+
+def _set_prescription_dates(prescriptible) -> None:
+    """Built when first seen, at the latest: the prescription is estimated from there,
+    for the objects whose appearance was seen (an older millésime showed the place
+    without them). Kept when it falls within PRESCRIPTION_SOON_YEARS from today."""
+    today = timezone.localdate()
+    window_end = today + relativedelta(years=PRESCRIPTION_SOON_YEARS)
+    first_millesimes = first_millesime_dates(
+        {commune_id for _, commune_id, _, _ in prescriptible}
+    )
+    for obj, commune_id, first_seen, duration_years in prescriptible:
+        first_millesime = first_millesimes.get(commune_id)
+        if first_millesime is None or first_seen <= first_millesime:
+            continue
+        prescription_date = first_seen + relativedelta(years=duration_years)
+        if today <= prescription_date < window_end:
+            obj.prescription_date = prescription_date
 
 
 @dataclass
@@ -475,6 +539,14 @@ def _rank(
                 )
             elif criterion == ControlPlanRankingCriterion.SMALL_PARCELS:
                 values.append(bisect.bisect_right(PARCEL_AREA_CLASSES, info.contenance))
+            elif criterion == ControlPlanRankingCriterion.PRESCRIPTION_SOON:
+                # the nearest first, the parcels without one after
+                prescription_date = candidate.prescription_date
+                values.append(
+                    prescription_date.toordinal()
+                    if prescription_date
+                    else date.max.toordinal()
+                )
 
         # the cadastral order breaks the remaining ties, the id makes it total
         values.extend(
@@ -536,6 +608,11 @@ def _summary(
         "detection_object_uuids": [obj.uuid for obj in candidate.objects.values()][
             :MAX_DETECTION_OBJECT_UUIDS
         ],
+        "prescription_date": (
+            candidate.prescription_date.isoformat()
+            if candidate.prescription_date
+            else None
+        ),
     }
 
 
@@ -890,7 +967,12 @@ class ControlPlanWaveService:
         with transaction.atomic():
             wave = _lock_draft_wave(wave.pk)
             control_plan = wave.control_plan
-            user_group = control_plan.user_group
+            # Taken after the plan and the wave: the validations of the group's plans
+            # run one after the other, so two of them never plan the same parcel.
+            # no_key: rows referencing the group (a new member, a new plan) do not wait.
+            user_group = UserGroup.objects.select_for_update(no_key=True).get(
+                pk=control_plan.user_group_id
+            )
 
             proposed, _ = _split_proposals(wave)
             selected = list(
@@ -1431,28 +1513,13 @@ class ControlPlanService:
                 }
             )
 
-        conflict = Conflict(
-            "Ce groupe a déjà un plan de contrôle en cours : clôturez-le avant d'en créer un autre"
-        )
-        if ControlPlan.objects.filter(
+        return ControlPlan.objects.create(
             user_group=user_group,
-            control_plan_status=ControlPlanStatus.ACTIVE,
-            deleted=False,
-        ).exists():
-            raise conflict
-
-        try:
-            with transaction.atomic():
-                return ControlPlan.objects.create(
-                    user_group=user_group,
-                    name=name,
-                    start_date=start_date,
-                    end_date=end_date,
-                    created_by=user,
-                )
-        except IntegrityError:
-            # another member created one meanwhile
-            raise conflict
+            name=name,
+            start_date=start_date,
+            end_date=end_date,
+            created_by=user,
+        )
 
     @staticmethod
     def update(control_plan: ControlPlan, **fields) -> ControlPlan:
@@ -1465,8 +1532,8 @@ class ControlPlanService:
 
     @staticmethod
     def close(control_plan: ControlPlan, user: User) -> ControlPlan:
-        """Statuses are left as they are: what is still « À contrôler » shows outside the
-        next plan."""
+        """Statuses are left as they are: what is still « À contrôler » shows among the
+        other parcels to control of the group's plans."""
         with transaction.atomic():
             control_plan = _lock_active_plan(control_plan.pk)
             for draft in control_plan.waves.filter(
@@ -1540,12 +1607,15 @@ class ControlPlanService:
     @staticmethod
     def groups(permission: ControlPlanPermission) -> List[dict]:
         user_groups = list(permission.accessible_groups().order_by("name"))
-        active_plans = dict(
+        active_plans_counts = dict(
             ControlPlan.objects.filter(
                 user_group__in=user_groups,
                 control_plan_status=ControlPlanStatus.ACTIVE,
                 deleted=False,
-            ).values_list("user_group_id", "uuid")
+            )
+            .values("user_group_id")
+            .annotate(count=Count("id"))
+            .values_list("user_group_id", "count")
         )
 
         return [
@@ -1554,7 +1624,7 @@ class ControlPlanService:
                 "name": user_group.name,
                 "user_group_type": user_group.user_group_type,
                 "can_edit": permission.can_edit(user_group),
-                "active_control_plan_uuid": active_plans.get(user_group.id),
+                "active_control_plans_count": active_plans_counts.get(user_group.id, 0),
             }
             for user_group in user_groups
         ]
@@ -1688,8 +1758,9 @@ class ControlPlanService:
 
     @staticmethod
     def out_of_plan_parcels(user: User, control_plan: ControlPlan) -> QuerySet[Parcel]:
-        """Parcels of the territory holding an object « À contrôler » the plan did not set:
-        set by hand, by another group's plan, or left by a closed plan."""
+        """« Autres parcelles à contrôler »: parcels of the territory holding an object
+        « À contrôler » the plan did not set: by another plan of the group, open or
+        closed, by another group's plan, or without a plan (by hand, an import)."""
         from core.services.parcel_filter import ParcelFilterService
 
         user_group = control_plan.user_group
@@ -1730,3 +1801,59 @@ class ControlPlanService:
             .order_by("commune__name", "section", "num_parcel", "id")
             .distinct()
         )
+
+    @staticmethod
+    def out_of_plan_origins(
+        control_plan: ControlPlan, object_ids_by_parcel: Dict[int, List[int]]
+    ) -> Dict[int, List[dict]]:
+        """Where the objects « À contrôler » of each parcel come from, one entry per
+        origin: a plan of the group (open or closed), another group's plan, or none."""
+        object_ids = [
+            object_id for ids in object_ids_by_parcel.values() for object_id in ids
+        ]
+        # the plan that set an object: the last to have planned it (rows are created at
+        # validation) among those still holding it
+        plan_by_object = {}
+        for object_id, plan in (
+            (
+                plan_object.detection_object_id,
+                plan_object.control_plan_parcel.control_plan,
+            )
+            for plan_object in ControlPlanParcelObject.objects.filter(
+                detection_object_id__in=object_ids,
+                control_plan_parcel__control_plan_parcel_status=ControlPlanParcelStatus.PLANNED,
+                control_plan_parcel__control_plan__deleted=False,
+            )
+            .exclude(control_plan_parcel__control_plan=control_plan)
+            .select_related("control_plan_parcel__control_plan")
+            .order_by("id")
+        ):
+            plan_by_object[object_id] = plan
+
+        origins = {}
+        for parcel_id, ids in object_ids_by_parcel.items():
+            found = {}
+            for object_id in ids:
+                plan = plan_by_object.get(object_id)
+                if plan is None:
+                    found.setdefault("NONE", {"type": "NONE"})
+                elif plan.user_group_id != control_plan.user_group_id:
+                    found.setdefault("OTHER_GROUP", {"type": "OTHER_GROUP_PLAN"})
+                else:
+                    found.setdefault(
+                        plan.id,
+                        {
+                            "type": (
+                                "PLAN"
+                                if plan.control_plan_status == ControlPlanStatus.ACTIVE
+                                else "CLOSED_PLAN"
+                            ),
+                            "uuid": str(plan.uuid),
+                            "name": plan.name,
+                        },
+                    )
+            origins[parcel_id] = sorted(
+                found.values(),
+                key=lambda origin: OUT_OF_PLAN_ORIGINS_ORDER[origin["type"]],
+            )
+        return origins

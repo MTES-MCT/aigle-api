@@ -83,7 +83,7 @@ class ControlPlanAccessTests(ControlPlanTestCase):
                     "name": self.group.name,
                     "userGroupType": self.group.user_group_type,
                     "canEdit": True,
-                    "activeControlPlanUuid": None,
+                    "activeControlPlansCount": 0,
                 }
             ],
         )
@@ -159,21 +159,32 @@ class ControlPlanAccessTests(ControlPlanTestCase):
 
 
 class ControlPlanLifecycleTests(ControlPlanTestCase):
-    def test_one_active_plan_per_group(self):
-        self.create_plan()
+    def test_a_group_runs_several_plans(self):
+        self.create_plan(name="Plan annuel")
+        self.create_plan(name="Opération coup de poing")
 
-        response = self.client.post(
-            PLAN_URL,
-            {
-                "userGroupUuid": str(self.group.uuid),
-                "name": "Doublon",
-                "startDate": "2026-01-01",
-                "endDate": "2026-12-31",
-            },
-            format="json",
+        self.assertEqual(
+            sorted(plan["name"] for plan in self.client.get(PLAN_URL).json()),
+            ["Opération coup de poing", "Plan annuel"],
         )
+        (group,) = self.client.get(f"{PLAN_URL}groups/").json()
+        self.assertEqual(group["activeControlPlansCount"], 2)
 
-        self.assertEqual(response.status_code, 409)
+    def test_a_plan_without_an_end(self):
+        plan = self.create_plan(end_date=None)
+
+        self.assertIsNone(plan["endDate"])
+        self.assertFalse(plan["isExpired"])
+
+        response = self.client.patch(
+            f"{PLAN_URL}{plan['uuid']}/", {"endDate": "2026-06-30"}, format="json"
+        )
+        self.assertEqual(response.json()["endDate"], "2026-06-30")
+        response = self.client.patch(
+            f"{PLAN_URL}{plan['uuid']}/", {"endDate": None}, format="json"
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertIsNone(response.json()["endDate"])
 
     def test_the_period_must_end_after_it_starts(self):
         self.authenticate_user(self.writer)
@@ -191,7 +202,7 @@ class ControlPlanLifecycleTests(ControlPlanTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("endDate", response.json())
 
-    def test_closing_frees_the_group_for_a_new_plan(self):
+    def test_closing(self):
         plan = self.create_plan()
 
         response = self.client.post(f"{PLAN_URL}{plan['uuid']}/close/")
@@ -199,7 +210,6 @@ class ControlPlanLifecycleTests(ControlPlanTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["controlPlanStatus"], "CLOSED")
         self.assertFalse(response.json()["canEdit"])
-        self.create_plan()
 
     def test_an_expired_plan_says_so(self):
         plan = self.create_plan()
@@ -716,6 +726,255 @@ class ControlPlanRankingTests(ControlPlanTestCase):
         self.assertEqual(first["commune"]["name"], self.montpellier.name)
         self.assertIsNone(first["followUpStatus"])
         self.assertEqual(len(first["detectionObjectUuids"]), 1)
+
+
+class ControlPlanPrescriptionTests(ControlPlanTestCase):
+    """« Prescription proche »: built when first seen, at the latest, if an older
+    millésime saw the place without the object."""
+
+    def setUp(self):
+        super().setUp()
+        self.ts_2018 = create_tile_set(name="Hérault 2018", date=date(2018, 6, 1))
+        # older still, but the detection never ran on it: not a millésime that counts
+        self.ts_2015 = create_tile_set(name="Hérault 2015", date=date(2015, 6, 1))
+        for tile_set in (self.ts_2018, self.ts_2015):
+            tile_set.geo_zones.add(self.herault)
+
+        # seen in 2021, prescribed next year whatever the year the tests run
+        self.year = timezone.localdate().year
+        self.cabane.prescription_duration_years = self.year + 1 - 2021
+        self.cabane.save()
+
+        # appeared between 2018 and 2021
+        self.parcel_soon = self.make_parcel()
+        self.make_object(
+            self.parcel_soon,
+            detections=[{"tile_set": self.ts_2021}, {"tile_set": self.ts_2024}],
+        )
+        # already on the first millésime: built when, nobody knows
+        self.parcel_old = self.make_parcel()
+        for _ in range(2):
+            self.make_object(
+                self.parcel_old,
+                detections=[
+                    {"tile_set": self.ts_2018},
+                    {"tile_set": self.ts_2021},
+                    {"tile_set": self.ts_2024},
+                ],
+            )
+        # appeared in 2024: prescribed beyond the window
+        self.parcel_recent = self.make_parcel()
+        self.make_object(self.parcel_recent)
+        # no prescription for this type
+        self.parcel_pool = self.make_parcel()
+        self.make_object(
+            self.parcel_pool,
+            object_type=self.piscine,
+            detections=[{"tile_set": self.ts_2021}, {"tile_set": self.ts_2024}],
+        )
+
+    def _ranked(self, **criteria):
+        plan = self.create_plan()
+        response = self.create_wave(plan["uuid"], **criteria)
+        self.assertEqual(response.status_code, 201, response.content)
+        return {
+            row["idParcellaire"]: row for row in self.section(plan["uuid"], "PROPOSED")
+        }, [row["idParcellaire"] for row in self.section(plan["uuid"], "PROPOSED")]
+
+    def test_the_nearest_prescription_first(self):
+        rows, order = self._ranked(
+            rankingCriteria=["PRESCRIPTION_SOON", "OBJECTS_COUNT"]
+        )
+
+        self.assertEqual(
+            order[:2],
+            [self.parcel_soon.id_parcellaire, self.parcel_old.id_parcellaire],
+        )
+        self.assertEqual(
+            {parcel_id: row["prescriptionDate"] for parcel_id, row in rows.items()},
+            {
+                self.parcel_soon.id_parcellaire: f"{self.year + 1}-06-01",
+                self.parcel_old.id_parcellaire: None,
+                self.parcel_recent.id_parcellaire: None,
+                self.parcel_pool.id_parcellaire: None,
+            },
+        )
+
+    def test_not_estimated_without_the_criterion(self):
+        rows, _ = self._ranked(rankingCriteria=["OBJECTS_COUNT"])
+
+        self.assertIsNone(rows[self.parcel_soon.id_parcellaire]["prescriptionDate"])
+
+    def test_the_validation_keeps_the_estimate(self):
+        plan, _ = self.plan_and_validate(rankingCriteria=["PRESCRIPTION_SOON"])
+
+        rows = {
+            row["idParcellaire"]: row for row in self.section(plan["uuid"], "PLANNED")
+        }
+        self.assertEqual(
+            rows[self.parcel_soon.id_parcellaire]["prescriptionDate"],
+            f"{self.year + 1}-06-01",
+        )
+
+
+class ControlPlanSeveralPlansTests(ControlPlanTestCase):
+    """A group runs several plans; a parcel follows one active plan at a time."""
+
+    def setUp(self):
+        super().setUp()
+        self.shared_parcel = self.make_parcel()
+        self.make_object(self.shared_parcel)
+        self.make_object(self.shared_parcel, object_type=self.piscine)
+        self.pool_parcel = self.make_parcel()
+        self.make_object(self.pool_parcel, object_type=self.piscine)
+
+    def _pools_plan(self, name="Piscines"):
+        plan = self.create_plan(name=name)
+        response = self.create_wave(
+            plan["uuid"], objectTypesUuids=[str(self.piscine.uuid)]
+        )
+        self.assertEqual(response.status_code, 201, response.content)
+        return plan, response.json()
+
+    def test_a_parcel_planned_by_another_plan_of_the_group_is_not_proposed(self):
+        cabins_plan, _ = self.plan_and_validate(
+            name="Cabanes", objectTypesUuids=[str(self.cabane.uuid)]
+        )
+
+        pools_plan, wave = self._pools_plan()
+        self.assertEqual(
+            self.proposed_parcel_ids(pools_plan["uuid"]),
+            [self.pool_parcel.id_parcellaire],
+        )
+
+        # closed, the plan lets it go
+        self.client.post(f"{PLAN_URL}{cabins_plan['uuid']}/close/")
+        self.client.patch(
+            f"{WAVE_URL}{wave['uuid']}/", {"parcelsCount": 10}, format="json"
+        )
+        self.assertEqual(
+            sorted(self.proposed_parcel_ids(pools_plan["uuid"])),
+            sorted(
+                [self.shared_parcel.id_parcellaire, self.pool_parcel.id_parcellaire]
+            ),
+        )
+
+    def test_the_second_validation_skips_the_parcel_the_first_planned(self):
+        cabins_plan = self.create_plan(name="Cabanes")
+        cabins_wave = self.create_wave(
+            cabins_plan["uuid"], objectTypesUuids=[str(self.cabane.uuid)]
+        ).json()
+        _, pools_wave = self._pools_plan()
+
+        response = self.client.post(f"{WAVE_URL}{cabins_wave['uuid']}/validate/")
+        self.assertEqual(response.status_code, 200, response.content)
+        response = self.client.post(f"{WAVE_URL}{pools_wave['uuid']}/validate/")
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["plannedParcelsCount"], 1)
+        self.assertEqual(
+            [row["idParcellaire"] for row in response.json()["skippedParcels"]],
+            [self.shared_parcel.id_parcellaire],
+        )
+
+    def test_the_other_parcels_to_control_say_where_they_come_from(self):
+        # planned by another group's plan
+        other_group_parcel = self.make_parcel()
+        other_object, (other_detection,) = self.make_object(other_group_parcel)
+        other_group = create_user_group(name="Autre DDTM", geo_zones=[self.herault])
+        other_plan = ControlPlan.objects.create(
+            user_group=other_group, name="Plan secret", start_date=date(2026, 1, 1)
+        )
+        ControlPlanParcelObject.objects.create(
+            control_plan_parcel=ControlPlanParcel.objects.create(
+                control_plan=other_plan,
+                parcel=other_group_parcel,
+                id_parcellaire=other_group_parcel.id_parcellaire,
+                prefix=other_group_parcel.prefix,
+                section=other_group_parcel.section,
+                num_parcel=other_group_parcel.num_parcel,
+                commune=other_group_parcel.commune,
+                control_plan_parcel_status="PLANNED",
+                rank=1,
+            ),
+            detection_object=other_object,
+            previous_validation_status=DetectionValidationStatus.SUSPECT,
+        )
+        DetectionData.objects.filter(id=other_detection.detection_data_id).update(
+            detection_control_status=DetectionControlStatus.TO_CONTROL
+        )
+        # set to control without a plan
+        by_hand_parcel = self.make_parcel()
+        self.make_object(
+            by_hand_parcel, detections=[{"control": DetectionControlStatus.TO_CONTROL}]
+        )
+        # left « À contrôler » by a closed plan of the group
+        closed_plan, _ = self.plan_and_validate(
+            name="Plan 2025", objectTypesUuids=[str(self.cabane.uuid)]
+        )
+        self.client.post(f"{PLAN_URL}{closed_plan['uuid']}/close/")
+        # planned by another plan of the group
+        pools_plan, pools_wave = self._pools_plan()
+        self.client.post(f"{WAVE_URL}{pools_wave['uuid']}/validate/")
+
+        plan = self.create_plan(name="Coup de poing")
+        response = self.client.get(f"{PLAN_URL}{plan['uuid']}/out-of-plan/")
+
+        self.assertEqual(response.status_code, 200, response.content)
+        origins = {
+            row["idParcellaire"]: row["origins"] for row in response.json()["results"]
+        }
+        self.assertEqual(
+            origins,
+            {
+                # its cabin left by the closed plan, its pool planned by the open one
+                self.shared_parcel.id_parcellaire: [
+                    {"type": "PLAN", "uuid": pools_plan["uuid"], "name": "Piscines"},
+                    {
+                        "type": "CLOSED_PLAN",
+                        "uuid": closed_plan["uuid"],
+                        "name": "Plan 2025",
+                    },
+                ],
+                self.pool_parcel.id_parcellaire: [
+                    {"type": "PLAN", "uuid": pools_plan["uuid"], "name": "Piscines"}
+                ],
+                other_group_parcel.id_parcellaire: [{"type": "OTHER_GROUP_PLAN"}],
+                by_hand_parcel.id_parcellaire: [{"type": "NONE"}],
+            },
+        )
+
+        # a plan's own parcels are not « other » parcels
+        response = self.client.get(f"{PLAN_URL}{pools_plan['uuid']}/out-of-plan/")
+        self.assertNotIn(
+            self.pool_parcel.id_parcellaire,
+            [row["idParcellaire"] for row in response.json()["results"]],
+        )
+
+    def test_the_origin_is_the_plan_that_planned_the_object_last(self):
+        # created first, validated last
+        running_plan, running_wave = self._pools_plan()
+        closed_plan, _ = self.plan_and_validate(
+            name="Plan clos", objectTypesUuids=[str(self.piscine.uuid)]
+        )
+        self.client.post(f"{PLAN_URL}{closed_plan['uuid']}/close/")
+        # controlled, then back to « Non contrôlé »: plannable again
+        DetectionData.objects.filter(
+            detection__detection_object__parcel=self.pool_parcel
+        ).update(detection_control_status=DetectionControlStatus.NOT_CONTROLLED)
+        response = self.client.post(f"{WAVE_URL}{running_wave['uuid']}/validate/")
+        self.assertEqual(response.status_code, 200, response.content)
+
+        plan = self.create_plan(name="Coup de poing")
+        response = self.client.get(f"{PLAN_URL}{plan['uuid']}/out-of-plan/")
+
+        origins = {
+            row["idParcellaire"]: row["origins"] for row in response.json()["results"]
+        }
+        self.assertEqual(
+            origins[self.pool_parcel.id_parcellaire],
+            [{"type": "PLAN", "uuid": running_plan["uuid"], "name": "Piscines"}],
+        )
 
 
 class ControlPlanAdjustmentTests(ControlPlanTestCase):

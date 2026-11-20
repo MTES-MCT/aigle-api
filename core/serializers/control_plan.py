@@ -137,7 +137,8 @@ class ControlPlanValidationResultSerializer(serializers.Serializer):
 class ControlPlanInputSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
     start_date = serializers.DateField()
-    end_date = serializers.DateField()
+    # none: a follow-up with no end
+    end_date = serializers.DateField(required=False, allow_null=True)
 
     def validate(self, attrs):
         start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
@@ -186,6 +187,7 @@ class ControlPlanSerializer(UuidTimestampedModelSerializerMixin):
     def get_is_expired(self, obj: ControlPlan):
         return (
             obj.control_plan_status == ControlPlanStatus.ACTIVE
+            and obj.end_date is not None
             and obj.end_date < timezone.localdate()
         )
 
@@ -247,6 +249,7 @@ class ControlPlanParcelSerializer(serializers.ModelSerializer):
             "zone_names",
             "object_types",
             "detection_object_uuids",
+            "prescription_date",
             "follow_up_status",
             "status_changed_at",
         ]
@@ -258,6 +261,8 @@ class ControlPlanParcelSerializer(serializers.ModelSerializer):
     zone_names = serializers.SerializerMethodField()
     object_types = serializers.SerializerMethodField()
     detection_object_uuids = serializers.SerializerMethodField()
+    # the nearest estimated prescription, set by the « Prescription proche » ranking
+    prescription_date = serializers.SerializerMethodField()
     follow_up_status = serializers.SerializerMethodField()
 
     def get_commune(self, obj: ControlPlanParcel):
@@ -278,24 +283,39 @@ class ControlPlanParcelSerializer(serializers.ModelSerializer):
     def get_detection_object_uuids(self, obj: ControlPlanParcel):
         return obj.summary.get("detection_object_uuids", [])
 
+    def get_prescription_date(self, obj: ControlPlanParcel):
+        return obj.summary.get("prescription_date")
+
     def get_follow_up_status(self, obj: ControlPlanParcel):
         from core.services.control_plan import ControlPlanParcelService
 
         return ControlPlanParcelService.follow_up_status(obj)
 
 
+def out_of_plan_detection_objects(parcel):
+    # the filtered prefetch: .all() would query again without the filters
+    return getattr(parcel, "_prefetched_objects_cache", {}).get("detection_objects", [])
+
+
 class ControlPlanOutOfPlanParcelSerializer(ParcelListItemSerializer):
     class Meta(ParcelListItemSerializer.Meta):
-        fields = ParcelListItemSerializer.Meta.fields + ["detection_object_uuids"]
+        fields = ParcelListItemSerializer.Meta.fields + [
+            "detection_object_uuids",
+            "origins",
+        ]
 
     detection_object_uuids = serializers.SerializerMethodField()
+    # [{type: PLAN | CLOSED_PLAN | OTHER_GROUP_PLAN | NONE, uuid?, name?}]
+    origins = serializers.SerializerMethodField()
 
     def get_detection_object_uuids(self, obj):
-        # the filtered prefetch: .all() would query again without the filters
-        detection_objects = getattr(obj, "_prefetched_objects_cache", {}).get(
-            "detection_objects", []
-        )
-        return [str(detection_object.uuid) for detection_object in detection_objects]
+        return [
+            str(detection_object.uuid)
+            for detection_object in out_of_plan_detection_objects(obj)
+        ]
+
+    def get_origins(self, obj):
+        return self.context.get("origins", {}).get(obj.id, [])
 
 
 class ControlPlanGroupSerializer(serializers.Serializer):
@@ -303,4 +323,4 @@ class ControlPlanGroupSerializer(serializers.Serializer):
     name = serializers.CharField()
     user_group_type = serializers.CharField()
     can_edit = serializers.BooleanField()
-    active_control_plan_uuid = serializers.UUIDField(allow_null=True)
+    active_control_plans_count = serializers.IntegerField()
